@@ -31,7 +31,7 @@ garp approval chris gemini --smart-forms
 garp report earnings --only pdf
 ```
 
-ℹ️ Note: PDFs are enabled with strict guardrails (concurrency=2, 250ms per‑PDF, ≤200 pages, ≤128 KiB/page).
+ℹ️ Note: PDFs are enabled with strict guardrails (concurrency=2, 250ms per‑PDF, ≤200 pages, ≤128 KiB/page, max 100 PDFs per search).
 
 ## ✨ Key Features
 

@@ -260,8 +260,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case progressMsg:
 		// Update the top progress line (only shown while loading)
 		p := msg.Path
-		// keep relative path
-		m.totalFiles = msg.Total
+		// Update total only during discovery when provided
+		if strings.EqualFold(msg.Stage, "discovery") && msg.Total > 0 {
+			m.totalFiles = msg.Total
+		}
 		m.pdfScanned = msg.PdfScanned
 		m.pdfSkipped = msg.PdfSkipped
 		m.pdfTruncated = msg.PdfTruncated
@@ -282,8 +284,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if hv {
 			p := lp.Path
-			// keep relative path
-			m.totalFiles = lp.Total
+			// Update total only during discovery when provided
+			if strings.EqualFold(lp.Stage, "discovery") && lp.Total > 0 {
+				m.totalFiles = lp.Total
+			}
 			m.pdfScanned = lp.PdfScanned
 			m.pdfSkipped = lp.PdfSkipped
 			m.pdfTruncated = lp.PdfTruncated
@@ -708,7 +712,7 @@ func (m model) runSearch() tea.Cmd {
 		}
 		return innerWidth * contentHeight
 	}
-	total := 0
+	total, _ := search.GetDocumentFileCount(fileTypes)
 
 	// Emit initial progress and then run the search
 	return tea.Batch(
