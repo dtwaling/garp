@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"find-words/config"
 	"find-words/search"
 )
 
@@ -215,7 +216,7 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("  garp contract payment agreement --distance 200"))
 	fmt.Println(infoStyle.Render("  garp mutex changed --code"))
 	fmt.Println(infoStyle.Render("  garp bank wire update --not .txt test"))
-	fmt.Println(infoStyle.Render("  garp approval chris gemini --smart-forms"))
+	fmt.Println(infoStyle.Render("  garp approval crypto gemini --smart-forms"))
 	fmt.Println(infoStyle.Render("  garp report earnings --only pdf"))
 	fmt.Println()
 }
@@ -237,6 +238,31 @@ func Run() int {
 	// Hook for matching layer: advertise smart-forms via environment (consumed by matching)
 	if args.SmartForms {
 		_ = os.Setenv("GARP_SMART_FORMS", "1")
+	}
+
+	// Preflight: automatic safe mode for single-word scans over huge file counts
+	// Reduce internal parallelism to protect system memory/page cache without requiring flags.
+	if len(args.SearchWords) == 1 {
+		fileTypes := config.BuildRipgrepFileTypes(args.IncludeCode)
+		if args.OnlyType != "" {
+			fileTypes = []string{"-g", "*." + strings.TrimPrefix(strings.ToLower(args.OnlyType), ".")}
+		}
+		if total, err := search.GetDocumentFileCount(fileTypes); err == nil {
+			// Threshold tuned for very large trees to avoid cache blowouts on single-term scans
+			const hugeSingleWordThreshold = 200000
+			if total >= hugeSingleWordThreshold {
+				fmt.Println(warningStyle.Render(
+					fmt.Sprintf("Large single-word scan over %d files — enabling safe mode (reduced parallelism).", total),
+				))
+				// Clamp workers/concurrency to conservative values that keep memory stable.
+				if args.FilterWorkers > 2 {
+					args.FilterWorkers = 2
+				}
+				if args.HeavyConcurrency > 1 {
+					args.HeavyConcurrency = 1
+				}
+			}
+		}
 	}
 
 	// Seed model for TUI

@@ -5,7 +5,7 @@ BINARY_PATH=bin/$(BINARY_NAME)
 GO_FILES=$(shell find . -name "*.go" -type f)
 
 # Version embedding
-VERSION=0.5
+VERSION=0.6
 LDFLAGS=-X find-words/app.version=$(VERSION)
 
 # Default target
@@ -14,7 +14,7 @@ all: build
 # Build the binary
 build: $(BINARY_PATH)
 
-$(BINARY_PATH): $(GO_FILES)
+$(BINARY_PATH): $(GO_FILES) Makefile
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p bin
 	go build -tags pdfcpu -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) .

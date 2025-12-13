@@ -574,6 +574,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 		go func() {
 			defer wg.Done()
 			for filePath := range jobs {
+				maybePaceForMemory()
 				matched := handleOne(filePath)
 
 				// Append results if matched
@@ -601,6 +602,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 
 	// Enqueue jobs
 	for _, p := range candidateFiles {
+		maybePaceForMemory()
 		jobs <- p
 	}
 	close(jobs)
@@ -615,6 +617,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 	cm := NewConcurrencyManager(se.HeavyConcurrency)
 
 	for _, filePath := range matchingFiles {
+		maybePaceForMemory()
 		var content string
 		var fileSize int64
 		var err error

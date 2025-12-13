@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/richardlehane/mscfb"
 
@@ -19,6 +20,76 @@ import (
 
 	"find-words/config"
 )
+
+// Memory pressure pacing helpers
+var memSampleMu sync.Mutex
+var lastMemAvailKB int64
+var lastMemSample time.Time
+
+// memAvailableKB returns a cached MemAvailable (kB). It re-samples at most every ~300ms.
+func memAvailableKB() int64 {
+	memSampleMu.Lock()
+	defer memSampleMu.Unlock()
+
+	if time.Since(lastMemSample) < 300*time.Millisecond && lastMemAvailKB > 0 {
+		return lastMemAvailKB
+	}
+
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		// If we can't read, assume plenty to avoid unnecessary sleeping
+		lastMemAvailKB = 1 << 60
+		lastMemSample = time.Now()
+		return lastMemAvailKB
+	}
+
+	var avail int64
+	lines := strings.Split(string(b), "\n")
+	for _, ln := range lines {
+		if strings.HasPrefix(ln, "MemAvailable:") {
+			fields := strings.Fields(ln)
+			if len(fields) >= 2 {
+				if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+					avail = kb
+				}
+			}
+			break
+		}
+	}
+	if avail == 0 {
+		for _, ln := range lines {
+			if strings.HasPrefix(ln, "MemFree:") {
+				fields := strings.Fields(ln)
+				if len(fields) >= 2 {
+					if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+						avail = kb
+					}
+				}
+				break
+			}
+		}
+	}
+	if avail <= 0 {
+		avail = 1 << 60
+	}
+
+	lastMemAvailKB = avail
+	lastMemSample = time.Now()
+	return lastMemAvailKB
+}
+
+// maybePaceForMemory sleeps briefly under low MemAvailable to reduce I/O thrash.
+func maybePaceForMemory() {
+	kb := memAvailableKB()
+	switch {
+	case kb < 128*1024: // < 128 MiB
+		time.Sleep(20 * time.Millisecond)
+	case kb < 256*1024: // < 256 MiB
+		time.Sleep(5 * time.Millisecond)
+	default:
+		// no-op
+	}
+}
 
 // CheckTextContainsAllWords checks if extracted text contains all search words
 // in any order, within a distance window (in characters) between the earliest
@@ -244,6 +315,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string) ([]string, error) {
 		}
 
 		f, openErr := os.Open(path)
+		_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
 		if openErr != nil {
 			return nil
 		}
@@ -379,8 +451,10 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 			}
 
 			for p := range paths {
+				maybePaceForMemory()
 
 				f, openErr := os.Open(p)
+				_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
 				if openErr != nil {
 					continue
 				}
@@ -526,6 +600,7 @@ func StreamContainsAllWordsDecided(filePath string, words []string) (found bool,
 		return true, true
 	}
 	f, err := os.Open(filePath)
+	_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
 	if err != nil {
 		return false, true
 	}
@@ -571,6 +646,7 @@ func StreamContainsAllWordsDecided(filePath string, words []string) (found bool,
 	prev := make([]byte, 0, overlap)
 	buf := make([]byte, chunkSize)
 	for {
+		maybePaceForMemory()
 		if total >= maxBytes {
 			// Budget reached; we couldn't decide conclusively
 			_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
@@ -631,6 +707,7 @@ func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBy
 		return true, true
 	}
 	f, err := os.Open(filePath)
+	_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
 	if err != nil {
 		return false, true
 	}
@@ -680,6 +757,7 @@ func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBy
 	prev := make([]byte, 0, overlap)
 	buf := make([]byte, chunkSize)
 	for {
+		maybePaceForMemory()
 		if total >= maxBytes {
 			_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
 			if !capped {
@@ -757,6 +835,7 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 		// If we can conclusively determine absence at EOF: return (false, true)
 		// Otherwise (errors, missing entries, or cap reached): return (false, false)
 		f, err := os.Open(filePath)
+		_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
 		if err != nil {
 			return false, false
 		}
@@ -879,6 +958,7 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 		// - If all words are conclusively found within a capped budget: (true, true)
 		// - Otherwise: (false, false) — undecided (never mark as conclusively absent)
 		f, err := os.Open(filePath)
+		_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
 		if err != nil {
 			return false, false
 		}
@@ -1001,6 +1081,7 @@ func CheckFileContainsExcludeWords(filePath string, excludeWords []string) (bool
 	}
 
 	file, err := os.Open(filePath)
+	_ = unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
 	if err != nil {
 		return false, err
 	}
@@ -1042,6 +1123,7 @@ func CheckFileContainsExcludeWords(filePath string, excludeWords []string) (bool
 // GetFileContent reads and returns file content with size limits
 func GetFileContent(filePath string) (string, int64, error) {
 	file, err := os.Open(filePath)
+	_ = unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
 	if err != nil {
 		return "", 0, err
 	}
@@ -1091,6 +1173,7 @@ func StreamContainsWord(filePath string, word string) bool {
 	re := regexp.MustCompile(pattern)
 
 	f, err := os.Open(filePath)
+	_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
 	if err != nil {
 		return false
 	}

@@ -115,27 +115,50 @@ func IsHiddenFile(filename string) bool {
 // ShouldSkipDirectory determines if a directory should be skipped during traversal
 func ShouldSkipDirectory(dirName string) bool {
 	skipDirs := map[string]bool{
+		// VCS and caches
 		".git":          true,
 		".svn":          true,
 		".hg":           true,
-		"node_modules":  true,
+		".cache":        true,
+
+		// Language/tool chains and local caches
+		".cargo":        true,
+		".rustup":       true,
+		".npm":          true,
+		".yarn":         true,
+		".gradle":       true,
+		".m2":           true,
+		".tox":          true,
+		".terraform":    true,
+		".terraform.d":  true,
+		".pytest_cache": true,
+		".mypy_cache":   true,
+		"__pycache__":   true,
+
+		// Browsers and large app caches
+		".mozilla":      true,
+		".chromium":     true,
+
+		// IDE/project artifacts
 		".vscode":       true,
 		".idea":         true,
-		"__pycache__":   true,
-		".pytest_cache": true,
+		"node_modules":  true,
 		"vendor":        true,
 		"target":        true,
 		"build":         true,
 		"dist":          true,
 		".next":         true,
 		".nuxt":         true,
+
+		// Misc
 		"coverage":      true,
 		"tmp":           true,
 		"temp":          true,
 		".DS_Store":     true,
 	}
 
-	return skipDirs[dirName] || strings.HasPrefix(dirName, ".")
+	// Note: do NOT blanket-skip all dot-directories; allow .config, .local, etc.
+	return skipDirs[dirName]
 }
 
 // GetFileTypeDescription returns a human-readable description of file types

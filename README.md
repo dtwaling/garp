@@ -27,7 +27,7 @@ garp contract payment agreement
 garp contract payment agreement --distance 200 --not .pdf
 garp mutex changed --code
 garp bank wire update --not .txt test
-garp approval chris gemini --smart-forms
+garp approval crypto gemini --smart-forms
 garp report earnings --only pdf
 ```
 
