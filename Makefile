@@ -5,7 +5,7 @@ BINARY_PATH=bin/$(BINARY_NAME)
 GO_FILES=$(shell find . -name "*.go" -type f)
 
 # Version embedding
-VERSION=0.6
+VERSION=0.7
 LDFLAGS=-X find-words/app.version=$(VERSION)
 
 # Default target
@@ -75,10 +75,14 @@ install-pdfcpu: tidy
 	@echo "Building $(BINARY_NAME) with pdfcpu tag..."
 	@mkdir -p bin
 	go build -tags pdfcpu -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) .
+	@echo "Building pdfworker..."
+	go build -tags pdfcpu -o bin/pdfworker ./cmd/pdfworker
 	@echo "Build completed (pdfcpu): $(BINARY_PATH)"
 	@echo "Installing $(BINARY_NAME) to ~/.local/bin..."
 	@mkdir -p ~/.local/bin
 	cp $(BINARY_PATH) ~/.local/bin/
+	cp bin/pdfworker ~/.local/bin/
+	chmod +x ~/.local/bin/pdfworker
 	@echo "Installation completed: ~/.local/bin/$(BINARY_NAME)"
 
 

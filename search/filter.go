@@ -21,6 +21,43 @@ import (
 	"find-words/config"
 )
 
+// Regex cache for word matching - prevents MustCompile on every call
+var (
+	wordRegexCache    = make(map[string]*regexp.Regexp)
+	wordRegexCacheMu  sync.RWMutex
+	wordCacheMaxSize  = 256
+	// Note: whitespaceRegex is defined in cleaner.go (same package)
+)
+
+// getWordRegex returns a cached compiled regex or compiles and caches it.
+func getWordRegex(pattern string) *regexp.Regexp {
+	wordRegexCacheMu.RLock()
+	re, ok := wordRegexCache[pattern]
+	wordRegexCacheMu.RUnlock()
+
+	if ok {
+		return re
+	}
+
+	wordRegexCacheMu.Lock()
+	defer wordRegexCacheMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if re, ok := wordRegexCache[pattern]; ok {
+		return re
+	}
+
+	re = regexp.MustCompile(pattern)
+
+	// Evict if at capacity (simple clear)
+	if len(wordRegexCache) >= wordCacheMaxSize {
+		wordRegexCache = make(map[string]*regexp.Regexp)
+	}
+
+	wordRegexCache[pattern] = re
+	return re
+}
+
 // Memory pressure pacing helpers
 var memSampleMu sync.Mutex
 var lastMemAvailKB int64
@@ -102,28 +139,28 @@ func buildWordRegexLower(word string) *regexp.Regexp {
 	base := strings.ToLower(strings.TrimSpace(word))
 	if base == "" {
 		// never matches; safe fallback
-		return regexp.MustCompile(`a\A`)
+		return getWordRegex(`a\A`)
 	}
 	suffix := `(?:es|s)?`
 	if smartFormsEnabled() {
 		suffix = `(?:es|s|ed|ing|al|tion|ation)?`
 	}
 	pat := fmt.Sprintf(`\b(?:%s%s)\b`, regexp.QuoteMeta(base), suffix)
-	return regexp.MustCompile(pat)
+	return getWordRegex(pat)
 }
 
 func buildWordRegexCI(word string) *regexp.Regexp {
 	base := strings.TrimSpace(word)
 	if base == "" {
 		// never matches; safe fallback
-		return regexp.MustCompile(`a\A`)
+		return getWordRegex(`a\A`)
 	}
 	suffix := `(?:es|s)?`
 	if smartFormsEnabled() {
 		suffix = `(?:es|s|ed|ing|al|tion|ation)?`
 	}
 	pat := fmt.Sprintf(`(?i)\b(?:%s%s)\b`, regexp.QuoteMeta(base), suffix)
-	return regexp.MustCompile(pat)
+	return getWordRegex(pat)
 }
 
 func CheckTextContainsAllWords(text string, words []string, distance int) bool {
@@ -614,7 +651,7 @@ func StreamContainsAllWordsDecided(filePath string, words []string) (found bool,
 			continue
 		}
 		pat := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(w))
-		res = append(res, regexp.MustCompile(pat))
+		res = append(res, getWordRegex(pat))
 	}
 	if len(res) == 0 {
 		return true, true
@@ -1032,7 +1069,8 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 						buf = append(buf, ' ')
 					}
 				}
-				text = strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(string(buf), " "))
+				// Use precompiled whitespaceRegex from cleaner.go
+				text = strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(buf), " "))
 			}
 
 			for i, re := range res {
@@ -1170,7 +1208,7 @@ func FormatFileSize(size int64) string {
 // StreamContainsWord checks if a file contains a given word using streaming read
 func StreamContainsWord(filePath string, word string) bool {
 	pattern := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(word))
-	re := regexp.MustCompile(pattern)
+	re := getWordRegex(pattern)
 
 	f, err := os.Open(filePath)
 	_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)

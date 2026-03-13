@@ -5,113 +5,67 @@
 package pdf
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
-	"unicode"
-
-	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"sync"
+	"time"
 )
 
 // Default caps for PDF text extraction.
 const (
 	DefaultPageCap    = 200        // maximum number of pages to process
 	DefaultPerPageCap = 128 * 1024 // 128 KiB per-page text cap
+	DefaultTimeout    = 150 * time.Millisecond
 )
 
-// checkTextContainsAllWords checks if all words appear within the distance window in the text.
-func checkTextContainsAllWords(text string, words []string, distance int) bool {
-	if len(words) == 0 {
-		return true
-	}
+// pdfWorkerPath is the path to the pdfworker binary.
+// This will be set during initialization based on the current executable's location.
+var pdfWorkerPath string
 
-	contentStr := strings.ToLower(text)
+// workerPathInitOnce ensures we only determine the worker path once.
+var workerPathInitOnce sync.Once
 
-	// Single-term case: just check presence quickly
-	if len(words) == 1 {
-		pattern := fmt.Sprintf(`\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(strings.ToLower(words[0])))
-		regex := regexp.MustCompile(pattern)
-		return regex.FindStringIndex(contentStr) != nil
-	}
-
-	// Collect positions for each word
-	type match struct {
-		pos       int
-		wordIndex int
-	}
-	var matches []match
-	for i, word := range words {
-		pattern := fmt.Sprintf(`\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(strings.ToLower(word)))
-		regex := regexp.MustCompile(pattern)
-		indexes := regex.FindAllStringIndex(contentStr, -1)
-		for _, idx := range indexes {
-			matches = append(matches, match{pos: idx[0], wordIndex: i})
-		}
-	}
-
-	if len(matches) == 0 {
-		return false
-	}
-
-	// Sort all matches by position
-	sort.Slice(matches, func(i, j int) bool { return matches[i].pos < matches[j].pos })
-
-	// Sliding window over matches to find a window that covers all words
-	counts := make(map[int]int)
-	covered := 0
-	required := len(words)
-	left := 0
-
-	for right := 0; right < len(matches); right++ {
-		rw := matches[right].wordIndex
-		if counts[rw] == 0 {
-			covered++
-		}
-		counts[rw]++
-
-		// When all words covered, try to shrink from left and check distance
-		for covered == required && left <= right {
-			window := matches[right].pos - matches[left].pos
-			if window <= distance {
-				return true
+// getPdfWorkerPath determines the path to the pdfworker binary.
+func getPdfWorkerPath() string {
+	workerPathInitOnce.Do(func() {
+		// Try to find pdfworker relative to current executable
+		execPath, err := os.Executable()
+		if err == nil {
+			dir := filepath.Dir(execPath)
+			// First try same directory
+			candidate := filepath.Join(dir, "pdfworker")
+			if _, err := os.Stat(candidate); err == nil {
+				pdfWorkerPath = candidate
+				return
 			}
-			lw := matches[left].wordIndex
-			counts[lw]--
-			if counts[lw] == 0 {
-				covered--
+			// Then try ../pdfworker (development layout)
+			candidate = filepath.Join(dir, "..", "pdfworker")
+			if _, err := os.Stat(candidate); err == nil {
+				pdfWorkerPath = candidate
+				return
 			}
-			left++
 		}
-	}
-
-	return false
+		// Fallback: look in PATH
+		path, err := exec.LookPath("pdfworker")
+		if err == nil {
+			pdfWorkerPath = path
+			return
+		}
+		// Last resort: assume it's in the same directory as the garp binary
+		if execPath != "" {
+			pdfWorkerPath = filepath.Join(filepath.Dir(execPath), "pdfworker")
+		}
+	})
+	return pdfWorkerPath
 }
 
-// asciiNormalize collapses all non-printable or non-ASCII runes to space and
-// then normalizes whitespace to single spaces.
-func asciiNormalize(s string) string {
-	ascii := strings.Map(func(r rune) rune {
-		if r > 127 || !unicode.IsPrint(r) {
-			return ' '
-		}
-		return r
-	}, s)
-	// Collapse whitespace
-	return strings.Join(strings.Fields(ascii), " ")
-}
-
-// ExtractAllTextCapped extracts text from a PDF using pdfcpu with incremental batches and short-circuiting.
-// Returns the extracted text, a boolean indicating if all words are within the distance window, and any error.
-// - pageCap: maximum number of pages to include (use <=0 for default)
-// - perPageCap: maximum bytes of text per page (use <=0 for default)
-// - words: search words
-// - window: distance window
-//
-// This function is guarded by the 'pdfcpu' build tag.
+// ExtractAllTextCapped extracts text from a PDF using a subprocess for memory isolation.
+// This runs the PDF processing in a separate short-lived process that is killed after
+// completion or timeout, ensuring all memory is released between PDFs.
 func ExtractAllTextCapped(path string, pageCap, perPageCap int, words []string, window int) (string, bool, error) {
 	// Defaults
 	if pageCap <= 0 {
@@ -121,176 +75,154 @@ func ExtractAllTextCapped(path string, pageCap, perPageCap int, words []string, 
 		perPageCap = DefaultPerPageCap
 	}
 
-	// Panic protection around library call.
-	defer func() { _ = recover() }()
+	// Pre-flight checks
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false, nil
+	}
+	// Skip files > 50MB
+	if info.Size() > 50*1024*1024 {
+		return "", false, nil
+	}
 
-	// Get total page count (silence pdfcpu stderr/stdout; treat errors as undecided)
-	var pageCount int
-	{
-		oldErr := os.Stderr
-		oldOut := os.Stdout
-		rE, wE, _ := os.Pipe()
-		rO, wO, _ := os.Pipe()
-		os.Stderr = wE
-		os.Stdout = wO
+	workerPath := getPdfWorkerPath()
+	if workerPath == "" {
+		// Worker not found, fall back to nil error (undecided)
+		return "", false, nil
+	}
 
-		// Perform the call
-		pc, perr := api.PageCountFile(path)
+	// Build arguments: <path> <pageCap> <perPageCap> <distance> <words...>
+	args := []string{
+		path,
+		fmt.Sprintf("%d", pageCap),
+		fmt.Sprintf("%d", perPageCap),
+		fmt.Sprintf("%d", window),
+	}
+	args = append(args, words...)
 
-		// Close writers and drain readers
-		_ = wE.Close()
-		_ = wO.Close()
-		_, _ = io.Copy(io.Discard, rE)
-		_, _ = io.Copy(io.Discard, rO)
-		_ = rE.Close()
-		_ = rO.Close()
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+	defer cancel()
 
-		// Restore stdio
-		os.Stderr = oldErr
-		os.Stdout = oldOut
+	// Run in subprocess for memory isolation
+	cmd := exec.CommandContext(ctx, workerPath, args...)
+	cmd.Stderr = os.Stderr // Pass through any errors
 
-		if perr != nil {
-			// Treat as undecided without surfacing error to TUI
+	output, err := cmd.Output()
+	if err != nil {
+		// Check for timeout
+		if ctx.Err() == context.DeadlineExceeded {
+			// Timeout - treat as undecided
 			return "", false, nil
 		}
-		pageCount = pc
+		// Other error - treat as undecided
+		return "", false, nil
 	}
 
-	// Simple string literal parser for PDF content streams.
-	// Collects text within balanced parentheses, honoring backslash escapes, and caps output size.
-	parsePDFStringLiterals := func(s string, maxOut int) string {
-		var out strings.Builder
-		depth := 0
-		escape := false
-		in := false
-		for i := 0; i < len(s); i++ {
-			c := s[i]
-			if !in {
-				if c == '(' {
-					in = true
-					depth = 1
-					continue
-				}
-				continue
-			}
-			if escape {
-				out.WriteByte(c)
-				escape = false
-				if out.Len() >= maxOut {
-					return out.String()
-				}
-				continue
-			}
-			switch c {
-			case '\\':
-				escape = true
-			case '(':
-				depth++
-				out.WriteByte(c)
-			case ')':
-				depth--
-				if depth == 0 {
-					in = false
-					out.WriteByte(' ')
-				} else {
-					out.WriteByte(c)
-				}
-			default:
-				out.WriteByte(c)
-			}
-			if out.Len() >= maxOut {
-				return out.String()
-			}
-		}
-		return out.String()
+	// Parse output: FORMAT|ERROR|text
+	// FORMAT is one of: MATCHED, NOMATCH, ERROR
+	outputStr := strings.TrimSpace(string(output))
+	if outputStr == "" {
+		return "", false, nil
 	}
 
-	batchSize := 32
-	var aggregated strings.Builder
-
-	for start := 1; start <= pageCount && start <= pageCap; start += batchSize {
-		end := start + batchSize - 1
-		if end > pageCount {
-			end = pageCount
-		}
-		if end > pageCap {
-			end = pageCap
-		}
-
-		pages := []string{fmt.Sprintf("%d-%d", start, end)}
-
-		// Extract page content into a temporary directory for this batch.
-		tmpDir, err := os.MkdirTemp("", "garp_pdfcpu_*")
-		if err != nil {
-			return "", false, fmt.Errorf("temp dir: %w", err)
-		}
-		defer os.RemoveAll(tmpDir)
-
-		// Dump content streams (PDF syntax) for the page range (silence pdfcpu; treat errors as undecided)
-		{
-			oldErr := os.Stderr
-			oldOut := os.Stdout
-			rE, wE, _ := os.Pipe()
-			rO, wO, _ := os.Pipe()
-			os.Stderr = wE
-			os.Stdout = wO
-
-			callErr := api.ExtractContentFile(path, tmpDir, pages, nil)
-
-			_ = wE.Close()
-			_ = wO.Close()
-			_, _ = io.Copy(io.Discard, rE)
-			_, _ = io.Copy(io.Discard, rO)
-			_ = rE.Close()
-			_ = rO.Close()
-
-			os.Stderr = oldErr
-			os.Stdout = oldOut
-
-			if callErr != nil {
-				// Treat as undecided without surfacing error to TUI
-				return "", false, nil
-			}
-		}
-
-		// Read generated files, process in name order.
-		ents, err := os.ReadDir(tmpDir)
-		if err != nil {
-			return "", false, fmt.Errorf("read dir: %w", err)
-		}
-		sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
-
-		for _, de := range ents {
-			if de.IsDir() {
-				continue
-			}
-			fp := filepath.Join(tmpDir, de.Name())
-			data, _ := os.ReadFile(fp)
-			if len(data) == 0 {
-				continue
-			}
-
-			// Parse simple string literals, normalize to ASCII, and cap per-page output.
-			raw := parsePDFStringLiterals(string(data), perPageCap)
-			txt := asciiNormalize(raw)
-			if len(txt) > perPageCap {
-				txt = txt[:perPageCap]
-			}
-			if txt == "" {
-				continue
-			}
-			if aggregated.Len() > 0 {
-				aggregated.WriteByte('\n')
-			}
-			aggregated.WriteString(txt)
-		}
-
-		// Check if the aggregated text so far contains all words within the distance window.
-		currentText := aggregated.String()
-		if checkTextContainsAllWords(currentText, words, window) {
-			return currentText, true, nil
-		}
+	parts := strings.SplitN(outputStr, "|", 3)
+	if len(parts) < 2 {
+		return "", false, nil
 	}
 
-	return aggregated.String(), false, nil
+	format := parts[0]
+	// errMsg := parts[1] // Could log this for debugging
+
+	switch format {
+	case "MATCHED":
+		// All words found within distance
+		// Return full text for context/excerpt generation (parts[2] contains text)
+		if len(parts) >= 3 {
+			return parts[2], true, nil
+		}
+		return "", true, nil
+	case "NOMATCH":
+		// Words not found within distance (or partial text)
+		// For prefilter, we just need to know it's NOT a match
+		return "", false, nil
+	case "ERROR":
+		// Extraction error - treat as undecided
+		return "", false, nil
+	default:
+		// Unknown format, treat as undecided
+		return "", false, nil
+	}
+}
+
+// ExtractAllTextCappedWithContext extracts text from a PDF using a subprocess with explicit context.
+// This variant allows the caller to control the timeout.
+func ExtractAllTextCappedWithContext(ctx context.Context, path string, pageCap, perPageCap int, words []string, window int) (string, bool, error) {
+	// Defaults
+	if pageCap <= 0 {
+		pageCap = DefaultPageCap
+	}
+	if perPageCap <= 0 {
+		perPageCap = DefaultPerPageCap
+	}
+
+	// Pre-flight checks
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false, nil
+	}
+	if info.Size() > 50*1024*1024 {
+		return "", false, nil
+	}
+
+	workerPath := getPdfWorkerPath()
+	if workerPath == "" {
+		return "", false, nil
+	}
+
+	// Build arguments
+	args := []string{
+		path,
+		fmt.Sprintf("%d", pageCap),
+		fmt.Sprintf("%d", perPageCap),
+		fmt.Sprintf("%d", window),
+	}
+	args = append(args, words...)
+
+	cmd := exec.CommandContext(ctx, workerPath, args...)
+	cmd.Stderr = os.Stderr
+
+	output, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", false, nil
+		}
+		return "", false, nil
+	}
+
+	outputStr := strings.TrimSpace(string(output))
+	if outputStr == "" {
+		return "", false, nil
+	}
+
+	parts := strings.SplitN(outputStr, "|", 3)
+	if len(parts) < 2 {
+		return "", false, nil
+	}
+
+	format := parts[0]
+	switch format {
+	case "MATCHED":
+		// Return full text for context/excerpt generation
+		if len(parts) >= 3 {
+			return parts[2], true, nil
+		}
+		return "", true, nil
+	case "NOMATCH":
+		return "", false, nil
+	case "ERROR":
+		return "", false, nil
+	default:
+		return "", false, nil
+	}
 }

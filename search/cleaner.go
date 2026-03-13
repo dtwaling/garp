@@ -36,6 +36,14 @@ var (
 	emailQuotingRegex   = regexp.MustCompile(`(?m)^>+.*$`)
 	quoteLineStartRegex = regexp.MustCompile(`(?m)^\s*>+\s*`)
 	quoteMidRegex       = regexp.MustCompile(`\s*>+\s*`)
+
+	// Precompiled regexes for CleanContent - CRITICAL: these were being compiled on EVERY call
+	letterDigitRegex     = regexp.MustCompile(`([A-Za-z])([0-9])`)
+	digitLetterRegex     = regexp.MustCompile(`([0-9])([A-Za-z])`)
+	commaMissingSpace    = regexp.MustCompile(`,([^\s])`)
+
+	// Precompiled regexes for ExtractMeaningfulExcerpts - also leaked on every call
+	dividerRegex = regexp.MustCompile(`[-_=#]{5,}`)
 )
 
 var excerptContextLimit int // 0 means auto (use default heuristic)
@@ -79,11 +87,11 @@ func CleanContent(content string) string {
 
 	// Insert missing spaces to improve readability in extracted content
 	// Letter followed by digit (e.g., "Account10" -> "Account 10")
-	content = regexp.MustCompile(`([A-Za-z])([0-9])`).ReplaceAllString(content, `$1 $2`)
+	content = letterDigitRegex.ReplaceAllString(content, "$1 $2")
 	// Digit followed by letter (e.g., "7367NEXT" -> "7367 NEXT")
-	content = regexp.MustCompile(`([0-9])([A-Za-z])`).ReplaceAllString(content, `$1 $2`)
+	content = digitLetterRegex.ReplaceAllString(content, "$1 $2")
 	// Ensure a space after commas when missing (e.g., "21,5:43" -> "21, 5:43")
-	content = regexp.MustCompile(`,([^\s])`).ReplaceAllString(content, `, $1`)
+	content = commaMissingSpace.ReplaceAllString(content, ", $1")
 
 	return strings.TrimSpace(content)
 }
@@ -212,8 +220,8 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 					ex = strings.ReplaceAll(ex, "\n", " ")
 					ex = strings.ReplaceAll(ex, "\t", " ")
 					// Remove intra-line divider runs (e.g., ______, ------)
-					ex = regexp.MustCompile(`[-_=#]{5,}`).ReplaceAllString(ex, " ")
-					ex = regexp.MustCompile(`\s+`).ReplaceAllString(ex, " ")
+					ex = dividerRegex.ReplaceAllString(ex, " ")
+					ex = whitespaceRegex.ReplaceAllString(ex, " ")
 					if len(ex) > budget {
 						ex = ex[:budget]
 					}
@@ -261,8 +269,8 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 					frag = strings.ReplaceAll(frag, "\n", " ")
 					frag = strings.ReplaceAll(frag, "\t", " ")
 					// Remove intra-line divider runs (e.g., ______, ------)
-					frag = regexp.MustCompile(`[-_=#]{5,}`).ReplaceAllString(frag, " ")
-					frag = regexp.MustCompile(`\s+`).ReplaceAllString(frag, " ")
+					frag = dividerRegex.ReplaceAllString(frag, " ")
+					frag = whitespaceRegex.ReplaceAllString(frag, " ")
 					// Trim to remaining budget minus delimiter if needed
 					remain := budget - used
 					if len(parts) > 0 {
@@ -392,7 +400,7 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 			}
 			ex = strings.ReplaceAll(ex, "\n", " ")
 			ex = strings.ReplaceAll(ex, "\t", " ")
-			ex = regexp.MustCompile(`\s+`).ReplaceAllString(ex, " ")
+			ex = whitespaceRegex.ReplaceAllString(ex, " ")
 
 			if _, ok := seen[ex]; ok {
 				continue
@@ -511,7 +519,7 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 		ex := strings.TrimSpace(cleaned[left:right])
 		ex = strings.ReplaceAll(ex, "\n", " ")
 		ex = strings.ReplaceAll(ex, "\t", " ")
-		ex = regexp.MustCompile(`\s+`).ReplaceAllString(ex, " ")
+		ex = whitespaceRegex.ReplaceAllString(ex, " ")
 		if ex != "" {
 			return []string{ex}
 		}

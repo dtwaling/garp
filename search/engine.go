@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -50,17 +51,28 @@ func (cm *ConcurrencyManager) Release() {
 }
 
 func (cm *ConcurrencyManager) ExecuteWithTimeout(fn func(), timeout time.Duration) error {
-	done := make(chan struct{})
+	done := make(chan struct{}, 1)  // Buffered so goroutine can always send
+	interrupted := make(chan struct{}, 1)
 
 	go func() {
 		defer func() { _ = recover() }()
 		fn()
-		close(done)
+		select {
+		case <-interrupted:
+			// Function was interrupted, exit gracefully
+		case done <- struct{}{}:
+			// Function completed normally, signal done
+		}
 	}()
+
 	select {
 	case <-done:
+		// Clean up any lingering goroutine state
+		close(interrupted)
 		return nil
 	case <-time.After(timeout):
+		// Signal interruption and return immediately
+		close(interrupted)
 		return fmt.Errorf("operation timed out")
 	}
 }
@@ -292,15 +304,21 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 					hasAllWords = false
 
 					type txtRes struct {
-						txt     string
 						matched bool
 						err     error
 					}
 					resCh := make(chan txtRes, 1)
+					ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+					defer cancel()
 					go func() {
 						defer func() { _ = recover() }()
-						t, m, e := pdf.ExtractAllTextCapped(filePath, 200, 128*1024, se.SearchWords, se.Distance)
-						resCh <- txtRes{txt: t, matched: m, err: e}
+						_, m, e := pdf.ExtractAllTextCapped(filePath, 200, 128*1024, se.SearchWords, se.Distance)
+						select {
+						case <-ctx.Done():
+							// Context cancelled - timeout already fired, don't send
+						case resCh <- txtRes{matched: m, err: e}:
+							// Sent successfully
+						}
 					}()
 
 					wallTimer := time.NewTimer(250 * time.Millisecond)
@@ -314,6 +332,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 					case <-wallTimer.C:
 						// Timeout: undecided, do not accept based on this.
 						// undecided (timeout): skipped
+						cancel()  // Signal goroutine to stop
 						return false
 					}
 
@@ -443,13 +462,13 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 						case <-tokenTimer.C:
 							return false
 						}
-						foundOne, decidedOne := PDFPresenceOnlyPathCapped(filePath, []string{word}, 250, 800*time.Millisecond)
-						if decidedOne && !foundOne {
-							return false
-						}
-						if decidedOne && foundOne {
+						// Use pdfcpu instead of leaky ledongthuc/pdf library
+						_, matched, err := pdf.ExtractAllTextCapped(filePath, 250, 128*1024, []string{word}, se.Distance)
+						if err == nil && matched {
+							// Success: all words found = definitive positive
 							hasAllWords = true
 						}
+						// If error or not matched, fall through to else block (extraction fallback)
 					}
 				} else {
 					// Bounded extraction fallback under semaphore + timeout
