@@ -712,7 +712,7 @@ func (m model) runSearch() tea.Cmd {
 		}
 		return innerWidth * contentHeight
 	}
-	total, _ := search.GetDocumentFileCount(fileTypes)
+	total, _ := search.GetDocumentFileCount(fileTypes, "", nil)
 
 	// Emit initial progress and then run the search
 	return tea.Batch(

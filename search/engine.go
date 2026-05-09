@@ -126,6 +126,13 @@ type SearchEngine struct {
 	FilterWorkers     int
 	FileTimeoutBinary time.Duration
 
+	// StartDir, if non-empty, sets the root directory for file walks.
+	// When empty, the walk uses the current working directory.
+	StartDir  string
+	// PathScope, if non-empty, restricts file walks to paths whose relative
+	// path matches at least one simple glob pattern (e.g., "*/backend/*").
+	PathScope []string
+
 	// PDF governor (defaults: pacing on, no budget)
 	pdfMinInterval   time.Duration
 	pdfBudget        int64 // 0 = unlimited
@@ -186,7 +193,7 @@ func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error)
 		if se.OnProgress != nil {
 			se.OnProgress("discovery", processed, total, path)
 		}
-	})
+	}, se.StartDir, se.PathScope)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to find files with first word: %w", err)
 	}

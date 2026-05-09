@@ -247,7 +247,7 @@ func Run() int {
 		if args.OnlyType != "" {
 			fileTypes = []string{"-g", "*." + strings.TrimPrefix(strings.ToLower(args.OnlyType), ".")}
 		}
-		if total, err := search.GetDocumentFileCount(fileTypes); err == nil {
+		if total, err := search.GetDocumentFileCount(fileTypes, "", nil); err == nil {
 			// Threshold tuned for very large trees to avoid cache blowouts on single-term scans
 			const hugeSingleWordThreshold = 200000
 			if total >= hugeSingleWordThreshold {

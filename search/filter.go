@@ -252,8 +252,36 @@ type FileInfo struct {
 	Size int64
 }
 
-// GetDocumentFileCount returns the count of document files that will be searched (pure Go)
-func GetDocumentFileCount(fileTypes []string) (int, error) {
+// matchesPathScope returns true if the file path (relative to walkRoot) matches
+// at least one pattern in pathScope. If pathScope is empty, all files match.
+// Patterns use filepath.Match semantics (simple globs: * and ? only).
+// The comparison uses forward-slash paths for cross-platform consistency.
+func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
+	if len(pathScope) == 0 {
+		return true
+	}
+	// Get path relative to walkRoot, with forward slashes for pattern matching
+	rel, err := filepath.Rel(walkRoot, absPath)
+	if err != nil {
+		return false
+	}
+	relSlash := filepath.ToSlash(rel)
+	for _, pattern := range pathScope {
+		if matched, err := filepath.Match(pattern, relSlash); err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
+// GetDocumentFileCount returns the count of document files that will be searched (pure Go).
+// walkRoot specifies the directory to search from; use "" or "." for the current directory.
+// pathScope, if non-empty, restricts results to files whose relative path matches at least
+// one simple glob pattern (e.g., "*/backend/*", "tests/*").
+func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []string) (int, error) {
+	if walkRoot == "" {
+		walkRoot = "."
+	}
 	// Parse allowed extensions from patterns like "-g", "*.txt"
 	allowed := make(map[string]bool)
 	for i := 0; i < len(fileTypes); i++ {
@@ -267,8 +295,13 @@ func GetDocumentFileCount(fileTypes []string) (int, error) {
 		}
 	}
 
+	absRoot, err := filepath.Abs(walkRoot)
+	if err != nil {
+		return 0, err
+	}
+
 	count := 0
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Ignore permission errors; keep walking
 			return nil
@@ -283,6 +316,9 @@ func GetDocumentFileCount(fileTypes []string) (int, error) {
 		if len(allowed) > 0 && !allowed[ext] {
 			return nil
 		}
+		if !matchesPathScope(path, absRoot, pathScope) {
+			return nil
+		}
 		count++
 		return nil
 	})
@@ -292,8 +328,18 @@ func GetDocumentFileCount(fileTypes []string) (int, error) {
 	return count, nil
 }
 
-// FindFilesWithFirstWord finds all files containing the first search word (pure Go)
-func FindFilesWithFirstWord(word string, fileTypes []string) ([]string, error) {
+// FindFilesWithFirstWord finds all files containing the first search word (pure Go).
+// walkRoot specifies the directory to search from; use "" or "." for the current directory.
+// pathScope, if non-empty, restricts results to files whose relative path matches at least
+// one simple glob pattern.
+func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pathScope []string) ([]string, error) {
+	if walkRoot == "" {
+		walkRoot = "."
+	}
+	absRoot, err := filepath.Abs(walkRoot)
+	if err != nil {
+		return nil, err
+	}
 	// Parse allowed extensions from patterns like "-g", "*.txt"
 	allowed := make(map[string]bool)
 	for i := 0; i < len(fileTypes); i++ {
@@ -318,7 +364,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string) ([]string, error) {
 		".mbox": true,
 	}
 	matches := make([]string, 0, 128)
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Ignore permission errors; keep walking
 			return nil
@@ -336,7 +382,10 @@ func FindFilesWithFirstWord(word string, fileTypes []string) ([]string, error) {
 			return nil
 		}
 
-		// Fast first-word check: stream file without extraction
+		// Filter by pathScope if provided
+		if !matchesPathScope(path, absRoot, pathScope) {
+			return nil
+		}
 		if heavy[ext] {
 			// include heavy binary types as candidates; full check later
 			matches = append(matches, path)
@@ -423,7 +472,17 @@ func FindFilesWithFirstWord(word string, fileTypes []string) ([]string, error) {
 }
 
 // FindFilesWithFirstWordProgress is like FindFilesWithFirstWord but emits per-file discovery progress.
-func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string)) ([]string, error) {
+// walkRoot specifies the directory to search from; use "" or "." for the current directory.
+// pathScope, if non-empty, restricts results to files whose relative path matches at least
+// one simple glob pattern.
+func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string) ([]string, error) {
+	if walkRoot == "" {
+		walkRoot = "."
+	}
+	absRoot, err := filepath.Abs(walkRoot)
+	if err != nil {
+		return nil, err
+	}
 	// Parse allowed extensions from patterns like "-g", "*.txt"
 	allowed := make(map[string]bool)
 	for i := 0; i < len(fileTypes); i++ {
@@ -564,7 +623,8 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 	processed := 0
 
 	// Walk and stream paths to workers
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	var walkErr error
+	walkErr = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -577,6 +637,11 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 
 		ext := strings.ToLower(filepath.Ext(path))
 		if len(allowed) > 0 && !allowed[ext] {
+			return nil
+		}
+
+		// Filter by pathScope if provided
+		if !matchesPathScope(path, absRoot, pathScope) {
 			return nil
 		}
 
@@ -622,8 +687,8 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 	close(paths)
 	wg.Wait()
 
-	if err != nil {
-		return nil, err
+	if walkErr != nil {
+		return nil, walkErr
 	}
 	if len(matches) == 0 {
 		return nil, nil
