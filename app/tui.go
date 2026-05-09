@@ -107,6 +107,8 @@ type model struct {
 	pdfSkipped        int64
 	pdfTruncated      int64
 	filterWorkers     int
+	startDir          string   // --startdir: root directory for file walks
+	pathScope         []string // --pathscope: restrict walks to matching paths
 
 	// UI state
 	confirmSelected string // "yes" or "no"
@@ -643,6 +645,13 @@ func (m model) runSearch() tea.Cmd {
 	// Override default proximity window if provided
 	if m.distance > 0 {
 		se.Distance = m.distance
+	}
+	// Wire startDir and pathScope if provided
+	if m.startDir != "" {
+		se.StartDir = m.startDir
+	}
+	if len(m.pathScope) > 0 {
+		se.PathScope = m.pathScope
 	}
 	// Stream progress from the engine to the TUI header
 	se.OnProgress = func(stage string, processed, total int, path string) {

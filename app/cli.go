@@ -32,6 +32,16 @@ type Arguments struct {
 	FilterWorkers     int
 	FileTimeoutBinary int
 	OnlyType          string
+
+	// StartDir: base directory for file walks (--startdir flag).
+	// Empty string means use the current working directory.
+	StartDir    string
+	StartDirErr error // non-nil if validation failed
+
+	// PathScope: list of simple glob patterns to restrict file walks (--pathscope flag).
+	// Empty slice means no restriction.
+	PathScope    []string
+	PathScopeErr error // non-nil if validation failed
 }
 
 // parseArguments parses command line args
@@ -52,6 +62,8 @@ func parseArguments(args []string) *Arguments {
 	expectTimeout := false
 	expectWorkers := false
 	expectOnly := false
+	expectStartDir := false
+	expectPathScope := false
 	heavyProvided := false
 
 	for _, a := range args {
@@ -89,6 +101,26 @@ func parseArguments(args []string) *Arguments {
 			expectOnly = false
 			continue
 		}
+		if expectStartDir {
+			cleaned, err := search.ValidateStartDir(a)
+			if err != nil {
+				result.StartDirErr = err
+			} else {
+				result.StartDir = cleaned
+			}
+			expectStartDir = false
+			continue
+		}
+		if expectPathScope {
+			segments, err := search.ValidatePathScope(a)
+			if err != nil {
+				result.PathScopeErr = err
+			} else {
+				result.PathScope = segments
+			}
+			expectPathScope = false
+			continue
+		}
 		switch a {
 		case "--code":
 			result.IncludeCode = true
@@ -104,6 +136,10 @@ func parseArguments(args []string) *Arguments {
 			expectWorkers = true
 		case "--only":
 			expectOnly = true
+		case "--startdir":
+			expectStartDir = true
+		case "--pathscope":
+			expectPathScope = true
 		case "--smart-forms":
 			result.SmartForms = true
 		case "--help", "-h":
@@ -204,6 +240,13 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000)"))
 	fmt.Println(infoStyle.Render("  --smart-forms          Enable smart word forms (s, es, ed, ing, al, tion/ation)"))
 	fmt.Println(infoStyle.Render("  --only <type>          Search only a single file type (e.g., pdf); ignores --code"))
+	fmt.Println(infoStyle.Render("  --startdir <path>      Base directory to search (default: current directory)"))
+	fmt.Println(infoStyle.Render("                         Accepts Linux, macOS, or Windows paths; quote if path has spaces"))
+	fmt.Println(infoStyle.Render("                         Wildcards and shell metacharacters are rejected"))
+	fmt.Println(infoStyle.Render("  --pathscope <patterns> Comma-separated list of simple path patterns to restrict search"))
+	fmt.Println(infoStyle.Render("                         Wildcards: * (any chars) and ? (single char) only"))
+	fmt.Println(infoStyle.Render("                         Do not include file extensions (use --not / --only for that)"))
+	fmt.Println(infoStyle.Render("                         Example: --pathscope='*/backend/*/Assembly,tests/*'"))
 	fmt.Println(infoStyle.Render("  --not ...               Tokens after this are exclusions;"))
 	fmt.Println(infoStyle.Render("                          extensions starting with '.' exclude types; others exclude words"))
 	fmt.Println(infoStyle.Render("  --help, -h              Show help"))
@@ -233,6 +276,15 @@ func Run() int {
 	args := parseArguments(os.Args[1:])
 	if len(args.SearchWords) == 0 {
 		showUsage()
+		return 1
+	}
+	// Exit early on flag validation errors
+	if args.StartDirErr != nil {
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.StartDirErr.Error()))
+		return 1
+	}
+	if args.PathScopeErr != nil {
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.PathScopeErr.Error()))
 		return 1
 	}
 	// Hook for matching layer: advertise smart-forms via environment (consumed by matching)
@@ -284,6 +336,8 @@ func Run() int {
 		heavyConcurrency:  args.HeavyConcurrency,
 		fileTimeoutBinary: args.FileTimeoutBinary,
 		filterWorkers:     args.FilterWorkers,
+		startDir:          args.StartDir,
+		pathScope:         args.PathScope,
 		confirmSelected:   "yes",
 		memUsageText:      "",
 		progressText:      "",
