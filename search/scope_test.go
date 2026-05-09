@@ -190,20 +190,26 @@ func TestValidatePathScope_TrimsWhitespace(t *testing.T) {
 }
 
 func TestValidatePathScope_RejectsExtension(t *testing.T) {
-	_, err := search.ValidatePathScope("*/backend/*.cs")
-	if err == nil {
-		t.Fatal("expected error for extension in pathscope, got nil")
+	// Dots are allowed -- they are treated as part of a dir or filename.
+	// garp always runs; the CLI help directs users to use --not/--only for
+	// extension filtering. This test documents the PASS behavior.
+	got, err := search.ValidatePathScope("*/backend/*.cs")
+	if err != nil {
+		t.Fatalf("unexpected error: dots in pathscope should be allowed, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "do not include file extensions") {
-		t.Errorf("expected extension hint in error, got: %v", err)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 segment, got %v", got)
 	}
 }
 
 func TestValidatePathScope_RejectsDotInDirName(t *testing.T) {
-	// Any dot is rejected -- dir names with dots could smuggle in extensions
-	_, err := search.ValidatePathScope("*/back.end/*")
-	if err == nil {
-		t.Fatal("expected error for dot in dir name, got nil")
+	// Dots in directory names (e.g., back.end) are allowed.
+	got, err := search.ValidatePathScope("*/back.end/*")
+	if err != nil {
+		t.Fatalf("unexpected error: dot in dir name should be allowed, got: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 segment, got %v", got)
 	}
 }
 

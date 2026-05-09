@@ -49,8 +49,9 @@ var pathScopeRejectedChars = []string{
 // Rules:
 //   - Simple wildcards (* and ?) are allowed.
 //   - Regex metacharacters are rejected.
-//   - Dots (.) are rejected in all segments -- file extensions belong to
-//     --not / --only, not --pathscope.
+//   - Dots (.) in segments are treated as part of a directory or filename --
+//     file extension filtering belongs to --not / --only, not --pathscope.
+//     The CLI help directs users accordingly, but garp always runs the search.
 //   - Empty segments (from trailing commas etc.) are silently skipped.
 //
 // Returns the parsed segments, or nil if input is empty (feature disabled).
@@ -74,14 +75,6 @@ func ValidatePathScope(raw string) ([]string, error) {
 					seg, ch,
 				)
 			}
-		}
-		// Reject extension-like patterns -- any segment containing '.'
-		if strings.Contains(seg, ".") {
-			return nil, fmt.Errorf(
-				"--pathscope: segment %q contains '.' -- "+
-					"do not include file extensions; use --not or --only for extension filtering",
-				seg,
-			)
 		}
 		result = append(result, seg)
 	}

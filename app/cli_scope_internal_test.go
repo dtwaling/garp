@@ -65,9 +65,14 @@ func TestParseArguments_PathScope_Accepted(t *testing.T) {
 }
 
 func TestParseArguments_PathScope_RejectsExtension(t *testing.T) {
+	// Dots are valid in pathscope -- treated as part of dir/filename.
+	// garp always runs; CLI help warns users to use --not/--only instead.
 	args := parseArguments([]string{"foo", "--pathscope", "*/backend/*.cs"})
-	if args.PathScopeErr == nil {
-		t.Error("expected PathScopeErr for extension in pathscope, got nil")
+	if args.PathScopeErr != nil {
+		t.Errorf("unexpected PathScopeErr for dotted segment: %v", args.PathScopeErr)
+	}
+	if len(args.PathScope) != 1 {
+		t.Errorf("expected 1 scope segment, got %v", args.PathScope)
 	}
 }
 
