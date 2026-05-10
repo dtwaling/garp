@@ -227,6 +227,37 @@ func TestGetDocumentFileCount_PathScope_EmptyNilMeansAll(t *testing.T) {
 	}
 }
 
+// TestGetDocumentFileCount_PathScope_TrailingSlash verifies that a pattern like
+// "tests/" (no explicit wildcard) matches all files under tests/ at any depth.
+// This is the directory-prefix shorthand: users shouldn't need to know that
+// filepath.Match requires "tests/*" -- "tests/" should just work.
+func TestGetDocumentFileCount_PathScope_TrailingSlash(t *testing.T) {
+	root := buildTestTree(t)
+	scope := []string{"tests/"}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// tests/ has 3 files -- same result as "tests/*"
+	if count != 3 {
+		t.Errorf("expected 3 files matching tests/ prefix, got %d", count)
+	}
+}
+
+// TestGetDocumentFileCount_PathScope_BareDir verifies that a bare directory name
+// without a trailing slash (e.g. "tests") also matches files under that directory.
+func TestGetDocumentFileCount_PathScope_BareDir(t *testing.T) {
+	root := buildTestTree(t)
+	scope := []string{"tests"}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 files matching bare dir 'tests', got %d", count)
+	}
+}
+
 // fileUnderRoot returns true if path is under (or equal to) root.
 func fileUnderRoot(path, root string) bool {
 	rel, err := filepath.Rel(root, path)

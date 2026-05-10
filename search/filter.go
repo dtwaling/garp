@@ -256,6 +256,12 @@ type FileInfo struct {
 // at least one pattern in pathScope. If pathScope is empty, all files match.
 // Patterns use filepath.Match semantics (simple globs: * and ? only).
 // The comparison uses forward-slash paths for cross-platform consistency.
+//
+// Directory-prefix shorthand: a pattern with no wildcards that ends in "/" (or
+// contains no "/" at all and looks like a bare dir name) is treated as a prefix
+// match so that "audio2midi/" matches "audio2midi/dsp.py" and any depth below.
+// This lets callers write natural patterns without needing to know that
+// filepath.Match requires explicit wildcards for every path segment.
 func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
 	if len(pathScope) == 0 {
 		return true
@@ -267,8 +273,19 @@ func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
 	}
 	relSlash := filepath.ToSlash(rel)
 	for _, pattern := range pathScope {
+		// Primary: standard glob match
 		if matched, err := filepath.Match(pattern, relSlash); err == nil && matched {
 			return true
+		}
+		// Fallback: directory-prefix match for patterns that name a directory
+		// without explicit wildcards (e.g. "audio2midi/" or "docs/plans").
+		// Strip a trailing slash, then check if the rel path is exactly the
+		// prefix or starts with prefix + "/".
+		if !strings.ContainsAny(pattern, "*?") {
+			prefix := strings.TrimRight(pattern, "/")
+			if prefix != "" && (relSlash == prefix || strings.HasPrefix(relSlash, prefix+"/")) {
+				return true
+			}
 		}
 	}
 	return false
