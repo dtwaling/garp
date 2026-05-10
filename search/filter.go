@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"find-words/config"
+	"garp/config"
 )
 
 // Regex cache for word matching - prevents MustCompile on every call
@@ -252,8 +252,91 @@ type FileInfo struct {
 	Size int64
 }
 
-// GetDocumentFileCount returns the count of document files that will be searched (pure Go)
-func GetDocumentFileCount(fileTypes []string) (int, error) {
+// matchesPathScope returns true if the file path (relative to walkRoot) matches
+// at least one pattern in pathScope. If pathScope is empty, all files match.
+// Patterns use filepath.Match semantics (simple globs: * and ? only).
+// The comparison uses forward-slash paths for cross-platform consistency.
+//
+// Directory-prefix shorthand: a pattern with no wildcards that ends in "/" (or
+// a bare dir name) is treated as a prefix match so "audio2midi/" matches any
+// file under audio2midi/ at any depth.
+func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
+	if len(pathScope) == 0 {
+		return true
+	}
+	rel, err := filepath.Rel(walkRoot, absPath)
+	if err != nil {
+		return false
+	}
+	relSlash := filepath.ToSlash(rel)
+	for _, pattern := range pathScope {
+		if matched, err := filepath.Match(pattern, relSlash); err == nil && matched {
+			return true
+		}
+		if !strings.ContainsAny(pattern, "*?") {
+			prefix := strings.TrimRight(pattern, "/")
+			if prefix != "" && (relSlash == prefix || strings.HasPrefix(relSlash, prefix+"/")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// dirCouldMatchPathScope returns true if descending into this directory could
+// ever yield a file that matches at least one pathScope pattern. When it
+// returns false the walk can safely skip the entire subtree with SkipDir.
+//
+// A directory could yield matches when any pattern:
+//  1. Has this dir as a prefix (e.g. pattern "audio2midi/dsp.py" -> dir "audio2midi" is a prefix)
+//  2. Has a wildcard that could span into this dir (e.g. pattern "*/foo/*" can match dirs at any level)
+//  3. Is a bare wildcard pattern like "*" or "**"
+//
+// When pathScope is empty (no restriction) all dirs are traversed.
+func dirCouldMatchPathScope(absDir, walkRoot string, pathScope []string) bool {
+	if len(pathScope) == 0 {
+		return true
+	}
+	rel, err := filepath.Rel(walkRoot, absDir)
+	if err != nil {
+		return true // can't determine, don't prune
+	}
+	relSlash := filepath.ToSlash(rel)
+	if relSlash == "." {
+		return true // root always traversed
+	}
+	for _, pattern := range pathScope {
+		// Pattern contains wildcards -- can't safely prune based on dir name alone;
+		// wildcards like "*" or "*/foo/*" could match any depth. Allow traversal.
+		if strings.ContainsAny(pattern, "*?") {
+			return true
+		}
+		// Literal pattern: prune only if dir is provably outside all patterns.
+		// Dir is "inside" a pattern when:
+		//   a) dir IS the pattern prefix (e.g. dir="audio2midi", pattern="audio2midi/dsp.py")
+		//   b) dir is a component of pattern (e.g. dir="docs", pattern="docs/plans")
+		//   c) pattern is a prefix of dir (e.g. dir="audio2midi/sub", pattern="audio2midi")
+		prefix := strings.TrimRight(pattern, "/")
+		if prefix == "" {
+			continue
+		}
+		if relSlash == prefix ||
+			strings.HasPrefix(relSlash, prefix+"/") ||
+			strings.HasPrefix(prefix, relSlash+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// GetDocumentFileCount returns the count of document files that will be searched (pure Go).
+// walkRoot specifies the directory to search from; use "" or "." for the current directory.
+// pathScope, if non-empty, restricts results to files whose relative path matches at least
+// one simple glob pattern (e.g., "*/backend/*", "tests/*").
+func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []string) (int, error) {
+	if walkRoot == "" {
+		walkRoot = "."
+	}
 	// Parse allowed extensions from patterns like "-g", "*.txt"
 	allowed := make(map[string]bool)
 	for i := 0; i < len(fileTypes); i++ {
@@ -267,8 +350,13 @@ func GetDocumentFileCount(fileTypes []string) (int, error) {
 		}
 	}
 
+	absRoot, err := filepath.Abs(walkRoot)
+	if err != nil {
+		return 0, err
+	}
+
 	count := 0
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Ignore permission errors; keep walking
 			return nil
@@ -277,10 +365,17 @@ func GetDocumentFileCount(fileTypes []string) (int, error) {
 			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
 				return filepath.SkipDir
 			}
+			// Prune entire subtree if no pathScope pattern can match anything under it.
+			if len(pathScope) > 0 && !dirCouldMatchPathScope(path, absRoot, pathScope) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
 		if len(allowed) > 0 && !allowed[ext] {
+			return nil
+		}
+		if !matchesPathScope(path, absRoot, pathScope) {
 			return nil
 		}
 		count++
@@ -292,8 +387,18 @@ func GetDocumentFileCount(fileTypes []string) (int, error) {
 	return count, nil
 }
 
-// FindFilesWithFirstWord finds all files containing the first search word (pure Go)
-func FindFilesWithFirstWord(word string, fileTypes []string) ([]string, error) {
+// FindFilesWithFirstWord finds all files containing the first search word (pure Go).
+// walkRoot specifies the directory to search from; use "" or "." for the current directory.
+// pathScope, if non-empty, restricts results to files whose relative path matches at least
+// one simple glob pattern.
+func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pathScope []string) ([]string, error) {
+	if walkRoot == "" {
+		walkRoot = "."
+	}
+	absRoot, err := filepath.Abs(walkRoot)
+	if err != nil {
+		return nil, err
+	}
 	// Parse allowed extensions from patterns like "-g", "*.txt"
 	allowed := make(map[string]bool)
 	for i := 0; i < len(fileTypes); i++ {
@@ -318,13 +423,17 @@ func FindFilesWithFirstWord(word string, fileTypes []string) ([]string, error) {
 		".mbox": true,
 	}
 	matches := make([]string, 0, 128)
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Ignore permission errors; keep walking
 			return nil
 		}
 		if d.IsDir() {
 			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
+				return filepath.SkipDir
+			}
+			// Prune entire subtree if no pathScope pattern can match anything under it.
+			if len(pathScope) > 0 && !dirCouldMatchPathScope(path, absRoot, pathScope) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -336,7 +445,10 @@ func FindFilesWithFirstWord(word string, fileTypes []string) ([]string, error) {
 			return nil
 		}
 
-		// Fast first-word check: stream file without extraction
+		// Filter by pathScope if provided
+		if !matchesPathScope(path, absRoot, pathScope) {
+			return nil
+		}
 		if heavy[ext] {
 			// include heavy binary types as candidates; full check later
 			matches = append(matches, path)
@@ -423,7 +535,17 @@ func FindFilesWithFirstWord(word string, fileTypes []string) ([]string, error) {
 }
 
 // FindFilesWithFirstWordProgress is like FindFilesWithFirstWord but emits per-file discovery progress.
-func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string)) ([]string, error) {
+// walkRoot specifies the directory to search from; use "" or "." for the current directory.
+// pathScope, if non-empty, restricts results to files whose relative path matches at least
+// one simple glob pattern.
+func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string) ([]string, error) {
+	if walkRoot == "" {
+		walkRoot = "."
+	}
+	absRoot, err := filepath.Abs(walkRoot)
+	if err != nil {
+		return nil, err
+	}
 	// Parse allowed extensions from patterns like "-g", "*.txt"
 	allowed := make(map[string]bool)
 	for i := 0; i < len(fileTypes); i++ {
@@ -564,7 +686,8 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 	processed := 0
 
 	// Walk and stream paths to workers
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	var walkErr error
+	walkErr = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -572,11 +695,20 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
 				return filepath.SkipDir
 			}
+			// Prune entire subtree if no pathScope pattern can match anything under it.
+			if len(pathScope) > 0 && !dirCouldMatchPathScope(path, absRoot, pathScope) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
 		ext := strings.ToLower(filepath.Ext(path))
 		if len(allowed) > 0 && !allowed[ext] {
+			return nil
+		}
+
+		// Filter by pathScope if provided
+		if !matchesPathScope(path, absRoot, pathScope) {
 			return nil
 		}
 
@@ -622,8 +754,8 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 	close(paths)
 	wg.Wait()
 
-	if err != nil {
-		return nil, err
+	if walkErr != nil {
+		return nil, walkErr
 	}
 	if len(matches) == 0 {
 		return nil, nil

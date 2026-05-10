@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"find-words/search/pdf"
+	"garp/search/pdf"
 )
 
 // ExcerptCharBudget allows the UI to provide an inner-width–based char budget for excerpts.
@@ -24,7 +24,8 @@ var ExcerptCharBudget func() int
 type SearchResult struct {
 	FilePath     string
 	FileSize     int64
-	Excerpts     []string
+	Excerpts     []string // ANSI-highlighted, for TUI display
+	RawExcerpts  []string // plain text before highlighting -- for machine-readable output (--json, --plain)
 	CleanContent string
 	EmailDate    string
 	EmailSubject string
@@ -126,6 +127,13 @@ type SearchEngine struct {
 	FilterWorkers     int
 	FileTimeoutBinary time.Duration
 
+	// StartDir, if non-empty, sets the root directory for file walks.
+	// When empty, the walk uses the current working directory.
+	StartDir  string
+	// PathScope, if non-empty, restricts file walks to paths whose relative
+	// path matches at least one simple glob pattern (e.g., "*/backend/*").
+	PathScope []string
+
 	// PDF governor (defaults: pacing on, no budget)
 	pdfMinInterval   time.Duration
 	pdfBudget        int64 // 0 = unlimited
@@ -186,7 +194,7 @@ func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error)
 		if se.OnProgress != nil {
 			se.OnProgress("discovery", processed, total, path)
 		}
-	})
+	}, se.StartDir, se.PathScope)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to find files with first word: %w", err)
 	}
@@ -814,6 +822,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 			FilePath:     filePath,
 			FileSize:     fileSize,
 			Excerpts:     highlightedExcerpts,
+			RawExcerpts:  excerpts,
 			CleanContent: boundedClean,
 			EmailDate:    emailDate,
 			EmailSubject: emailSubject,

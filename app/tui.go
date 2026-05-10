@@ -13,8 +13,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/sys/unix"
 
-	"find-words/config"
-	"find-words/search"
+	"garp/config"
+	"garp/search"
 )
 
 var startWall time.Time
@@ -107,6 +107,8 @@ type model struct {
 	pdfSkipped        int64
 	pdfTruncated      int64
 	filterWorkers     int
+	startDir          string   // --startdir: root directory for file walks
+	pathScope         []string // --pathscope: restrict walks to matching paths
 
 	// UI state
 	confirmSelected string // "yes" or "no"
@@ -511,7 +513,7 @@ func (m model) View() string {
 								}
 								frag := result.CleanContent[start:end]
 								if extra != "" {
-									extra += " … "
+									extra += " ... "
 								}
 								extra += frag
 							}
@@ -644,6 +646,13 @@ func (m model) runSearch() tea.Cmd {
 	if m.distance > 0 {
 		se.Distance = m.distance
 	}
+	// Wire startDir and pathScope if provided
+	if m.startDir != "" {
+		se.StartDir = m.startDir
+	}
+	if len(m.pathScope) > 0 {
+		se.PathScope = m.pathScope
+	}
 	// Stream progress from the engine to the TUI header
 	se.OnProgress = func(stage string, processed, total int, path string) {
 		ps, sk, tr := se.GetPDFStatsDetailed()
@@ -712,7 +721,7 @@ func (m model) runSearch() tea.Cmd {
 		}
 		return innerWidth * contentHeight
 	}
-	total, _ := search.GetDocumentFileCount(fileTypes)
+	total, _ := search.GetDocumentFileCount(fileTypes, "", nil)
 
 	// Emit initial progress and then run the search
 	return tea.Batch(
