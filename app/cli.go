@@ -305,11 +305,12 @@ type jsonOutput struct {
 
 // jsonQuery echoes the search parameters back to the caller so the response is self-describing.
 type jsonQuery struct {
-	Terms    []string `json:"terms"`
-	Excludes []string `json:"excludes,omitempty"`
-	StartDir string   `json:"start_dir,omitempty"`
-	OnlyType string   `json:"only_type,omitempty"`
-	Code     bool     `json:"include_code"`
+	Terms     []string `json:"terms"`
+	Excludes  []string `json:"excludes,omitempty"`
+	StartDir  string   `json:"start_dir,omitempty"`
+	PathScope []string `json:"path_scope,omitempty"`
+	OnlyType  string   `json:"only_type,omitempty"`
+	Code      bool     `json:"include_code"`
 }
 
 // runJSON executes the search without the TUI and writes a JSON document to stdout.
@@ -347,11 +348,12 @@ func runJSON(args *Arguments) int {
 
 	out := jsonOutput{
 		Query: jsonQuery{
-			Terms:    args.SearchWords,
-			Excludes: args.ExcludeWords,
-			StartDir: args.StartDir,
-			OnlyType: args.OnlyType,
-			Code:     args.IncludeCode,
+			Terms:     args.SearchWords,
+			Excludes:  args.ExcludeWords,
+			StartDir:  args.StartDir,
+			PathScope: args.PathScope,
+			OnlyType:  args.OnlyType,
+			Code:      args.IncludeCode,
 		},
 		Matches: len(results),
 		Results: make([]jsonResult, 0, len(results)),
