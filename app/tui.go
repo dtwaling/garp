@@ -13,8 +13,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/sys/unix"
 
-	"find-words/config"
-	"find-words/search"
+	"garp/config"
+	"garp/search"
 )
 
 var startWall time.Time

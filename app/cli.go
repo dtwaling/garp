@@ -16,8 +16,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"find-words/config"
-	"find-words/search"
+	"garp/config"
+	"garp/search"
 )
 
 var version = "0.2"

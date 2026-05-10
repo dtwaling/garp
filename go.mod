@@ -1,4 +1,4 @@
-module find-words
+module garp
 
 go 1.24.6
 
@@ -8,7 +8,6 @@ require (
 	github.com/emersion/go-mbox v1.0.4
 	github.com/jhillyerd/enmime v1.3.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
-	github.com/pdfcpu/pdfcpu v0.11.1
 	github.com/richardlehane/mscfb v1.0.4
 	golang.org/x/sys v0.37.0
 	golang.org/x/text v0.30.0
@@ -24,9 +23,6 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
-	github.com/hhrutter/lzw v1.0.0 // indirect
-	github.com/hhrutter/pkcs7 v0.2.0 // indirect
-	github.com/hhrutter/tiff v1.0.2 // indirect
 	github.com/jaytaylor/html2text v0.0.0-20230321000545-74c2419ad056 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -41,8 +37,5 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/ssor/bom v0.0.0-20170718123548-6386211fdfcf // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/crypto v0.43.0 // indirect
-	golang.org/x/image v0.32.0 // indirect
 	golang.org/x/net v0.45.0 // indirect
-	gopkg.in/yaml.v2 v2.4.0 // indirect
 )

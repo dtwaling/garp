@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"find-words/config"
+	"garp/config"
 )
 
 // Regex cache for word matching - prevents MustCompile on every call

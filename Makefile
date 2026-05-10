@@ -6,7 +6,7 @@ GO_FILES=$(shell find . -name "*.go" -type f)
 
 # Version embedding
 VERSION=0.7
-LDFLAGS=-X find-words/app.version=$(VERSION)
+LDFLAGS=-X garp/app.version=$(VERSION)
 
 # Default target
 all: build

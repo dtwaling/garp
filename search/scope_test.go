@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"find-words/search"
+	"garp/search"
 )
 
 // --- ValidateStartDir tests ---

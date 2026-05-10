@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"find-words/search/pdf"
+	"garp/search/pdf"
 )
 
 // ExcerptCharBudget allows the UI to provide an inner-width–based char budget for excerpts.

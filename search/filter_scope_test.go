@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"find-words/search"
+	"garp/search"
 )
 
 // buildTestTree creates a temporary directory tree for walk tests.

@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"find-words/app"
+	"garp/app"
 )
 
 func main() {
