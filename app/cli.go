@@ -6,6 +6,7 @@ package app
 // - UI: reflect the constraint in the "Target" header line to stay truthful.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -47,6 +48,10 @@ type Arguments struct {
 	// PlainOutput: when true, skip the TUI and emit clean line-oriented text to stdout.
 	// Designed for programmatic callers (MCP tools, scripts) that need machine-readable output.
 	PlainOutput bool
+
+	// JSONOutput: when true, skip the TUI and emit a JSON document to stdout.
+	// Preferred over --plain for agent/MCP callers -- unambiguous structure, no parse fragility.
+	JSONOutput bool
 }
 
 // parseArguments parses command line args
@@ -149,6 +154,8 @@ func parseArguments(args []string) *Arguments {
 			result.SmartForms = true
 		case "--plain":
 			result.PlainOutput = true
+		case "--json":
+			result.JSONOutput = true
 		case "--help", "-h":
 			showUsage()
 			os.Exit(0)
@@ -256,6 +263,8 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("                         Example: --pathscope='*/backend/*/Assembly,tests/*'"))
 	fmt.Println(infoStyle.Render("  --plain                Skip the interactive TUI; emit plain line-oriented output to stdout."))
 	fmt.Println(infoStyle.Render("                         Useful for scripting and MCP tool callers that need machine-readable results."))
+	fmt.Println(infoStyle.Render("  --json                 Skip the interactive TUI; emit a JSON document to stdout."))
+	fmt.Println(infoStyle.Render("                         Preferred over --plain for agent/MCP callers -- unambiguous, no parse fragility."))
 	fmt.Println(infoStyle.Render("  --not ...               Tokens after this are exclusions;"))
 	fmt.Println(infoStyle.Render("                          extensions starting with '.' exclude types; others exclude words"))
 	fmt.Println(infoStyle.Render("  --help, -h              Show help"))
@@ -277,6 +286,99 @@ func showUsage() {
 func showVersion() {
 	// successStyle is provided in tui.go (same package).
 	fmt.Println(successStyle.Render("garp v" + version))
+}
+
+// ansiEscRe strips ANSI terminal escape sequences from excerpt text before emitting
+// non-TUI output. Covers all standard SGR and cursor codes.
+var ansiEscRe = regexp.MustCompile(`\x1b\[[0-9;]*[mGKHF]`)
+
+// jsonResult is a single file match in --json output.
+type jsonResult struct {
+	File    string   `json:"file"`
+	SizeB   int64    `json:"size_bytes"`
+	Excerpts []string `json:"excerpts"`
+}
+
+// jsonOutput is the top-level envelope emitted by --json.
+type jsonOutput struct {
+	Query   jsonQuery    `json:"query"`
+	Matches int          `json:"matches"`
+	Results []jsonResult `json:"results"`
+}
+
+// jsonQuery echoes the search parameters back to the caller so the response is self-describing.
+type jsonQuery struct {
+	Terms    []string `json:"terms"`
+	Excludes []string `json:"excludes,omitempty"`
+	StartDir string   `json:"start_dir,omitempty"`
+	OnlyType string   `json:"only_type,omitempty"`
+	Code     bool     `json:"include_code"`
+}
+
+// runJSON executes the search without the TUI and writes a JSON document to stdout.
+// Errors go to stderr as plain text; the exit code is non-zero on failure.
+func runJSON(args *Arguments) int {
+	fileTypes := config.BuildRipgrepFileTypes(args.IncludeCode)
+	if args.OnlyType != "" {
+		fileTypes = []string{"-g", "*." + strings.TrimPrefix(strings.ToLower(args.OnlyType), ".")}
+	}
+	se := search.NewSearchEngineWithWorkers(
+		args.SearchWords,
+		args.ExcludeWords,
+		fileTypes,
+		args.IncludeCode,
+		args.HeavyConcurrency,
+		args.FileTimeoutBinary,
+		args.FilterWorkers,
+	)
+	se.Silent = true
+	if args.Distance > 0 {
+		se.Distance = args.Distance
+	}
+	if args.StartDir != "" {
+		se.StartDir = args.StartDir
+	}
+	if len(args.PathScope) > 0 {
+		se.PathScope = args.PathScope
+	}
+
+	results, err := se.Execute()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
+		return 1
+	}
+
+	out := jsonOutput{
+		Query: jsonQuery{
+			Terms:    args.SearchWords,
+			Excludes: args.ExcludeWords,
+			StartDir: args.StartDir,
+			OnlyType: args.OnlyType,
+			Code:     args.IncludeCode,
+		},
+		Matches: len(results),
+		Results: make([]jsonResult, 0, len(results)),
+	}
+
+	for _, r := range results {
+		cleanExcerpts := make([]string, len(r.Excerpts))
+		for i, ex := range r.Excerpts {
+			cleanExcerpts[i] = ansiEscRe.ReplaceAllString(ex, "")
+		}
+		out.Results = append(out.Results, jsonResult{
+			File:     r.FilePath,
+			SizeB:    r.FileSize,
+			Excerpts: cleanExcerpts,
+		})
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		fmt.Fprintln(os.Stderr, "Error encoding JSON: "+err.Error())
+		return 1
+	}
+	return 0
 }
 
 // runPlain executes the search without the TUI and writes clean text to stdout.
@@ -327,7 +429,7 @@ func runPlain(args *Arguments) int {
 	}
 
 	// Regex to strip any ANSI escape sequences (covers all codes, not just the ones HighlightTerms emits)
-	ansiRe := regexp.MustCompile(`\x1b\[[0-9;]*[mGKHF]`)
+	ansiRe := ansiEscRe
 
 	for i, r := range results {
 		fmt.Printf("MATCH %d/%d\n", i+1, len(results))
@@ -362,6 +464,12 @@ func Run() int {
 	// Hook for matching layer: advertise smart-forms via environment (consumed by matching)
 	if args.SmartForms {
 		_ = os.Setenv("GARP_SMART_FORMS", "1")
+	}
+
+	// JSON output mode: preferred for agent/MCP callers. Checked before --plain so that
+	// passing both flags results in JSON (the stricter / more capable format wins).
+	if args.JSONOutput {
+		return runJSON(args)
 	}
 
 	// Plain output mode: run search synchronously and write line-oriented text to stdout.
