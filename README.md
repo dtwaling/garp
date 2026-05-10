@@ -2,25 +2,32 @@
 
 # :: garp ::
 
-![Version](https://img.shields.io/badge/version-0.5-blue?labelColor=0052cc)
-![License](https://img.shields.io/github/license/CyphrRiot/garp?color=4338ca&labelColor=3730a3)
+![Version](https://img.shields.io/badge/version-0.7-blue?labelColor=0052cc)
+![License](https://img.shields.io/github/license/dtwaling/garp?color=4338ca&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-linux-4338ca?logo=linux&logoColor=white&labelColor=3730a3)
-![Platform](https://img.shields.io/badge/platform-windows-4338ca?logo=windows&logoColor=white&labelColor=3730a3)
+![Platform](https://img.shields.io/badge/platform-macos-4338ca?logo=apple&logoColor=white&labelColor=3730a3)
 
-![Last Commit](https://img.shields.io/github/last-commit/CyphrRiot/garp?color=5b21b6&labelColor=4c1d95)
-![Code Size](https://img.shields.io/github/languages/code-size/CyphrRiot/garp?color=4338ca&labelColor=3730a3)
+![Last Commit](https://img.shields.io/github/last-commit/dtwaling/garp?color=5b21b6&labelColor=4c1d95)
+![Code Size](https://img.shields.io/github/languages/code-size/dtwaling/garp?color=4338ca&labelColor=3730a3)
 ![Language](https://img.shields.io/badge/language-Go-4338ca?logo=go&logoColor=c7d2fe&labelColor=3730a3)
 ![Build](https://img.shields.io/badge/build-makefile-4c1d95?labelColor=1e1b4b)
 
 </div>
 
-A high‑performance, pure‑Go document search tool with a clean TUI. garp finds files that contain ALL specified terms within a proximity window and supports many common document formats (including emails, Office files, documents, and PDFs) with pure‑Go extractors.
+A high-performance, pure-Go document search tool. garp finds files containing ALL
+specified terms within a proximity window and supports common document formats --
+text, email, Office, and PDF -- with pure-Go extractors and a clean TUI.
 
-No relation to the [John Irving novel of the same name](https://en.wikipedia.org/wiki/The_World_According_to_Garp). More like a mispronounced version of "grep" that's easy to remember.
+No relation to the [John Irving novel](https://en.wikipedia.org/wiki/The_World_According_to_Garp).
+More like a mispronounced "grep" that's easy to remember.
+
+Forked from [CyphrRiot/garp](https://github.com/CyphrRiot/garp). Original concept,
+core search engine, TUI, and document extraction are the work of
+[CyphrRiot](https://github.com/CyphrRiot).
 
 ![garp TUI](garp.png)
 
-## Quick Usage
+## Quick start
 
 ```bash
 garp contract payment agreement
@@ -29,240 +36,219 @@ garp mutex changed --code
 garp bank wire update --not .txt test
 garp approval crypto gemini --smart-forms
 garp report earnings --only pdf
+
+# Scope search to specific directories (prunes the walk -- never descends outside scope)
+garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/,tests/' --code
+
+# Machine-readable output for scripts and MCP/agent callers
+garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/' --code --json
 ```
 
-ℹ️ Note: PDFs are enabled with strict guardrails (concurrency=2, 250ms per‑PDF, ≤200 pages, ≤128 KiB/page, max 100 PDFs per search).
+## Key features
 
-## ✨ Key Features
-
-- 🚀 Pure Go: zero external dependencies – just download and run
-- ⚡ High-Performance: multi-core parallel processing
-- 🎯 Multi-word AND logic (unordered) with a proximity window (default 5000 chars)
-- 🧹 Smart content cleaning: strips HTML/CSS/JS, email headers, control chars
-- 📄 Binary document support: .eml, .mbox, .pdf, .doc/.docx/.odt, .rtf, .msg (improved); DOC/DOCX/ODT use conservative prefilters
-- 📁 Intelligent file filtering; include code files with `--code`
-- ❌ Advanced exclusion with `--not` for extensions (e.g., `.txt`) and words
-- 💾 Large file handling with safe, size-aware reads
-- 🎨 Beautiful TUI with excerpts and highlighting
-- 📊 Live progress and per-file status updates
-
-## 🚀 Performance Advantages (vs. typical ripgrep-based pipelines)
-
-- ✅ Zero dependencies – 100% Go implementation
-- ✅ Memory optimized for large file sets
-- ✅ Parallel processing across CPU cores
-- ✅ Cross-platform: Linux, macOS, Windows
-- ✅ Content-aware parsing and excerpt extraction
-
-## Highlights
-
-- Pure Go: zero external tools required
-- Multi‑word AND search (unordered)
-  Proximity window (default: 5000 characters) across the matched terms
-- Email/document extraction: EML, MBOX, PDF (guarded), DOC/DOCX/ODT (prefilters), RTF, MSG (improved)
-- Smart cleaning: strips HTML/CSS/JS, email headers, control chars, etc.
-- Beautiful TUI with live progress, paging, and excerpts
-- Optional inclusion of code files
+- Pure Go -- zero external tool dependencies
+- Multi-word AND logic, unordered, within a proximity window (default 5000 chars)
+- Directory-scoped search: `--startdir` sets the root, `--pathscope` prunes the walk
+- Machine-readable output: `--json` (structured envelope) and `--plain` (line-oriented)
+  designed for scripting and MCP tool callers
+- Smart content cleaning: strips HTML/CSS/JS, email headers, control chars
+- Binary document support: .eml, .mbox, .pdf, .doc/.docx/.odt, .rtf, .msg
+- Code file search with `--code`
+- Advanced exclusion with `--not` for extensions and words
+- Beautiful TUI with live progress, paging, and highlighted excerpts
+- Safe large-file handling with size-aware reads
 
 ## Install
 
-Option 1: Download the prebuilt binary
-
-- Direct download: https://github.com/CyphrRiot/garp/blob/main/bin/garp
-- Example install:
-  `curl -L -o ~/.local/bin/garp https://raw.githubusercontent.com/CyphrRiot/garp/main/bin/garp && chmod +x ~/.local/bin/garp`
-  (ensure `~/.local/bin` is on your `PATH`)
-
-Option 2: Build and install
+**Option 1: Build from source**
 
 ```bash
-make install
+git clone https://github.com/dtwaling/garp
+cd garp
+make install-pdfcpu   # recommended -- builds with PDF support, installs to ~/.local/bin/garp
+# or: make install    # without PDF tag
 ```
 
-This builds the binary to `bin/garp` and copies it to `~/.local/bin/garp`.
+Ensure `~/.local/bin` is on your `PATH`.
 
-Option 2: Use the prebuilt binary in this repo
+**Option 2: Copy the prebuilt binary**
 
-- The latest binary is kept at `bin/garp`. You can copy that directly to a directory on your `PATH`.
+The latest binary lives at `bin/garp`. Copy it to any directory on your `PATH`:
 
-## Quick start
+```bash
+cp bin/garp ~/.local/bin/garp
+chmod +x ~/.local/bin/garp
+```
 
-- Basic multi‑word search (unordered within distance window):
+## Flags
 
-    ```bash
-    garp contract payment agreement
+```
+garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
+```
 
-    ```
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--code` | off | Include code files (.go, .py, .js, .ts, ...) |
+| `--distance N` | 5000 | Proximity window in characters |
+| `--startdir <path>` | cwd | Base directory to search from |
+| `--pathscope <patterns>` | (all) | Comma-separated directory patterns. Prunes the walk -- directories outside scope are never descended into. Trailing slash optional: `audio2midi/` and `audio2midi` both work. |
+| `--only <type>` | (all) | Search only one file type, e.g. `--only pdf` |
+| `--smart-forms` | off | Match word forms (plurals, -ing, -ed, -tion) |
+| `--not <excl...>` | (none) | Tokens after this flag are exclusions. Dot-prefixed = extension exclude (`.pdf`); others = word exclude |
+| `--json` | off | Skip TUI; emit structured JSON to stdout. Preferred for MCP/agent callers |
+| `--plain` | off | Skip TUI; emit plain line-oriented text to stdout. Useful for shell scripts |
+| `--workers N` | 4 | Stage 2 filter worker count |
+| `--heavy-concurrency N` | auto | Concurrent heavy (binary) extractions |
+| `--file-timeout-binary N` | 1000 | Timeout in ms for binary extraction |
+| `--help`, `-h` | | Show help |
+| `--version`, `-v` | | Show version |
 
-- Include code files in the search:
+### --json output shape
 
-    ```bash
-    garp please update --code
-    ```
+```json
+{
+  "query": {
+    "terms": ["pitch", "frequency"],
+    "start_dir": "/path/to/dir",
+    "path_scope": ["audio2midi/", "docs/"],
+    "include_code": true
+  },
+  "matches": 2,
+  "results": [
+    {
+      "file": "/path/to/audio2midi/dsp.py",
+      "size_bytes": 15649,
+      "excerpts": ["...clean text snippet around matched terms..."]
+    }
+  ]
+}
+```
 
-- Exclude words and/or file types:
-
-    ```bash
-    garp please wire update --not .txt test demo
-    ```
-
-    Notes:
-    - Tokens after `--not` are treated as exclusions.
-    - Exclusions that start with a dot (e.g., `.txt`, `.pdf`) are treated as file extension excludes.
-    - Other tokens are treated as content words to exclude.
-
-## Behavior and UI
-
-Matching is unordered within a distance window (default: 5000 characters). If all terms appear within that window anywhere in the file, the file matches.
-During search, the TUI shows: - A header with ASCII "GARP" logo + version, target line listing supported extensions, engine line with live Concurrency: N • Go Heap • Resident • CPU, elapsed time (“Searching” while loading; “Search” after completion), and search terms line - A live progress line: `⏳ Discovery [count/total]: path` or `⏳ Processing [count/total]: path` - A scrolling results box (file details and excerpts) - A non‑scrolling status area above the footer (e.g., “📋 Found N files with matches” and prompts) - Footer with navigation hints
-
-- Navigation keys:
-    - Next file: `n`, `y`, `space`, or `enter`
-    - Previous file: `p`
-    - Quit: `q` (or `Ctrl+C`)
-
-- Layout rules:
-    - The header and footer do not scroll.
-    - Found/continue status is shown outside the scrolling box (never scrolls off screen).
-    - The results box clips instead of overflowing the terminal.
+`matches` is always present as a top-level integer so callers can zero-check without
+iterating `results`. Errors go to stderr; check exit code before parsing stdout as JSON.
 
 ## Supported formats
 
-Document files (default)
+**Documents (default)**
 
 - Text: `.txt`, `.md`, `.log`, `.rtf`
 - Web: `.html`, `.xml`
 - Data/Config: `.csv`, `.yaml`, `.yml`, `.cfg`, `.conf`, `.ini`, `.sh`, `.bat`
-- Email: `.eml` (MIME parsing), `.mbox` (collections of messages), `.msg` (raw content)
-- Office: `.pdf` (enabled with guardrails), `.doc`, `.docx`
-- OpenOffice: `.odt`
-- Spreadsheets/Presentations (excluded by default): `.xls`, `.xlsx`, `.ods`, `.ppt`, `.pptx`, `.odp`
-  Why excluded (default):
-    - Performance/safety: large ZIP-based Office containers can be heavy to parse; excluding them preserves speed and stability for typical searches.
-    - Truthfulness: we won’t scan these until an explicit opt‑in exists; the “Target” header reflects true inclusions.
-      Current behavior:
-    - These types are filtered out by default and are not scanned.
-    - This behavior cannot yet be overridden; an opt‑in with minimal, capped prefilters is planned (see Plan).
-      Usage notes:
-    - To keep searches fast: no action needed—these remain excluded by default.
-    - To exclude PDFs as well: `garp ... --not .pdf`
-    - To target a single type (example): `garp ... --only pdf`
-    - If you need spreadsheet/presentation content now, export to CSV/text or PDF and search those outputs.
-      Future (planned):
-    - Optional opt‑in with minimal, capped prefilters (e.g., sharedStrings.xml for `.xlsx`, slide text for `.pptx`), guarded to avoid false negatives or instability.
+- Email: `.eml` (MIME parsing), `.mbox` (message collections), `.msg`
+- Office: `.pdf` (guardrailed), `.doc`, `.docx`, `.odt`
 
-Code files (with `--code`)
+**Code (with `--code`)**
 
-- `.go`, `.js`, `.ts`, `.py`, `.java`, `.cpp`, `.c`, `.rs`, `.rb`, `.cs`, `.swift`, `.kt`, `.scala`, `.sql`, `.php`, `.json`, and common variants
+`.go`, `.py`, `.js`, `.ts`, `.java`, `.cpp`, `.c`, `.rs`, `.rb`, `.cs`, `.swift`,
+`.kt`, `.scala`, `.sql`, `.php`, `.json`
 
-Binary extraction (pure Go)
+**Binary extraction (pure Go)**
 
-- EML: `enmime`
-- MBOX: `emersion/go-mbox`
-- PDF: `ledongthuc/pdf`
-- DOCX/ODT: `archive/zip` + XML parsing
-- RTF: regex/control word stripping
-- MSG: raw content fallback
+| Format | Library |
+|--------|---------|
+| EML | `enmime` |
+| MBOX | `emersion/go-mbox` |
+| PDF | `ledongthuc/pdf` |
+| DOCX/ODT | `archive/zip` + XML |
+| RTF | regex/control-word stripping |
+| MSG | raw content fallback |
 
-## How it works (Pure Go)
+> PDF note: strict guardrails apply -- concurrency=2, 250ms per-PDF, max 200 pages,
+> max 128 KiB/page, max 100 PDFs per search.
 
-- File discovery: walks the directory tree in Go, filtering by known document/code extensions.
-- Exclusions:
-    - Extensions (tokens after `--not` beginning with a dot) are filtered before content checks.
-    - Word exclusions are checked against file content (or extracted text for binary files).
-- Matching:
-    - Text files: read content (with size limits for large files), then apply unordered, distance‑bounded matching.
-    - Binary files: extract text using pure‑Go extractors, then apply the same matching logic.
-- Output:
-    - Content is cleaned to remove markup, control characters, CSS/JS blocks, and email headers.
-    - Excerpts show matched context with basic highlighting.
+## How it works
 
-## Usage summary
-
-Command
-
-```
-garp [--code] [--distance N] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]
-```
-
-Flags
-
-- `--code`: include programming/code files in the search
-- `--distance N`: set the proximity window in characters (default 5000)
-- `--heavy-concurrency N`: number of concurrent heavy extractions (default 2)
-- `--workers N`: number of Stage 2 text filter workers (default 2)
-- `--file-timeout-binary N`: timeout in ms for binary file extraction (default 1000)
-- `--not`: everything after this is treated as exclusions
-    - Exclusions that start with a dot exclude extensions (e.g., `.txt`, `.pdf`)
-    - Other exclusions are treated as words to exclude
-- `--help`, `-h`: show help
-- `--version`, `-v`: show version
-
-Notes
-
-- The proximity window defaults to 5000 characters but can be overridden with --distance N.
-- Exclusions apply across the search (not per‑file).
-
-## Building
-
-- `make`: build to `bin/garp`
-- `make install`: build and copy to `~/.local/bin/garp`
-- `make clean`: remove build artifacts
-- `make fmt`, `make test`, `make tidy`: standard dev tasks
-
-We keep the latest binary in `bin/garp` in this repo for convenience so users can download a single file.
-
-## Versioning
-
-- The current version is tracked in the VERSION file (currently `0.5`).
-- The `garp` binary reports this version via `--version`.
-- Releases should be tagged with the same version, and the README badge updated to match.
+1. **Discovery** -- walks the directory tree (respecting `--startdir` and `--pathscope`
+   to prune irrelevant subtrees at directory-entry time), filtering by extension.
+2. **Filter** -- parallel workers check each candidate for all search terms within
+   the proximity window.
+3. **Extract** -- pure-Go extractors pull text from binary formats.
+4. **Clean** -- strips markup, control chars, CSS/JS blocks, email headers.
+5. **Output** -- TUI with highlighted excerpts, or `--json`/`--plain` for programmatic use.
 
 ## Architecture
 
 ```
 garp/
-├── main.go            # Entry point, calls app.Run()
+├── main.go              # Entry point
 ├── app/
-│   ├── cli.go         # Argument parsing, flags, and configuration
-│   └── tui.go         # Terminal UI, progress streaming, and results display
+│   ├── cli.go           # Arg parsing, flags, --json/--plain dispatch
+│   └── tui.go           # TUI, progress streaming, results display
 ├── search/
-│   ├── engine.go      # Search orchestration (silent mode for TUI)
-│   ├── filter.go      # File walking, matching logic, size-limited reads
-│   ├── cleaner.go     # Content cleaning, excerpt extraction, highlighting
-│   └── extractor.go   # Pure-Go text extraction for binary formats
+│   ├── engine.go        # Search orchestration
+│   ├── filter.go        # File walking, scope pruning, matching
+│   ├── cleaner.go       # Content cleaning, excerpt extraction
+│   ├── extractor.go     # Pure-Go binary format extractors
+│   └── scope.go         # --startdir / --pathscope validation
 ├── config/
-│   └── types.go       # Supported types, globs/filters, descriptions
-├── bin/               # Built binary (kept in-repo for convenience)
-├── garp.png           # Screenshot used in README
-├── Makefile           # `make install` is your friend
+│   └── types.go         # Supported types, globs, skip-dir list
+├── bin/                 # Prebuilt binary
+├── Makefile
 └── README.md
 ```
 
+## Building
+
+```bash
+make                  # build to bin/garp
+make install          # build + copy to ~/.local/bin/garp
+make install-pdfcpu   # build with PDF support tag (recommended) + install
+make test             # run tests
+make fmt              # format
+make tidy             # go mod tidy
+```
+
+## TUI navigation
+
+| Key | Action |
+|-----|--------|
+| `enter`, `y`, `space` | Next result |
+| `n` | Next (no confirm) |
+| `p` | Previous |
+| `up` / `down`, `k` / `j` | Scroll excerpt |
+| `home` / `end` | First / last result |
+| `pgup` / `pgdown` | Scroll 5 lines |
+| `q`, `Ctrl+C` | Quit |
+
 ## FAQ
 
-- How does multi‑word matching work?
-    - Unordered AND within a proximity window (default: 100 characters between the earliest and latest matched terms).
-- Can I change the distance?
-    - Yes, use --distance N to set the proximity window in characters (default 5000).
-- Is it cross‑platform?
-    - Yes, the implementation is pure Go and should work on Linux, macOS, and Windows terminals that support ANSI/TUI. You’ll need a compatible terminal for best results.
+**How does multi-word matching work?**
+Unordered AND within a proximity window. All terms must appear within `--distance`
+characters of each other (default 5000) somewhere in the file.
+
+**Does `--pathscope` filter results or restrict the walk?**
+It restricts the walk. Directories outside the scope are pruned at directory-entry
+time -- garp never descends into them and never visits a single file inside them.
+This makes it efficient with large trees: pass `--pathscope 'src/,docs/'` and
+`.venv`, `node_modules`, or any other noise tree is skipped entirely.
+
+**Is it cross-platform?**
+Pure Go -- works on Linux, macOS, Windows. The TUI requires an ANSI-compatible terminal.
 
 ## Troubleshooting
 
-### pdfcpu: config problem: EOF
+**`pdfcpu: config problem: EOF`**
 
-The error "pdfcpu: config problem: EOF" in pdfcpu typically occurs when the tool attempts to read its configuration file (usually config.yml located in the pdfcpu configuration directory, such as ~/.config/pdfcpu/ on Linux or %APPDATA%\pdfcpu\ on Windows) but encounters an unexpected end-of-file (EOF). This indicates the file is corrupted, truncated, or incomplete—often due to an interrupted write operation, disk error, or manual editing that left it in an invalid state.
-
-Fix (Linux):
-
-- Clear the corrupted config and retry:
+The pdfcpu config file is corrupted. Fix:
 
 ```bash
 rm -rf ~/.config/pdfcpu/*
 ```
 
-- Re-run your garp command; pdfcpu will regenerate default configuration if needed.
+Re-run garp; pdfcpu will regenerate a clean default config.
+
+## Credits
+
+garp was created by [CyphrRiot](https://github.com/CyphrRiot). The core search
+engine, TUI, document extraction pipeline, and original architecture are entirely
+upstream work. This fork adds:
+
+- `--startdir` -- set an arbitrary base directory for the search walk
+- `--pathscope` -- prune the walk to specific subdirectories at directory-entry time
+- `--json` -- structured JSON output for MCP tools and agent callers
+- `--plain` -- line-oriented plain-text output for shell scripts
+- Excerpt quality fixes (pre-highlight interception, float32/identifier preservation,
+  ASCII ellipsis joiner)
 
 ## License
 
