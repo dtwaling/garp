@@ -269,27 +269,44 @@ func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
 	// Get path relative to walkRoot, with forward slashes for pattern matching
 	rel, err := filepath.Rel(walkRoot, absPath)
 	if err != nil {
+		if ScopeDebug {
+			fmt.Fprintf(os.Stderr, "[scopedebug] Rel(%q, %q) error: %v\n", walkRoot, absPath, err)
+		}
 		return false
 	}
 	relSlash := filepath.ToSlash(rel)
+	if ScopeDebug {
+		fmt.Fprintf(os.Stderr, "[scopedebug] testing rel=%q against patterns=%v\n", relSlash, pathScope)
+	}
 	for _, pattern := range pathScope {
 		// Primary: standard glob match
 		if matched, err := filepath.Match(pattern, relSlash); err == nil && matched {
+			if ScopeDebug {
+				fmt.Fprintf(os.Stderr, "[scopedebug]   MATCH glob pattern=%q\n", pattern)
+			}
 			return true
 		}
 		// Fallback: directory-prefix match for patterns that name a directory
 		// without explicit wildcards (e.g. "audio2midi/" or "docs/plans").
-		// Strip a trailing slash, then check if the rel path is exactly the
-		// prefix or starts with prefix + "/".
 		if !strings.ContainsAny(pattern, "*?") {
 			prefix := strings.TrimRight(pattern, "/")
 			if prefix != "" && (relSlash == prefix || strings.HasPrefix(relSlash, prefix+"/")) {
+				if ScopeDebug {
+					fmt.Fprintf(os.Stderr, "[scopedebug]   MATCH prefix pattern=%q\n", pattern)
+				}
 				return true
 			}
 		}
 	}
+	if ScopeDebug {
+		fmt.Fprintf(os.Stderr, "[scopedebug]   SKIP  rel=%q\n", relSlash)
+	}
 	return false
 }
+
+// ScopeDebug enables verbose stderr tracing of pathScope match decisions.
+// Set to true by the GARP_SCOPE_DEBUG=1 environment variable at startup.
+var ScopeDebug = os.Getenv("GARP_SCOPE_DEBUG") == "1"
 
 // GetDocumentFileCount returns the count of document files that will be searched (pure Go).
 // walkRoot specifies the directory to search from; use "" or "." for the current directory.
