@@ -134,9 +134,6 @@ func ShouldSkipDirectory(dirName string) bool {
 		".pytest_cache": true,
 		".mypy_cache":   true,
 		"__pycache__":   true,
-		".venv":         true,
-		"venv":          true,
-		"env":           true,
 
 		// Browsers and large app caches
 		".mozilla":      true,

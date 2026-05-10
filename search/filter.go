@@ -258,10 +258,8 @@ type FileInfo struct {
 // The comparison uses forward-slash paths for cross-platform consistency.
 //
 // Directory-prefix shorthand: a pattern with no wildcards that ends in "/" (or
-// contains no "/" at all and looks like a bare dir name) is treated as a prefix
-// match so that "audio2midi/" matches "audio2midi/dsp.py" and any depth below.
-// This lets callers write natural patterns without needing to know that
-// filepath.Match requires explicit wildcards for every path segment.
+// a bare dir name) is treated as a prefix match so "audio2midi/" matches any
+// file under audio2midi/ at any depth.
 func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
 	if len(pathScope) == 0 {
 		return true
@@ -280,6 +278,52 @@ func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
 			if prefix != "" && (relSlash == prefix || strings.HasPrefix(relSlash, prefix+"/")) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// dirCouldMatchPathScope returns true if descending into this directory could
+// ever yield a file that matches at least one pathScope pattern. When it
+// returns false the walk can safely skip the entire subtree with SkipDir.
+//
+// A directory could yield matches when any pattern:
+//  1. Has this dir as a prefix (e.g. pattern "audio2midi/dsp.py" -> dir "audio2midi" is a prefix)
+//  2. Has a wildcard that could span into this dir (e.g. pattern "*/foo/*" can match dirs at any level)
+//  3. Is a bare wildcard pattern like "*" or "**"
+//
+// When pathScope is empty (no restriction) all dirs are traversed.
+func dirCouldMatchPathScope(absDir, walkRoot string, pathScope []string) bool {
+	if len(pathScope) == 0 {
+		return true
+	}
+	rel, err := filepath.Rel(walkRoot, absDir)
+	if err != nil {
+		return true // can't determine, don't prune
+	}
+	relSlash := filepath.ToSlash(rel)
+	if relSlash == "." {
+		return true // root always traversed
+	}
+	for _, pattern := range pathScope {
+		// Pattern contains wildcards -- can't safely prune based on dir name alone;
+		// wildcards like "*" or "*/foo/*" could match any depth. Allow traversal.
+		if strings.ContainsAny(pattern, "*?") {
+			return true
+		}
+		// Literal pattern: prune only if dir is provably outside all patterns.
+		// Dir is "inside" a pattern when:
+		//   a) dir IS the pattern prefix (e.g. dir="audio2midi", pattern="audio2midi/dsp.py")
+		//   b) dir is a component of pattern (e.g. dir="docs", pattern="docs/plans")
+		//   c) pattern is a prefix of dir (e.g. dir="audio2midi/sub", pattern="audio2midi")
+		prefix := strings.TrimRight(pattern, "/")
+		if prefix == "" {
+			continue
+		}
+		if relSlash == prefix ||
+			strings.HasPrefix(relSlash, prefix+"/") ||
+			strings.HasPrefix(prefix, relSlash+"/") {
+			return true
 		}
 	}
 	return false
@@ -319,6 +363,10 @@ func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []strin
 		}
 		if d.IsDir() {
 			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
+				return filepath.SkipDir
+			}
+			// Prune entire subtree if no pathScope pattern can match anything under it.
+			if len(pathScope) > 0 && !dirCouldMatchPathScope(path, absRoot, pathScope) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -382,6 +430,10 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 		}
 		if d.IsDir() {
 			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
+				return filepath.SkipDir
+			}
+			// Prune entire subtree if no pathScope pattern can match anything under it.
+			if len(pathScope) > 0 && !dirCouldMatchPathScope(path, absRoot, pathScope) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -641,6 +693,10 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 		}
 		if d.IsDir() {
 			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
+				return filepath.SkipDir
+			}
+			// Prune entire subtree if no pathScope pattern can match anything under it.
+			if len(pathScope) > 0 && !dirCouldMatchPathScope(path, absRoot, pathScope) {
 				return filepath.SkipDir
 			}
 			return nil
