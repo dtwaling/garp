@@ -8,6 +8,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,10 @@ type Arguments struct {
 	// Empty slice means no restriction.
 	PathScope    []string
 	PathScopeErr error // non-nil if validation failed
+
+	// PlainOutput: when true, skip the TUI and emit clean line-oriented text to stdout.
+	// Designed for programmatic callers (MCP tools, scripts) that need machine-readable output.
+	PlainOutput bool
 }
 
 // parseArguments parses command line args
@@ -142,6 +147,8 @@ func parseArguments(args []string) *Arguments {
 			expectPathScope = true
 		case "--smart-forms":
 			result.SmartForms = true
+		case "--plain":
+			result.PlainOutput = true
 		case "--help", "-h":
 			showUsage()
 			os.Exit(0)
@@ -247,6 +254,8 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("                         Wildcards: * (any chars) and ? (single char) only"))
 	fmt.Println(infoStyle.Render("                         Do not include file extensions (use --not / --only for that)"))
 	fmt.Println(infoStyle.Render("                         Example: --pathscope='*/backend/*/Assembly,tests/*'"))
+	fmt.Println(infoStyle.Render("  --plain                Skip the interactive TUI; emit plain line-oriented output to stdout."))
+	fmt.Println(infoStyle.Render("                         Useful for scripting and MCP tool callers that need machine-readable results."))
 	fmt.Println(infoStyle.Render("  --not ...               Tokens after this are exclusions;"))
 	fmt.Println(infoStyle.Render("                          extensions starting with '.' exclude types; others exclude words"))
 	fmt.Println(infoStyle.Render("  --help, -h              Show help"))
@@ -270,6 +279,69 @@ func showVersion() {
 	fmt.Println(successStyle.Render("garp v" + version))
 }
 
+// runPlain executes the search without the TUI and writes clean text to stdout.
+// Output format:
+//
+//	MATCH <n>/<total>
+//	FILE: <path>
+//	SIZE: <bytes>
+//	EXCERPT <i>: <text>
+//	---
+//
+// Zero matches produces a single "NO RESULTS" line.
+// Errors go to stderr with no ANSI color.
+func runPlain(args *Arguments) int {
+	fileTypes := config.BuildRipgrepFileTypes(args.IncludeCode)
+	if args.OnlyType != "" {
+		fileTypes = []string{"-g", "*." + strings.TrimPrefix(strings.ToLower(args.OnlyType), ".")}
+	}
+	se := search.NewSearchEngineWithWorkers(
+		args.SearchWords,
+		args.ExcludeWords,
+		fileTypes,
+		args.IncludeCode,
+		args.HeavyConcurrency,
+		args.FileTimeoutBinary,
+		args.FilterWorkers,
+	)
+	se.Silent = true
+	if args.Distance > 0 {
+		se.Distance = args.Distance
+	}
+	if args.StartDir != "" {
+		se.StartDir = args.StartDir
+	}
+	if len(args.PathScope) > 0 {
+		se.PathScope = args.PathScope
+	}
+
+	results, err := se.Execute()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
+		return 1
+	}
+
+	if len(results) == 0 {
+		fmt.Println("NO RESULTS")
+		return 0
+	}
+
+	// Regex to strip any ANSI escape sequences (covers all codes, not just the ones HighlightTerms emits)
+	ansiRe := regexp.MustCompile(`\x1b\[[0-9;]*[mGKHF]`)
+
+	for i, r := range results {
+		fmt.Printf("MATCH %d/%d\n", i+1, len(results))
+		fmt.Printf("FILE: %s\n", r.FilePath)
+		fmt.Printf("SIZE: %d\n", r.FileSize)
+		for j, ex := range r.Excerpts {
+			clean := ansiRe.ReplaceAllString(ex, "")
+			fmt.Printf("EXCERPT %d: %s\n", j+1, clean)
+		}
+		fmt.Println("---")
+	}
+	return 0
+}
+
 // Run parses CLI arguments and starts the TUI. Returns a process exit code.
 func Run() int {
 	// Parse args
@@ -290,6 +362,12 @@ func Run() int {
 	// Hook for matching layer: advertise smart-forms via environment (consumed by matching)
 	if args.SmartForms {
 		_ = os.Setenv("GARP_SMART_FORMS", "1")
+	}
+
+	// Plain output mode: run search synchronously and write line-oriented text to stdout.
+	// Bypasses the TUI entirely -- intended for scripts and MCP tool callers.
+	if args.PlainOutput {
+		return runPlain(args)
 	}
 
 	// Preflight: automatic safe mode for single-word scans over huge file counts
