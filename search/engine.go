@@ -24,7 +24,8 @@ var ExcerptCharBudget func() int
 type SearchResult struct {
 	FilePath     string
 	FileSize     int64
-	Excerpts     []string
+	Excerpts     []string // ANSI-highlighted, for TUI display
+	RawExcerpts  []string // plain text before highlighting -- for machine-readable output (--json, --plain)
 	CleanContent string
 	EmailDate    string
 	EmailSubject string
@@ -821,6 +822,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 			FilePath:     filePath,
 			FileSize:     fileSize,
 			Excerpts:     highlightedExcerpts,
+			RawExcerpts:  excerpts,
 			CleanContent: boundedClean,
 			EmailDate:    emailDate,
 			EmailSubject: emailSubject,

@@ -38,8 +38,11 @@ var (
 	quoteMidRegex       = regexp.MustCompile(`\s*>+\s*`)
 
 	// Precompiled regexes for CleanContent - CRITICAL: these were being compiled on EVERY call
-	letterDigitRegex     = regexp.MustCompile(`([A-Za-z])([0-9])`)
-	digitLetterRegex     = regexp.MustCompile(`([0-9])([A-Za-z])`)
+	// letterDigitRegex injects a space between an uppercase letter and a digit to fix OCR artifacts
+	// like "Account10" -> "Account 10" or "PDF32" -> "PDF 32". Restricted to uppercase-start to
+	// avoid mangling code identifiers such as float32, int64, np.float32.
+	letterDigitRegex     = regexp.MustCompile(`([A-Z])([0-9])`)
+	digitLetterRegex     = regexp.MustCompile(`([0-9])([A-Z])`)
 	commaMissingSpace    = regexp.MustCompile(`,([^\s])`)
 
 	// Precompiled regexes for ExtractMeaningfulExcerpts - also leaked on every call
@@ -241,7 +244,7 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 				}
 
 				// Minimal span is larger than budget:
-				// Compose one small window per term (in search-terms order) and join with " … ".
+				// Compose one small window per term (in search-terms order) and join with " ... ".
 				// This guarantees every term is visible and the final excerpt fits the budget.
 				perTerm := budget / max(1, len(termRE))
 				if perTerm < 60 {
@@ -274,9 +277,9 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 					// Trim to remaining budget minus delimiter if needed
 					remain := budget - used
 					if len(parts) > 0 {
-						// account for delimiter length " … "
-						if remain > 3 {
-							remain -= 3
+						// account for delimiter length " ... "
+						if remain > 5 {
+							remain -= 5
 						} else {
 							remain = 0
 						}
@@ -293,7 +296,7 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 					}
 				}
 				// Join parts and return
-				ex := strings.Join(parts, " … ")
+				ex := strings.Join(parts, " ... ")
 				if ex != "" {
 					if _, ok := seen[ex]; !ok {
 						seen[ex] = struct{}{}

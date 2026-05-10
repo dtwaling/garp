@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -288,10 +287,8 @@ func showVersion() {
 	fmt.Println(successStyle.Render("garp v" + version))
 }
 
-// ansiEscRe strips ANSI terminal escape sequences from excerpt text before emitting
-// non-TUI output. Covers all standard SGR and cursor codes.
-var ansiEscRe = regexp.MustCompile(`\x1b\[[0-9;]*[mGKHF]`)
-
+// ansiEscRe and runJSON/runPlain now read RawExcerpts (pre-highlight) directly from SearchResult,
+// so no ANSI stripping is needed. This var is intentionally removed.
 // jsonResult is a single file match in --json output.
 type jsonResult struct {
 	File    string   `json:"file"`
@@ -361,14 +358,10 @@ func runJSON(args *Arguments) int {
 	}
 
 	for _, r := range results {
-		cleanExcerpts := make([]string, len(r.Excerpts))
-		for i, ex := range r.Excerpts {
-			cleanExcerpts[i] = ansiEscRe.ReplaceAllString(ex, "")
-		}
 		out.Results = append(out.Results, jsonResult{
 			File:     r.FilePath,
 			SizeB:    r.FileSize,
-			Excerpts: cleanExcerpts,
+			Excerpts: r.RawExcerpts,
 		})
 	}
 
@@ -428,16 +421,13 @@ func runPlain(args *Arguments) int {
 		return 0
 	}
 
-	// Regex to strip any ANSI escape sequences (covers all codes, not just the ones HighlightTerms emits)
-	ansiRe := ansiEscRe
-
+	// Use RawExcerpts (pre-highlight) -- no ANSI stripping needed.
 	for i, r := range results {
 		fmt.Printf("MATCH %d/%d\n", i+1, len(results))
 		fmt.Printf("FILE: %s\n", r.FilePath)
 		fmt.Printf("SIZE: %d\n", r.FileSize)
-		for j, ex := range r.Excerpts {
-			clean := ansiRe.ReplaceAllString(ex, "")
-			fmt.Printf("EXCERPT %d: %s\n", j+1, clean)
+		for j, ex := range r.RawExcerpts {
+			fmt.Printf("EXCERPT %d: %s\n", j+1, ex)
 		}
 		fmt.Println("---")
 	}

@@ -513,7 +513,7 @@ func (m model) View() string {
 								}
 								frag := result.CleanContent[start:end]
 								if extra != "" {
-									extra += " … "
+									extra += " ... "
 								}
 								extra += frag
 							}
