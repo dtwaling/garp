@@ -1,7 +1,6 @@
 package search
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -12,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"garp/search/pdf"
+	"garp/config"
 )
 
 // ExcerptCharBudget allows the UI to provide an inner-width–based char budget for excerpts.
@@ -26,6 +25,7 @@ type SearchResult struct {
 	FileSize     int64
 	Excerpts     []string // ANSI-highlighted, for TUI display
 	RawExcerpts  []string // plain text before highlighting -- for machine-readable output (--json, --plain)
+	StartLines   []int    // 1-based start line per excerpt (parallel to RawExcerpts); 0 = unknown
 	CleanContent string
 	EmailDate    string
 	EmailSubject string
@@ -52,7 +52,7 @@ func (cm *ConcurrencyManager) Release() {
 }
 
 func (cm *ConcurrencyManager) ExecuteWithTimeout(fn func(), timeout time.Duration) error {
-	done := make(chan struct{}, 1)  // Buffered so goroutine can always send
+	done := make(chan struct{}, 1) // Buffered so goroutine can always send
 	interrupted := make(chan struct{}, 1)
 
 	go func() {
@@ -81,39 +81,6 @@ func (cm *ConcurrencyManager) ExecuteWithTimeout(fn func(), timeout time.Duratio
 // heavySem is a single-slot semaphore to bound concurrent binary extractions
 var heavySem = make(chan struct{}, 1)
 
-// enablePDFs gates PDF processing within engine.go; default false preserves current behavior.
-var enablePDFs = true
-
-// pdfSem is a single global token to ensure PDF concurrency = 1 without risking hangs.
-var pdfSem = make(chan struct{}, 1)
-
-// PDF governor: pacing + budget, synchronous and safe.
-// Returns true if this PDF is allowed to proceed now; false when skipped due to budget.
-func (se *SearchEngine) pdfGovernorAllow() bool {
-	// Budget gating
-	if atomic.LoadInt64(&se.pdfBudget) > 0 {
-		pro := atomic.LoadInt64(&se.pdfProcessed)
-		if pro >= atomic.LoadInt64(&se.pdfBudget) {
-			atomic.AddInt64(&se.pdfSkippedBudget, 1)
-			return false
-		}
-	}
-
-	// Pacing (min interval between PDFs)
-	if se.pdfMinInterval > 0 {
-		last := time.Unix(0, atomic.LoadInt64(&se.pdfLastAt))
-		now := time.Now()
-		if delta := now.Sub(last); delta < se.pdfMinInterval && !last.IsZero() {
-			time.Sleep(se.pdfMinInterval - delta)
-		}
-		atomic.StoreInt64(&se.pdfLastAt, time.Now().UnixNano())
-	}
-
-	// Count this PDF as processed
-	atomic.AddInt64(&se.pdfProcessed, 1)
-	return true
-}
-
 // SearchEngine handles the multi-word search logic
 type SearchEngine struct {
 	SearchWords       []string
@@ -126,20 +93,18 @@ type SearchEngine struct {
 	HeavyConcurrency  int
 	FilterWorkers     int
 	FileTimeoutBinary time.Duration
+	MaxExcerpts       int
 
 	// StartDir, if non-empty, sets the root directory for file walks.
 	// When empty, the walk uses the current working directory.
-	StartDir  string
+	StartDir string
 	// PathScope, if non-empty, restricts file walks to paths whose relative
 	// path matches at least one simple glob pattern (e.g., "*/backend/*").
 	PathScope []string
 
-	// PDF governor (defaults: pacing on, no budget)
-	pdfMinInterval   time.Duration
-	pdfBudget        int64 // 0 = unlimited
+	// PDF metrics (atomic)
 	pdfProcessed     int64 // atomic counter
 	pdfSkippedBudget int64 // atomic counter
-	pdfLastAt        int64 // UnixNano (atomic)
 
 	// Metrics (atomic)
 	emlPrefilterCount    int64
@@ -168,11 +133,7 @@ func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, inc
 		HeavyConcurrency:  heavyConcurrency,
 		FilterWorkers:     2,
 		FileTimeoutBinary: time.Duration(fileTimeoutBinary) * time.Millisecond,
-
-		// PDF governor defaults (safe)
-		pdfMinInterval: 0,
-		pdfBudget:      0, // unlimited by default
-		pdfLastAt:      0, // no pacing history yet
+		MaxExcerpts:       1,
 	}
 }
 
@@ -284,76 +245,6 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 			if IsBinaryFormat(filePath) {
 				ext := filepath.Ext(filePath)
 
-				// PDF presence-only gate (Step 2): enable guarded scan; otherwise remain disabled.
-				if strings.EqualFold(ext, ".pdf") {
-					// Remain disabled unless explicitly enabled.
-					if !enablePDFs {
-						return false
-					}
-					// Global governor: pacing/budget.
-					if !se.pdfGovernorAllow() {
-						// Skipped due to budget (truthfully counted), do not proceed.
-						return false
-					}
-					// Concurrency = 1 with short timeout to guarantee we never hang.
-					tokenTimer := time.NewTimer(50 * time.Millisecond)
-					defer tokenTimer.Stop()
-					select {
-					case pdfSem <- struct{}{}:
-						// acquired
-					case <-tokenTimer.C:
-						// Could not acquire quickly; treat as undecided (do not skip via prefilter here).
-						// undecided (token): skipped
-						return false
-					}
-					// Ensure release even if provider panics.
-					defer func() { <-pdfSem }()
-					// Simple bounded text extraction via pdfcpu helper; undecided on timeout/error.
-					hasAllWords = false
-
-					type txtRes struct {
-						matched bool
-						err     error
-					}
-					resCh := make(chan txtRes, 1)
-					ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-					defer cancel()
-					go func() {
-						defer func() { _ = recover() }()
-						_, m, e := pdf.ExtractAllTextCapped(filePath, 200, 128*1024, se.SearchWords, se.Distance)
-						select {
-						case <-ctx.Done():
-							// Context cancelled - timeout already fired, don't send
-						case resCh <- txtRes{matched: m, err: e}:
-							// Sent successfully
-						}
-					}()
-
-					wallTimer := time.NewTimer(250 * time.Millisecond)
-					defer wallTimer.Stop()
-
-					var matched bool
-					var err error
-					select {
-					case r := <-resCh:
-						matched, err = r.matched, r.err
-					case <-wallTimer.C:
-						// Timeout: undecided, do not accept based on this.
-						// undecided (timeout): skipped
-						cancel()  // Signal goroutine to stop
-						return false
-					}
-
-					if err != nil {
-						// Undecided/error: do not accept based on this.
-						return false
-					}
-
-					if matched {
-						hasAllWords = true
-					}
-				}
-
 				// Bounded streaming prefilter for supported binary types.
 				// EML/MSG use a smaller cap; PDFs and others use a conservative default.
 				cap := int64(1024 * 1024)
@@ -376,56 +267,50 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				if decided && !found {
 					return false
 				}
-				// DISABLED: PDF processing completely disabled to prevent system hangs
-				// Never accept PDFs based on prefilter alone
-				if strings.EqualFold(ext, ".pdf") && !enablePDFs {
-					// Skip all PDF processing to prevent hangs
-					return false
-				} else {
-					// Extract and verify distance for multi-word binaries
-					if extractor, exists := se.Registry.GetExtractor(ext); exists {
-						content, _, err := GetFileContent(filePath)
-						if err != nil {
-							if !se.Silent {
-								fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
-							}
-							return false
-						}
-						var extractedText string
-						var extErr error
-						startXT := time.Now()
-						cm.Acquire()
-						err = cm.ExecuteWithTimeout(func() {
-							extractedText, extErr = extractor.ExtractText([]byte(content))
-						}, se.FileTimeoutBinary)
-						cm.Release()
-						durXT := time.Since(startXT)
-						switch strings.ToLower(ext) {
-						case ".eml":
-							atomic.AddInt64(&se.emlExtractCount, 1)
-							atomic.AddInt64(&se.emlExtractDurNanos, durXT.Nanoseconds())
-						case ".msg":
-							atomic.AddInt64(&se.msgExtractCount, 1)
-							atomic.AddInt64(&se.msgExtractDurNanos, durXT.Nanoseconds())
-						}
-						if err != nil || extErr != nil {
-							if !se.Silent {
-								if extErr != nil {
-									// underlying extractor error
-									fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extErr)
-								} else {
-									fmt.Printf("Warning: Extraction timeout for %s\n", filePath)
-								}
-							}
-							return false
-						}
-						hasAllWords = CheckTextContainsAllWords(CleanContent(extractedText), se.SearchWords, se.Distance)
-					} else {
+
+				// Extract and verify distance for binary formats, including PDFs.
+				if extractor, exists := se.Registry.GetExtractor(ext); exists {
+					content, _, err := GetFileContent(filePath)
+					if err != nil {
 						if !se.Silent {
-							fmt.Printf("Warning: No extractor for %s\n", ext)
+							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
 						}
 						return false
 					}
+					var extractedText string
+					var extErr error
+					startXT := time.Now()
+					cm.Acquire()
+					err = cm.ExecuteWithTimeout(func() {
+						extractedText, extErr = extractor.ExtractText([]byte(content))
+					}, se.FileTimeoutBinary)
+					cm.Release()
+					durXT := time.Since(startXT)
+					switch strings.ToLower(ext) {
+					case ".eml":
+						atomic.AddInt64(&se.emlExtractCount, 1)
+						atomic.AddInt64(&se.emlExtractDurNanos, durXT.Nanoseconds())
+					case ".msg":
+						atomic.AddInt64(&se.msgExtractCount, 1)
+						atomic.AddInt64(&se.msgExtractDurNanos, durXT.Nanoseconds())
+					}
+					if err != nil || extErr != nil {
+						if !se.Silent {
+							if extErr != nil {
+								// underlying extractor error
+								fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extErr)
+							} else {
+								fmt.Printf("Warning: Extraction timeout for %s\n", filePath)
+							}
+						}
+						return false
+					}
+					hasAllWords = CheckTextContainsAllWords(CleanContent(extractedText), se.SearchWords, se.Distance)
+				} else {
+					if !se.Silent {
+						fmt.Printf("Warning: No extractor for %s\n", ext)
+					}
+					return false
 				}
 			} else {
 				// Text file: stream+distance
@@ -443,7 +328,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 			word := se.SearchWords[0]
 			if IsBinaryFormat(filePath) {
 				ext := filepath.Ext(filePath)
-				// Run bounded prefilter for binary types (honor PDFs to avoid unnecessary extraction)
+				// Run bounded prefilter for binary types before extraction.
 				cap := int64(1024 * 1024)
 				if strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg") {
 					cap = int64(256 * 1024)
@@ -453,75 +338,49 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				if decidedPF && !foundPF {
 					return false
 				}
-				// PDF presence-only gate for single-word (Step 2): guarded, no extraction.
-				if strings.EqualFold(ext, ".pdf") {
-					if !enablePDFs {
-						// Keep disabled behavior: do not accept based on generic prefilter.
-					} else {
-						// Governor + single concurrency token with short timeout to avoid hangs.
-						if !se.pdfGovernorAllow() {
-							return false
-						}
-						tokenTimer := time.NewTimer(50 * time.Millisecond)
-						defer tokenTimer.Stop()
-						select {
-						case pdfSem <- struct{}{}:
-							defer func() { <-pdfSem }()
-						case <-tokenTimer.C:
-							return false
-						}
-						// Use pdfcpu instead of leaky ledongthuc/pdf library
-						_, matched, err := pdf.ExtractAllTextCapped(filePath, 250, 128*1024, []string{word}, se.Distance)
-						if err == nil && matched {
-							// Success: all words found = definitive positive
-							hasAllWords = true
-						}
-						// If error or not matched, fall through to else block (extraction fallback)
+
+				// Bounded extraction fallback under semaphore + timeout.
+				rawContent, _, err := GetFileContent(filePath)
+				if err != nil {
+					if !se.Silent {
+						fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
 					}
-				} else {
-					// Bounded extraction fallback under semaphore + timeout
-					rawContent, _, err := GetFileContent(filePath)
-					if err != nil {
+					return false
+				}
+				if extractor, exists := se.Registry.GetExtractor(ext); exists {
+					var extractedText string
+					var extErr error
+					startXT := time.Now()
+					cm.Acquire()
+					err = cm.ExecuteWithTimeout(func() {
+						extractedText, extErr = extractor.ExtractText([]byte(rawContent))
+					}, se.FileTimeoutBinary)
+					cm.Release()
+					durXT := time.Since(startXT)
+					switch strings.ToLower(ext) {
+					case ".eml":
+						atomic.AddInt64(&se.emlExtractCount, 1)
+						atomic.AddInt64(&se.emlExtractDurNanos, durXT.Nanoseconds())
+					case ".msg":
+						atomic.AddInt64(&se.msgExtractCount, 1)
+						atomic.AddInt64(&se.msgExtractDurNanos, durXT.Nanoseconds())
+					}
+					if err != nil || extErr != nil {
 						if !se.Silent {
-							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
-						}
-						return false
-					}
-					if extractor, exists := se.Registry.GetExtractor(ext); exists {
-						var extractedText string
-						var extErr error
-						startXT := time.Now()
-						cm.Acquire()
-						err = cm.ExecuteWithTimeout(func() {
-							extractedText, extErr = extractor.ExtractText([]byte(rawContent))
-						}, se.FileTimeoutBinary)
-						cm.Release()
-						durXT := time.Since(startXT)
-						switch strings.ToLower(ext) {
-						case ".eml":
-							atomic.AddInt64(&se.emlExtractCount, 1)
-							atomic.AddInt64(&se.emlExtractDurNanos, durXT.Nanoseconds())
-						case ".msg":
-							atomic.AddInt64(&se.msgExtractCount, 1)
-							atomic.AddInt64(&se.msgExtractDurNanos, durXT.Nanoseconds())
-						}
-						if err != nil || extErr != nil {
-							if !se.Silent {
-								if extErr != nil {
-									fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extErr)
-								} else {
-									fmt.Printf("Warning: Extraction timeout for %s\n", filePath)
-								}
+							if extErr != nil {
+								fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extErr)
+							} else {
+								fmt.Printf("Warning: Extraction timeout for %s\n", filePath)
 							}
-							return false
-						}
-						hasAllWords = CheckTextContainsAllWords(CleanContent(extractedText), []string{word}, se.Distance)
-					} else {
-						if !se.Silent {
-							fmt.Printf("Warning: No extractor for %s\n", ext)
 						}
 						return false
 					}
+					hasAllWords = CheckTextContainsAllWords(CleanContent(extractedText), []string{word}, se.Distance)
+				} else {
+					if !se.Silent {
+						fmt.Printf("Warning: No extractor for %s\n", ext)
+					}
+					return false
 				}
 			} else {
 				ok, err := CheckFileContainsAllWords(filePath, []string{word}, se.Distance, se.Silent)
@@ -672,36 +531,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 				}
 			}
 
-			if strings.EqualFold(ext, ".pdf") && enablePDFs {
-				// Try-acquire global PDF token with 50ms deadline to serialize pdfcpu usage
-				tokenTimer := time.NewTimer(50 * time.Millisecond)
-				acquired := false
-				select {
-				case pdfSem <- struct{}{}:
-					acquired = true
-				case <-tokenTimer.C:
-					// Could not acquire quickly; treat as undecided and skip quietly
-				}
-				if !acquired {
-					continue
-				}
-				defer func() { <-pdfSem }()
-				// Bounded PDF text extraction via pdfcpu helper with strict wall timeout and caps
-				var txt string
-				var perr error
-				if errTimeout := cm.ExecuteWithTimeout(func() {
-					t, _, e := pdf.ExtractAllTextCapped(filePath, 200, 128*1024, se.SearchWords, se.Distance)
-					if e != nil {
-						perr = e
-						return
-					}
-					txt = t
-				}, 250*time.Millisecond); errTimeout != nil || perr != nil {
-					// Suppress pdfcpu errors/timeouts in extraction; treat as undecided and skip quietly
-					continue
-				}
-				content = txt
-			} else if extractor, exists := se.Registry.GetExtractor(ext); exists {
+			if extractor, exists := se.Registry.GetExtractor(ext); exists {
 				err = cm.ExecuteWithTimeout(func() {
 					content, err = extractor.ExtractText([]byte(rawContent))
 				}, se.FileTimeoutBinary)
@@ -710,6 +540,9 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 						fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, err)
 					}
 					continue
+				}
+				if strings.EqualFold(ext, ".pdf") {
+					atomic.AddInt64(&se.pdfProcessed, 1)
 				}
 			} else {
 				if !se.Silent {
@@ -727,8 +560,15 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 			}
 		}
 
-		// Clean content and extract excerpts (make excerpt window reflect distance)
-		cleanContent := CleanContent(content)
+		// Clean content and extract excerpts (make excerpt window reflect distance).
+		// Code files use the minimal code-safe cleaner so source tokens survive (see CleanContentCode).
+		isCode := config.IsCodeFile(filePath)
+		var cleanContent string
+		if isCode {
+			cleanContent = CleanContentCode(content)
+		} else {
+			cleanContent = CleanContent(content)
+		}
 		boundedClean := cleanContent
 		if len(boundedClean) > 64*1024 {
 			boundedClean = boundedClean[:64*1024]
@@ -751,8 +591,17 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 		// Map the character budget to a context limit for excerpt generation (roughly half).
 		SetExcerptContextLimit(budget / 2)
 
-		// Single excerpt keeps the UI height stable.
-		excerpts := ExtractMeaningfulExcerpts(cleanContent, se.SearchWords, 1)
+		maxExcerpts := se.MaxExcerpts
+		if maxExcerpts <= 0 {
+			maxExcerpts = 1
+		}
+
+		var excerpts []string
+		if isCode {
+			excerpts = ExtractMeaningfulExcerptsCode(cleanContent, se.SearchWords, maxExcerpts)
+		} else {
+			excerpts = ExtractMeaningfulExcerpts(cleanContent, se.SearchWords, maxExcerpts)
+		}
 
 		// If excerpts are very short (e.g., only a single terse sentence), expand the first excerpt
 		// by pulling in neighboring sentences to provide more context. This helps fill the UI box
@@ -818,11 +667,20 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 			highlightedExcerpts[i] = HighlightTerms(excerpt, se.SearchWords)
 		}
 
+		// Resolve 1-based start line per excerpt by anchoring it back to the raw content.
+		// Only text/code files have stable source lines; binary/extracted formats (PDF, DOCX,
+		// email) do not, so we leave their line numbers unknown (nil/0).
+		var startLines []int
+		if !IsBinaryFormat(filePath) {
+			startLines = computeExcerptLines(content, excerpts, se.SearchWords, se.Distance)
+		}
+
 		result := SearchResult{
 			FilePath:     filePath,
 			FileSize:     fileSize,
 			Excerpts:     highlightedExcerpts,
 			RawExcerpts:  excerpts,
+			StartLines:   startLines,
 			CleanContent: boundedClean,
 			EmailDate:    emailDate,
 			EmailSubject: emailSubject,
@@ -900,9 +758,9 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 				fmt.Printf("  MSG extract:   %d • %.1fms\n", se.msgExtractCount, avg)
 			}
 		}
-		// PDF governor summary
+		// PDF extraction summary
 		if atomic.LoadInt64(&se.pdfProcessed) > 0 || atomic.LoadInt64(&se.pdfSkippedBudget) > 0 {
-			fmt.Printf("  PDF scanned: %d • skipped (budget): %d • pages truncated: %d\n",
+			fmt.Printf("  PDF extracted: %d • skipped (budget): %d • pages truncated: %d\n",
 				atomic.LoadInt64(&se.pdfProcessed),
 				atomic.LoadInt64(&se.pdfSkippedBudget),
 				atomic.LoadInt64(&pdfPagesTruncated))

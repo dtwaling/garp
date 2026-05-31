@@ -3,6 +3,7 @@ package search_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"garp/search"
@@ -33,6 +34,8 @@ func buildTestTree(t *testing.T) string {
 	dirs := []string{
 		"backend/service",
 		"backend/Assembly",
+		"app/Http/Controllers/Auth",
+		"app/Http/Requests",
 		"frontend",
 		"tests",
 	}
@@ -43,15 +46,17 @@ func buildTestTree(t *testing.T) string {
 	}
 
 	files := map[string]string{
-		"backend/service/auth.go":       "package service\nfunc Auth() {}\n",
-		"backend/service/auth.md":       "# auth\ntoken authentication service\n",
-		"backend/Assembly/main.cs":      "using System;\nclass Main { static void Main() {} }\n",
-		"backend/Assembly/main.md":      "# Assembly main\nassembly entry point\n",
-		"frontend/app.ts":               "export function app() {}\n",
-		"frontend/app.md":               "# frontend app\napp description\n",
-		"tests/backend_test.go":         "package tests\nfunc TestBackend() {}\n",
-		"tests/frontend_test.go":        "package tests\nfunc TestFrontend() {}\n",
-		"tests/endpoint_test.md":        "# endpoint test\nendpoint coverage\n",
+		"backend/service/auth.go":                       "package service\nfunc Auth() {}\n",
+		"backend/service/auth.md":                       "# auth\ntoken authentication service\n",
+		"backend/Assembly/main.cs":                      "using System;\nclass Main { static void Main() {} }\n",
+		"backend/Assembly/main.md":                      "# Assembly main\nassembly entry point\n",
+		"app/Http/Controllers/Auth/OAuthController.php": "provider access_token controller\n",
+		"app/Http/Requests/LoginRequest.php":            "provider access_token request\n",
+		"frontend/app.ts":                               "export function app() {}\n",
+		"frontend/app.md":                               "# frontend app\napp description\n",
+		"tests/backend_test.go":                         "package tests\nfunc TestBackend() {}\n",
+		"tests/frontend_test.go":                        "package tests\nfunc TestFrontend() {}\n",
+		"tests/endpoint_test.md":                        "# endpoint test\nendpoint coverage\n",
 	}
 	for rel, content := range files {
 		path := filepath.Join(root, rel)
@@ -69,6 +74,7 @@ func allFileTypes() []string {
 		"-g", "*.go",
 		"-g", "*.cs",
 		"-g", "*.ts",
+		"-g", "*.php",
 	}
 }
 
@@ -80,9 +86,9 @@ func TestGetDocumentFileCount_WalkRoot_AllFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// 9 files total in the tree
-	if count != 9 {
-		t.Errorf("expected 9 files, got %d", count)
+	// 11 files total in the tree
+	if count != 11 {
+		t.Errorf("expected 11 files, got %d", count)
 	}
 }
 
@@ -150,6 +156,149 @@ func TestGetDocumentFileCount_PathScope_BackendAssembly(t *testing.T) {
 	// Only backend/Assembly/main.cs and main.md match
 	if count != 2 {
 		t.Errorf("expected 2 files matching */Assembly/*, got %d", count)
+	}
+}
+
+func TestGetDocumentFileCount_PathScope_BackendAssemblyWindowsSeparators(t *testing.T) {
+	root := buildTestTree(t)
+	scope := []string{`backend\Assembly`}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 files matching Windows-style backend\\Assembly, got %d", count)
+	}
+}
+
+func TestGetDocumentFileCount_PathScope_GlobstarController(t *testing.T) {
+	root := buildTestTree(t)
+	scope := []string{`app\Http\**\*Controller.php`}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 controller file matching globstar scope, got %d", count)
+	}
+}
+
+func TestGetDocumentFileCount_PathScope_LeadingGlobstarController(t *testing.T) {
+	root := buildTestTree(t)
+	scope := []string{`**\*Controller.php`}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 controller file matching leading globstar scope, got %d", count)
+	}
+}
+
+func TestGetDocumentFileCount_PathScope_BasenamePatternMatchesAnywhere(t *testing.T) {
+	root := buildTestTree(t)
+	scope := []string{`*Controller.php`}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 controller file matching basename scope, got %d", count)
+	}
+}
+
+func TestGetDocumentFileCount_PathScope_GlobstarLiteralPrefix(t *testing.T) {
+	root := buildTestTree(t)
+	scope := []string{`app\Http\**\*.php`}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 PHP files under app/Http via globstar, got %d", count)
+	}
+}
+
+func TestGetDocumentFileCount_PathScope_QuotedCommaSeparatedGlobstars(t *testing.T) {
+	root := buildTestTree(t)
+	scope, err := search.ValidatePathScope(`'app\Http\**\*.php,app\**\*Controller.php'`)
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected count error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 PHP files matching quoted comma-separated globstars, got %d", count)
+	}
+}
+
+func TestGetDocumentFileCount_PathScope_DirWildcardMatchesNestedFiles(t *testing.T) {
+	root := buildTestTree(t)
+	nestedDir := filepath.Join(root, "backend", "Assembly", "Nested")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("mkdir nested dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedDir, "nested.md"), []byte("# nested assembly\n"), 0o644); err != nil {
+		t.Fatalf("write nested file: %v", err)
+	}
+
+	scope := []string{`backend\Assembly\*`}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 files under backend\\Assembly\\*, got %d", count)
+	}
+}
+
+func TestGetDocumentFileCount_PathScope_QuotedDirWildcardMatchesNestedFiles(t *testing.T) {
+	root := buildTestTree(t)
+	nestedDir := filepath.Join(root, "app", "Http", "Controllers", "Auth")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("mkdir nested dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedDir, "OAuthController.md"), []byte("provider access_token\n"), 0o644); err != nil {
+		t.Fatalf("write nested file: %v", err)
+	}
+
+	scope := []string{`'app\Http\*'`}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 files under quoted app\\Http\\*, got %d", count)
+	}
+}
+
+func TestGetDocumentFileCount_PathScope_WindowsCaseInsensitive(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows filesystems are matched case-insensitively")
+	}
+
+	root := buildTestTree(t)
+	scope := []string{`backend\assembly`}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 files matching Windows case-insensitive pathscope, got %d", count)
+	}
+}
+
+func TestGetDocumentFileCount_PathScope_AbsoluteDir(t *testing.T) {
+	root := buildTestTree(t)
+	scope := []string{filepath.Join(root, "tests")}
+	count, err := search.GetDocumentFileCount(allFileTypes(), root, scope)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 files matching absolute tests path, got %d", count)
 	}
 }
 

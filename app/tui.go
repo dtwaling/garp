@@ -11,7 +11,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"golang.org/x/sys/unix"
 
 	"garp/config"
 	"garp/search"
@@ -468,7 +467,11 @@ func (m model) View() string {
 
 		// Add excerpts (single wrapped line with colored label)
 		for i, excerpt := range result.Excerpts {
-			label := subHeaderStyle.Render(fmt.Sprintf("Excerpt %d: ", i+1))
+			labelText := fmt.Sprintf("Excerpt %d: ", i+1)
+			if start := excerptStartLineAt(result.StartLines, i); start > 0 {
+				labelText = fmt.Sprintf("Excerpt %d (%s): ", i+1, formatLine(start))
+			}
+			label := subHeaderStyle.Render(labelText)
 			innerWidth := (width - 4) - 6
 			if innerWidth < 10 {
 				innerWidth = 10
@@ -630,7 +633,7 @@ func (m model) runSearch() tea.Cmd {
 	// Prepare engine and wire progress callback
 	fileTypes := config.BuildRipgrepFileTypes(m.includeCode)
 	if m.onlyType != "" {
-		fileTypes = []string{"-g", "*." + m.onlyType}
+		fileTypes = config.OnlyTypeGlobs(m.onlyType)
 	}
 	se := search.NewSearchEngineWithWorkers(
 		m.searchWords,
@@ -814,18 +817,14 @@ var haveCPUSample bool
 
 func sampleMemoryAndCPU() (mem struct{ heap, rss uint64 }, cpu float64) {
 	// Sample memory
-	var rusage unix.Rusage
-	_ = unix.Getrusage(unix.RUSAGE_SELF, &rusage)
+	rss, nowProc := currentProcessUsage()
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	mem.heap = ms.HeapAlloc
-	mem.rss = uint64(rusage.Maxrss * 1024) // KB to bytes
+	mem.rss = rss
 
 	// Sample CPU (process user+sys time from rusage)
 	nowWall := time.Now()
-	user := time.Duration(rusage.Utime.Sec)*time.Second + time.Duration(rusage.Utime.Usec)*time.Microsecond
-	sys := time.Duration(rusage.Stime.Sec)*time.Second + time.Duration(rusage.Stime.Usec)*time.Microsecond
-	nowProc := user + sys
 	if haveCPUSample {
 		wallDiff := nowWall.Sub(lastCPUWall)
 		procDiff := nowProc - lastCPUProc

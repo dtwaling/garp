@@ -2,7 +2,7 @@
 
 # :: garp ::
 
-![Version](https://img.shields.io/badge/version-0.7-blue?labelColor=0052cc)
+![Version](https://img.shields.io/badge/version-0.8-blue?labelColor=0052cc)
 ![License](https://img.shields.io/github/license/dtwaling/garp?color=4338ca&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-linux-4338ca?logo=linux&logoColor=white&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-macos-4338ca?logo=apple&logoColor=white&labelColor=3730a3)
@@ -65,8 +65,7 @@ garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,d
 ```bash
 git clone https://github.com/dtwaling/garp
 cd garp
-make install-pdfcpu   # recommended -- builds with PDF support, installs to ~/.local/bin/garp
-# or: make install    # without PDF tag
+make install          # builds with pure-Go PDF support, installs to ~/.local/bin/garp
 ```
 
 Ensure `~/.local/bin` is on your `PATH`.
@@ -118,11 +117,23 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
     {
       "file": "/path/to/audio2midi/dsp.py",
       "size_bytes": 15649,
-      "excerpts": ["...clean text snippet around matched terms..."]
+      "excerpts": [
+        {
+          "text": "...clean text snippet around matched terms...",
+          "start_line": 42
+        }
+      ]
     }
   ]
 }
 ```
+
+Each excerpt is an object: `text` plus a 1-based `start_line`. `start_line` points at the line
+of the **earliest matched search term** in that chunk -- not necessarily the first line of the
+rendered `text` (the excerpt window pads a little context around the match and collapses newlines
+into one line). In practice this is what you want: it lands you on the match. Line numbers are
+present for text/code files and omitted for binary/extracted formats (PDF, DOCX, email) that have
+no stable source lines. The plain (`--plain`) output prefixes each excerpt with `[L<start>]` when known.
 
 `matches` is always present as a top-level integer so callers can zero-check without
 iterating `results`. Errors go to stderr; check exit code before parsing stdout as JSON.
@@ -140,7 +151,17 @@ iterating `results`. Errors go to stderr; check exit code before parsing stdout 
 **Code (with `--code`)**
 
 `.go`, `.py`, `.js`, `.ts`, `.java`, `.cpp`, `.c`, `.rs`, `.rb`, `.cs`, `.swift`,
-`.kt`, `.scala`, `.sql`, `.php`, `.json`
+`.kt`, `.scala`, `.sql`, `.php`, `.phtml`, `.json`
+
+Delphi / Object Pascal: `.pas`, `.dpr`, `.dpk`, `.inc`, `.dfm`, `.fmx`, `.dproj`, `.groupproj`
+
+Container build files (matched by name, since they're usually extensionless): `Dockerfile`,
+`Dockerfile.*` (e.g. `Dockerfile.dev`), `Containerfile`, and `*.dockerfile`. `--only dockerfile`
+restricts to just this family.
+
+> Code files use a minimal, code-safe content cleaner: angle brackets, operators, and tokens
+> like `<?php`, `$obj->prop`, and `TList<T>` are preserved (the document cleaner would strip
+> them as markup). This keeps both matching and excerpts faithful to the source.
 
 **Binary extraction (pure Go)**
 
@@ -192,7 +213,6 @@ garp/
 ```bash
 make                  # build to bin/garp
 make install          # build + copy to ~/.local/bin/garp
-make install-pdfcpu   # build with PDF support tag (recommended) + install
 make test             # run tests
 make fmt              # format
 make tidy             # go mod tidy
@@ -224,18 +244,6 @@ This makes it efficient with large trees: pass `--pathscope 'src/,docs/'` and
 
 **Is it cross-platform?**
 Pure Go -- works on Linux, macOS, Windows. The TUI requires an ANSI-compatible terminal.
-
-## Troubleshooting
-
-**`pdfcpu: config problem: EOF`**
-
-The pdfcpu config file is corrupted. Fix:
-
-```bash
-rm -rf ~/.config/pdfcpu/*
-```
-
-Re-run garp; pdfcpu will regenerate a clean default config.
 
 ## Credits
 

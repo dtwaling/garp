@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -16,9 +17,24 @@ var DocumentTypes = []string{
 
 // CodeTypes defines the file extensions for programming files
 var CodeTypes = []string{
-	"js", "ts", "sql", "py", "php", "java", "cpp", "c", "json",
+	"js", "ts", "sql", "py", "php", "phtml", "java", "cpp", "c", "json",
 	"go", "rs", "rb", "cs", "swift", "kt", "scala", "clj",
 	"h", "hpp", "cc", "cxx", "pl", "r", "m", "mm",
+	// Delphi / Object Pascal: units, programs, package source, includes,
+	// VCL/FireMonkey form definitions, and MSBuild project files.
+	"pas", "dpr", "dpk", "inc", "dfm", "fmx", "dproj", "groupproj",
+	// Container build files that carry an extension (e.g. app.Dockerfile, web.dockerfile).
+	// The extensionless "Dockerfile"/"Containerfile" family is matched by name -- see CodeFilenames.
+	"dockerfile",
+}
+
+// CodeFilenames matches code files that have no usable extension and so can't be caught by
+// CodeTypes -- chiefly container build files. Patterns are matched case-insensitively against
+// the file's base name (filepath.Match semantics; "*" and "?" only).
+var CodeFilenames = []string{
+	"Dockerfile",    // exact
+	"Dockerfile.*",  // Dockerfile.dev, Dockerfile.prod, ...
+	"Containerfile", // Podman equivalent
 }
 
 // IsDocumentFile checks if a file extension is a document type
@@ -30,11 +46,25 @@ func IsDocumentFile(filename string) bool {
 	return false
 }
 
-// IsCodeFile checks if a file extension is a code type
+// IsCodeFile reports whether a file should be treated as source code -- by extension
+// (CodeTypes) or, for extensionless files like Dockerfiles, by name (CodeFilenames).
+// Used both to gate discovery and to pick the code-safe content cleaner.
 func IsCodeFile(filename string) bool {
 	ext := strings.ToLower(strings.TrimPrefix(getFileExtension(filename), "."))
 	if slices.Contains(CodeTypes, ext) {
 		return true
+	}
+	return IsCodeFilename(filename)
+}
+
+// IsCodeFilename reports whether the file's base name matches one of the special, mostly
+// extensionless code filenames in CodeFilenames (e.g. Dockerfile, Dockerfile.prod).
+func IsCodeFilename(filename string) bool {
+	base := strings.ToLower(filepath.Base(filename))
+	for _, pattern := range CodeFilenames {
+		if ok, err := filepath.Match(strings.ToLower(pattern), base); err == nil && ok {
+			return true
+		}
 	}
 	return false
 }
@@ -116,10 +146,10 @@ func IsHiddenFile(filename string) bool {
 func ShouldSkipDirectory(dirName string) bool {
 	skipDirs := map[string]bool{
 		// VCS and caches
-		".git":          true,
-		".svn":          true,
-		".hg":           true,
-		".cache":        true,
+		".git":   true,
+		".svn":   true,
+		".hg":    true,
+		".cache": true,
 
 		// Language/tool chains and local caches
 		".cargo":        true,
@@ -136,25 +166,25 @@ func ShouldSkipDirectory(dirName string) bool {
 		"__pycache__":   true,
 
 		// Browsers and large app caches
-		".mozilla":      true,
-		".chromium":     true,
+		".mozilla":  true,
+		".chromium": true,
 
 		// IDE/project artifacts
-		".vscode":       true,
-		".idea":         true,
-		"node_modules":  true,
-		"vendor":        true,
-		"target":        true,
-		"build":         true,
-		"dist":          true,
-		".next":         true,
-		".nuxt":         true,
+		".vscode":      true,
+		".idea":        true,
+		"node_modules": true,
+		"vendor":       true,
+		"target":       true,
+		"build":        true,
+		"dist":         true,
+		".next":        true,
+		".nuxt":        true,
 
 		// Misc
-		"coverage":      true,
-		"tmp":           true,
-		"temp":          true,
-		".DS_Store":     true,
+		"coverage":  true,
+		"tmp":       true,
+		"temp":      true,
+		".DS_Store": true,
 	}
 
 	// Note: do NOT blanket-skip all dot-directories; allow .config, .local, etc.
@@ -164,7 +194,7 @@ func ShouldSkipDirectory(dirName string) bool {
 // GetFileTypeDescription returns a human-readable description of file types
 func GetFileTypeDescription(includeCode bool) string {
 	if includeCode {
-		return "documents (txt, md, html, xml, csv, yaml, yml, eml, mbox, msg, pdf, doc, docx, odt, rtf, log, cfg, conf, ini, sh, bat) + code files (go, js, ts, py, php, java, cpp, c, json, rs, rb, cs, swift, kt, scala)"
+		return "documents (txt, md, html, xml, csv, yaml, yml, eml, mbox, msg, pdf, doc, docx, odt, rtf, log, cfg, conf, ini, sh, bat) + code files (go, js, ts, py, php, phtml, java, cpp, c, json, rs, rb, cs, swift, kt, scala, pas, dpr, dpk, inc, dfm, fmx, dproj, groupproj, Dockerfile)"
 	}
 	return "documents (txt, md, html, xml, csv, yaml, yml, eml, mbox, msg, pdf, doc, docx, odt, rtf, log, cfg, conf, ini, sh, bat)"
 }
@@ -196,14 +226,38 @@ func BuildRipgrepFileTypes(includeCode bool) []string {
 	if includeCode {
 		codeGlobs := []string{
 			"-g", "*.js", "-g", "*.ts", "-g", "*.sql", "-g", "*.py",
-			"-g", "*.php", "-g", "*.java", "-g", "*.cpp", "-g", "*.c",
+			"-g", "*.php", "-g", "*.phtml", "-g", "*.java", "-g", "*.cpp", "-g", "*.c",
 			"-g", "*.json", "-g", "*.go", "-g", "*.rs", "-g", "*.rb",
 			"-g", "*.cs", "-g", "*.swift", "-g", "*.kt", "-g", "*.scala",
+			// Delphi / Object Pascal
+			"-g", "*.pas", "-g", "*.dpr", "-g", "*.dpk", "-g", "*.inc",
+			"-g", "*.dfm", "-g", "*.fmx", "-g", "*.dproj", "-g", "*.groupproj",
 		}
 		types = append(types, codeGlobs...)
+		// Container build files, incl. the extensionless Dockerfile/Containerfile family.
+		types = append(types, DockerfileGlobs()...)
 	}
 
 	return types
+}
+
+// DockerfileGlobs returns the -g glob arguments that match the Docker/Podman build-file family:
+// the extensionless "Dockerfile"/"Containerfile", the "Dockerfile.*" variants, and the
+// extension-bearing "*.dockerfile". Name globs (those not starting with "*.") are matched
+// against the file's base name by the discovery walk.
+func DockerfileGlobs() []string {
+	return []string{"-g", "Dockerfile", "-g", "Dockerfile.*", "-g", "Containerfile", "-g", "*.dockerfile"}
+}
+
+// OnlyTypeGlobs returns the -g glob arguments for a single `--only <type>` restriction.
+// Most types map to one "*.<ext>" glob; "dockerfile" expands to the full Dockerfile family
+// so `--only dockerfile` also catches the extensionless files.
+func OnlyTypeGlobs(onlyType string) []string {
+	ext := strings.TrimPrefix(strings.ToLower(onlyType), ".")
+	if ext == "dockerfile" {
+		return DockerfileGlobs()
+	}
+	return []string{"-g", "*." + ext}
 }
 
 // EstimateMemoryUsage provides memory usage estimate based on file count

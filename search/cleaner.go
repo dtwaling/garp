@@ -41,9 +41,9 @@ var (
 	// letterDigitRegex injects a space between an uppercase letter and a digit to fix OCR artifacts
 	// like "Account10" -> "Account 10" or "PDF32" -> "PDF 32". Restricted to uppercase-start to
 	// avoid mangling code identifiers such as float32, int64, np.float32.
-	letterDigitRegex     = regexp.MustCompile(`([A-Z])([0-9])`)
-	digitLetterRegex     = regexp.MustCompile(`([0-9])([A-Z])`)
-	commaMissingSpace    = regexp.MustCompile(`,([^\s])`)
+	letterDigitRegex  = regexp.MustCompile(`([A-Z])([0-9])`)
+	digitLetterRegex  = regexp.MustCompile(`([0-9])([A-Z])`)
+	commaMissingSpace = regexp.MustCompile(`,([^\s])`)
 
 	// Precompiled regexes for ExtractMeaningfulExcerpts - also leaked on every call
 	dividerRegex = regexp.MustCompile(`[-_=#]{5,}`)
@@ -99,22 +99,51 @@ func CleanContent(content string) string {
 	return strings.TrimSpace(content)
 }
 
+// CleanContentCode is a minimal cleaner for source code. Unlike CleanContent it does NOT strip
+// HTML/markup, CSS/JS blocks, entities, or email quoting -- those transforms corrupt code:
+// PHP "<?php ... ?>" and "$obj->prop", Delphi generics "TList<T>", and comparisons like
+// "if a < b then" all contain angle brackets the document cleaner would treat as tags and delete.
+// It only normalizes control characters and collapses whitespace, so matching and excerpts stay
+// faithful to the source. The OCR-oriented digit/space fixups in CleanContent are also skipped
+// because they mangle identifiers (e.g. "Int32" -> "Int 32").
+func CleanContentCode(content string) string {
+	content = controlCharRegex.ReplaceAllString(content, " ")
+	content = whitespaceRegex.ReplaceAllString(content, " ")
+	return strings.TrimSpace(content)
+}
+
 // ExtractMeaningfulExcerpts returns targeted, per-match snippets around each term.
 // We extract tight, local windows around each match with email-aware boundaries,
 // paragraph fallbacks, and punctuation-aware sentence ends. We avoid global scans.
 func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int) []string {
-	// Line-preserving clean for boundary finding: remove heavy markup/noise but keep newlines
-	prep := cssRegex.ReplaceAllString(content, "")
-	prep = jsRegex.ReplaceAllString(prep, "")
-	prep = htmlTagRegex.ReplaceAllString(prep, " ")
-	prep = htmlEntityRegex.ReplaceAllString(prep, " ")
-	prep = controlCharRegex.ReplaceAllString(prep, "")
-	prep = junkSymbolsRegex.ReplaceAllString(prep, "")
-	prep = emailQuotingRegex.ReplaceAllString(prep, "")
-	// Strip leading '>' markers and collapse midline quote markers
-	prep = quoteLineStartRegex.ReplaceAllString(prep, "")
-	prep = quoteMidRegex.ReplaceAllString(prep, " ")
-	cleaned := prep
+	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, false)
+}
+
+// ExtractMeaningfulExcerptsCode is the code-aware variant of ExtractMeaningfulExcerpts. It uses
+// minimal, code-safe cleaning so source tokens (angle brackets, operators, PHP/markup) survive.
+func ExtractMeaningfulExcerptsCode(content string, searchTerms []string, maxExcerpts int) []string {
+	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, true)
+}
+
+func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, isCode bool) []string {
+	var cleaned string
+	if isCode {
+		// Minimal cleaning: preserve every code token; only normalize control chars/whitespace.
+		cleaned = CleanContentCode(content)
+	} else {
+		// Line-preserving clean for boundary finding: remove heavy markup/noise but keep newlines
+		prep := cssRegex.ReplaceAllString(content, "")
+		prep = jsRegex.ReplaceAllString(prep, "")
+		prep = htmlTagRegex.ReplaceAllString(prep, " ")
+		prep = htmlEntityRegex.ReplaceAllString(prep, " ")
+		prep = controlCharRegex.ReplaceAllString(prep, "")
+		prep = junkSymbolsRegex.ReplaceAllString(prep, "")
+		prep = emailQuotingRegex.ReplaceAllString(prep, "")
+		// Strip leading '>' markers and collapse midline quote markers
+		prep = quoteLineStartRegex.ReplaceAllString(prep, "")
+		prep = quoteMidRegex.ReplaceAllString(prep, " ")
+		cleaned = prep
+	}
 
 	if maxExcerpts <= 0 {
 		maxExcerpts = 3
@@ -156,46 +185,55 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 	excerpts := make([]string, 0, maxExcerpts)
 	seen := make(map[string]struct{})
 
-	// Sliding-window strategy (early): pick smallest span covering all terms and prefer that excerpt first.
+	// Sliding-window strategy: collect non-overlapping spans covering all terms.
 	if len(termRE) > 1 {
 		type tmatch struct {
-			pos int
-			idx int
+			start int
+			end   int
+			idx   int
+		}
+		type candidate struct {
+			left  int
+			right int
 		}
 		all := make([]tmatch, 0, 128)
 		for i, re := range termRE {
 			idxs := re.FindAllStringIndex(cleaned, -1)
 			for _, loc := range idxs {
-				all = append(all, tmatch{pos: loc[0], idx: i})
+				all = append(all, tmatch{start: loc[0], end: loc[1], idx: i})
 			}
 		}
 		if len(all) > 0 {
-			sort.Slice(all, func(i, j int) bool { return all[i].pos < all[j].pos })
+			sort.Slice(all, func(i, j int) bool { return all[i].start < all[j].start })
 			counts := make(map[int]int, len(termRE))
 			covered := 0
-			l := 0
-			bestL, bestR := -1, -1
-			for r := 0; r < len(all); r++ {
-				mm := all[r]
-				if counts[mm.idx] == 0 {
-					covered++
+			r := 0
+			candidates := make([]candidate, 0, maxExcerpts)
+			for l := 0; l < len(all); l++ {
+				for r < len(all) && covered < len(termRE) {
+					mm := all[r]
+					if counts[mm.idx] == 0 {
+						covered++
+					}
+					counts[mm.idx]++
+					r++
 				}
-				counts[mm.idx]++
-				for covered == len(termRE) {
-					curL := all[l].pos
-					curR := all[r].pos
-					if bestL == -1 || (curR-curL) < (bestR-bestL) {
-						bestL, bestR = curL, curR
+				if covered == len(termRE) {
+					right := all[l].end
+					for i := l; i < r; i++ {
+						if all[i].end > right {
+							right = all[i].end
+						}
 					}
-					leftm := all[l]
-					counts[leftm.idx]--
-					if counts[leftm.idx] == 0 {
-						covered--
-					}
-					l++
+					candidates = append(candidates, candidate{left: all[l].start, right: right})
+				}
+				leftm := all[l]
+				counts[leftm.idx]--
+				if counts[leftm.idx] == 0 {
+					covered--
 				}
 			}
-			if bestL >= 0 && len(excerpts) < maxExcerpts {
+			if len(candidates) > 0 {
 				// Dynamic budget from UI (fallback to 400)
 				budget := 400
 				if ExcerptCharBudget != nil {
@@ -207,102 +245,88 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 					budget = 200
 				}
 
-				span := bestR - bestL
-				buildAndReturn := func(left, right int) []string {
-					// Trim to word boundaries
-					for left > 0 && cleaned[left] != ' ' {
-						left--
-					}
-					for right < len(cleaned) && right > 0 && cleaned[right-1] != ' ' {
-						right++
-						if right >= len(cleaned) {
-							break
-						}
-					}
-					ex := strings.TrimSpace(cleaned[left:right])
-					ex = strings.ReplaceAll(ex, "\n", " ")
-					ex = strings.ReplaceAll(ex, "\t", " ")
-					// Remove intra-line divider runs (e.g., ______, ------)
-					ex = dividerRegex.ReplaceAllString(ex, " ")
-					ex = whitespaceRegex.ReplaceAllString(ex, " ")
-					if len(ex) > budget {
-						ex = ex[:budget]
-					}
-					if _, ok := seen[ex]; !ok && ex != "" {
-						seen[ex] = struct{}{}
-						excerpts = append(excerpts, ex)
-					}
-					return excerpts
-				}
-
-				if span <= budget {
-					// Center a window of size budget around the minimal span
-					pad := (budget - span) / 2
-					left := max(0, bestL-pad)
-					right := min(len(cleaned), bestR+pad)
-					return buildAndReturn(left, right)
-				}
-
-				// Minimal span is larger than budget:
-				// Compose one small window per term (in search-terms order) and join with " ... ".
-				// This guarantees every term is visible and the final excerpt fits the budget.
-				perTerm := budget / max(1, len(termRE))
-				if perTerm < 60 {
-					perTerm = 60
-				}
-				var parts []string
-				used := 0
-				for _, re := range termRE {
-					if used >= budget {
-						break
-					}
-					loc := re.FindStringIndex(cleaned)
-					if loc == nil {
+				selected := make([]candidate, 0, maxExcerpts)
+				lastRight := -1
+				for _, c := range candidates {
+					if c.left < lastRight {
 						continue
 					}
-					l0 := loc[0] - (perTerm / 2)
-					if l0 < 0 {
-						l0 = 0
-					}
-					r0 := loc[1] + (perTerm / 2)
-					if r0 > len(cleaned) {
-						r0 = len(cleaned)
-					}
-					frag := strings.TrimSpace(cleaned[l0:r0])
-					frag = strings.ReplaceAll(frag, "\n", " ")
-					frag = strings.ReplaceAll(frag, "\t", " ")
-					// Remove intra-line divider runs (e.g., ______, ------)
-					frag = dividerRegex.ReplaceAllString(frag, " ")
-					frag = whitespaceRegex.ReplaceAllString(frag, " ")
-					// Trim to remaining budget minus delimiter if needed
-					remain := budget - used
-					if len(parts) > 0 {
-						// account for delimiter length " ... "
-						if remain > 5 {
-							remain -= 5
-						} else {
-							remain = 0
-						}
-					}
-					if remain <= 0 {
+					selected = append(selected, c)
+					lastRight = c.right
+					if len(selected) >= maxExcerpts {
 						break
 					}
-					if len(frag) > remain {
-						frag = frag[:remain]
+				}
+
+				for _, c := range selected {
+					span := c.right - c.left
+					left := c.left
+					right := c.right
+					if span <= budget {
+						pad := (budget - span) / 2
+						left = max(0, left-pad)
+						right = min(len(cleaned), right+pad)
+
+						for left > 0 && cleaned[left] != ' ' {
+							left--
+						}
+						for right < len(cleaned) && right > 0 && cleaned[right-1] != ' ' {
+							right++
+							if right >= len(cleaned) {
+								break
+							}
+						}
+						ex := strings.TrimSpace(cleaned[left:right])
+						ex = strings.ReplaceAll(ex, "\n", " ")
+						ex = strings.ReplaceAll(ex, "\t", " ")
+						ex = dividerRegex.ReplaceAllString(ex, " ")
+						ex = whitespaceRegex.ReplaceAllString(ex, " ")
+						if len(ex) > budget {
+							ex = ex[:budget]
+						}
+						if _, ok := seen[ex]; !ok && ex != "" {
+							seen[ex] = struct{}{}
+							excerpts = append(excerpts, ex)
+						}
+					} else {
+						perTerm := budget / max(1, len(termRE))
+						if perTerm < 60 {
+							perTerm = 60
+						}
+						parts := make([]string, 0, len(termRE))
+						spanText := cleaned[c.left:c.right]
+						for _, re := range termRE {
+							loc := re.FindStringIndex(spanText)
+							if loc == nil {
+								continue
+							}
+							center := c.left + loc[0] + (loc[1]-loc[0])/2
+							partLeft := max(0, center-perTerm/2)
+							partRight := min(len(cleaned), center+perTerm/2)
+							frag := strings.TrimSpace(cleaned[partLeft:partRight])
+							frag = strings.ReplaceAll(frag, "\n", " ")
+							frag = strings.ReplaceAll(frag, "\t", " ")
+							frag = dividerRegex.ReplaceAllString(frag, " ")
+							frag = whitespaceRegex.ReplaceAllString(frag, " ")
+							if frag != "" {
+								parts = append(parts, frag)
+							}
+						}
+						ex := strings.Join(parts, " ... ")
+						if len(ex) > budget {
+							ex = ex[:budget]
+						}
+						if _, ok := seen[ex]; !ok && ex != "" {
+							seen[ex] = struct{}{}
+							excerpts = append(excerpts, ex)
+						}
 					}
-					if frag != "" {
-						parts = append(parts, frag)
-						used += len(frag)
+					if len(excerpts) >= maxExcerpts {
+						break
 					}
 				}
-				// Join parts and return
-				ex := strings.Join(parts, " ... ")
-				if ex != "" {
-					if _, ok := seen[ex]; !ok {
-						seen[ex] = struct{}{}
-						excerpts = append(excerpts, ex)
-					}
-				}
+			}
+			if len(excerpts) > 0 {
 				return excerpts
 			}
 		}
@@ -421,7 +445,7 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 				maxEx = b
 			}
 		}
-		maxTotal := maxEx
+		maxTotal := maxEx * max(1, maxExcerpts)
 		total := 0
 		for i := range excerpts {
 			if len(excerpts[i]) > maxEx {

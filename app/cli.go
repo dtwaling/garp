@@ -20,7 +20,7 @@ import (
 	"garp/search"
 )
 
-var version = "0.7"
+var version = "0.8"
 
 // Arguments for CLI flags (used to seed TUI)
 type Arguments struct {
@@ -32,6 +32,7 @@ type Arguments struct {
 	HeavyConcurrency  int
 	FilterWorkers     int
 	FileTimeoutBinary int
+	MaxExcerpts       int
 	OnlyType          string
 
 	// StartDir: base directory for file walks (--startdir flag).
@@ -63,6 +64,7 @@ func parseArguments(args []string) *Arguments {
 		HeavyConcurrency:  2,
 		FilterWorkers:     4,
 		FileTimeoutBinary: 1000,
+		MaxExcerpts:       1,
 	}
 
 	parsingExcludes := false
@@ -70,6 +72,7 @@ func parseArguments(args []string) *Arguments {
 	expectHeavy := false
 	expectTimeout := false
 	expectWorkers := false
+	expectMaxExcerpts := false
 	expectOnly := false
 	expectStartDir := false
 	expectPathScope := false
@@ -103,6 +106,16 @@ func parseArguments(args []string) *Arguments {
 				result.FilterWorkers = n
 			}
 			expectWorkers = false
+			continue
+		}
+		if expectMaxExcerpts {
+			if n, err := strconv.Atoi(a); err == nil && n > 0 {
+				if n > 50 {
+					n = 50
+				}
+				result.MaxExcerpts = n
+			}
+			expectMaxExcerpts = false
 			continue
 		}
 		if expectOnly {
@@ -143,6 +156,8 @@ func parseArguments(args []string) *Arguments {
 			expectTimeout = true
 		case "--workers", "-workers":
 			expectWorkers = true
+		case "--max-excerpts":
+			expectMaxExcerpts = true
 		case "--only":
 			expectOnly = true
 		case "--startdir":
@@ -241,13 +256,14 @@ func showUsage() {
 
 	// Usage
 	fmt.Println(subHeaderStyle.Render("USAGE"))
-	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--distance N] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
+	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--distance N] [--max-excerpts N] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
 	fmt.Println()
 
 	// Flags
 	fmt.Println(subHeaderStyle.Render("FLAGS"))
 	fmt.Println(infoStyle.Render("  --code                  Include code files in the search"))
 	fmt.Println(infoStyle.Render("  --distance N            Proximity window in characters (default 5000)"))
+	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum non-overlapping excerpts per file (default 1, max 50)"))
 	fmt.Println(infoStyle.Render("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted)"))
 	fmt.Println(infoStyle.Render("  --workers N             Stage 2 text filter workers (default 2)"))
 	fmt.Println(infoStyle.Render("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000)"))
@@ -293,11 +309,37 @@ func showVersion() {
 
 // ansiEscRe and runJSON/runPlain now read RawExcerpts (pre-highlight) directly from SearchResult,
 // so no ANSI stripping is needed. This var is intentionally removed.
+
+// jsonExcerpt is a single matched chunk with its 1-based source start line.
+// start_line is omitted when unknown (0) -- e.g. binary/extracted formats
+// (PDF, DOCX, email) which have no stable source lines.
+type jsonExcerpt struct {
+	Text      string `json:"text"`
+	StartLine int    `json:"start_line,omitempty"`
+}
+
 // jsonResult is a single file match in --json output.
 type jsonResult struct {
-	File    string   `json:"file"`
-	SizeB   int64    `json:"size_bytes"`
-	Excerpts []string `json:"excerpts"`
+	File     string        `json:"file"`
+	SizeB    int64         `json:"size_bytes"`
+	Excerpts []jsonExcerpt `json:"excerpts"`
+}
+
+// excerptStartLineAt returns the start line for excerpt index i from the parallel
+// line slice on a SearchResult, tolerating short/nil slices (returns 0 when unknown).
+func excerptStartLineAt(starts []int, i int) int {
+	if i >= 0 && i < len(starts) {
+		return starts[i]
+	}
+	return 0
+}
+
+// formatLine renders a compact "L<start>" label, or "" when unknown.
+func formatLine(start int) string {
+	if start <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("L%d", start)
 }
 
 // jsonOutput is the top-level envelope emitted by --json.
@@ -322,7 +364,7 @@ type jsonQuery struct {
 func runJSON(args *Arguments) int {
 	fileTypes := config.BuildRipgrepFileTypes(args.IncludeCode)
 	if args.OnlyType != "" {
-		fileTypes = []string{"-g", "*." + strings.TrimPrefix(strings.ToLower(args.OnlyType), ".")}
+		fileTypes = config.OnlyTypeGlobs(args.OnlyType)
 	}
 	se := search.NewSearchEngineWithWorkers(
 		args.SearchWords,
@@ -343,6 +385,7 @@ func runJSON(args *Arguments) int {
 	if len(args.PathScope) > 0 {
 		se.PathScope = args.PathScope
 	}
+	se.MaxExcerpts = args.MaxExcerpts
 
 	results, err := se.Execute()
 	if err != nil {
@@ -364,15 +407,22 @@ func runJSON(args *Arguments) int {
 	}
 
 	for _, r := range results {
+		excerpts := make([]jsonExcerpt, len(r.RawExcerpts))
+		for i, ex := range r.RawExcerpts {
+			excerpts[i] = jsonExcerpt{Text: ex, StartLine: excerptStartLineAt(r.StartLines, i)}
+		}
 		out.Results = append(out.Results, jsonResult{
 			File:     r.FilePath,
 			SizeB:    r.FileSize,
-			Excerpts: r.RawExcerpts,
+			Excerpts: excerpts,
 		})
 	}
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
+	// Don't HTML-escape <, >, & -- code excerpts (PHP "<?php", Delphi generics, "&&") are
+	// far more readable as raw characters, and stdout consumers don't need HTML safety.
+	enc.SetEscapeHTML(false)
 	if err := enc.Encode(out); err != nil {
 		fmt.Fprintln(os.Stderr, "Error encoding JSON: "+err.Error())
 		return 1
@@ -386,15 +436,18 @@ func runJSON(args *Arguments) int {
 //	MATCH <n>/<total>
 //	FILE: <path>
 //	SIZE: <bytes>
-//	EXCERPT <i>: <text>
+//	EXCERPT <i> [L<start>]: <text>
 //	---
+//
+// The [L<start>] line is present for text/code files and omitted for binary/extracted
+// formats (PDF, DOCX, email) that have no stable source lines.
 //
 // Zero matches produces a single "NO RESULTS" line.
 // Errors go to stderr with no ANSI color.
 func runPlain(args *Arguments) int {
 	fileTypes := config.BuildRipgrepFileTypes(args.IncludeCode)
 	if args.OnlyType != "" {
-		fileTypes = []string{"-g", "*." + strings.TrimPrefix(strings.ToLower(args.OnlyType), ".")}
+		fileTypes = config.OnlyTypeGlobs(args.OnlyType)
 	}
 	se := search.NewSearchEngineWithWorkers(
 		args.SearchWords,
@@ -415,6 +468,7 @@ func runPlain(args *Arguments) int {
 	if len(args.PathScope) > 0 {
 		se.PathScope = args.PathScope
 	}
+	se.MaxExcerpts = args.MaxExcerpts
 
 	results, err := se.Execute()
 	if err != nil {
@@ -433,7 +487,11 @@ func runPlain(args *Arguments) int {
 		fmt.Printf("FILE: %s\n", r.FilePath)
 		fmt.Printf("SIZE: %d\n", r.FileSize)
 		for j, ex := range r.RawExcerpts {
-			fmt.Printf("EXCERPT %d: %s\n", j+1, ex)
+			if lr := formatLine(excerptStartLineAt(r.StartLines, j)); lr != "" {
+				fmt.Printf("EXCERPT %d [%s]: %s\n", j+1, lr, ex)
+			} else {
+				fmt.Printf("EXCERPT %d: %s\n", j+1, ex)
+			}
 		}
 		fmt.Println("---")
 	}
@@ -479,7 +537,7 @@ func Run() int {
 	if len(args.SearchWords) == 1 {
 		fileTypes := config.BuildRipgrepFileTypes(args.IncludeCode)
 		if args.OnlyType != "" {
-			fileTypes = []string{"-g", "*." + strings.TrimPrefix(strings.ToLower(args.OnlyType), ".")}
+			fileTypes = config.OnlyTypeGlobs(args.OnlyType)
 		}
 		if total, err := search.GetDocumentFileCount(fileTypes, "", nil); err == nil {
 			// Threshold tuned for very large trees to avoid cache blowouts on single-term scans

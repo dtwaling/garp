@@ -5,7 +5,7 @@ BINARY_PATH=bin/$(BINARY_NAME)
 GO_FILES=$(shell find . -name "*.go" -type f)
 
 # Version embedding
-VERSION=0.7
+VERSION=0.8
 LDFLAGS=-X garp/app.version=$(VERSION)
 
 # Default target
@@ -17,7 +17,7 @@ build: $(BINARY_PATH)
 $(BINARY_PATH): $(GO_FILES) Makefile
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p bin
-	go build -tags pdfcpu -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) .
+	go build -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) .
 	@echo "Build completed: $(BINARY_PATH)"
 
 # Clean build artifacts
@@ -70,20 +70,9 @@ install: tidy build
 	@echo "Installation completed: ~/.local/bin/$(BINARY_NAME)"
 	@echo "Make sure ~/.local/bin is in your PATH"
 
-# Install with pdfcpu build tag (opt-in)
-install-pdfcpu: tidy
-	@echo "Building $(BINARY_NAME) with pdfcpu tag..."
-	@mkdir -p bin
-	go build -tags pdfcpu -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) .
-	@echo "Building pdfworker..."
-	go build -tags pdfcpu -o bin/pdfworker ./cmd/pdfworker
-	@echo "Build completed (pdfcpu): $(BINARY_PATH)"
-	@echo "Installing $(BINARY_NAME) to ~/.local/bin..."
-	@mkdir -p ~/.local/bin
-	cp $(BINARY_PATH) ~/.local/bin/
-	cp bin/pdfworker ~/.local/bin/
-	chmod +x ~/.local/bin/pdfworker
-	@echo "Installation completed: ~/.local/bin/$(BINARY_NAME)"
+# Backward-compatible alias; PDF support is included in the default pure-Go build.
+install-pdfcpu: install
+	@echo "PDF support is included in the default pure-Go build; pdfcpu is no longer required."
 
 
 # Uninstall from user's local bin directory
@@ -104,7 +93,7 @@ help:
 	@echo "  dev      - Build development version with race detection"
 	@echo "  run      - Build and run with help"
 	@echo "  install  - Install to ~/.local/bin"
-	@echo "  install-pdfcpu - Build with tag 'pdfcpu' and install"
+	@echo "  install-pdfcpu - Alias for install (PDF support is built in)"
 	@echo "  uninstall- Remove from ~/.local/bin"
 	@echo "  help     - Show this help"
 

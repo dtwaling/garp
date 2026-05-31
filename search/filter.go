@@ -6,8 +6,10 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,16 +18,14 @@ import (
 
 	"github.com/richardlehane/mscfb"
 
-	"golang.org/x/sys/unix"
-
 	"garp/config"
 )
 
 // Regex cache for word matching - prevents MustCompile on every call
 var (
-	wordRegexCache    = make(map[string]*regexp.Regexp)
-	wordRegexCacheMu  sync.RWMutex
-	wordCacheMaxSize  = 256
+	wordRegexCache   = make(map[string]*regexp.Regexp)
+	wordRegexCacheMu sync.RWMutex
+	wordCacheMaxSize = 256
 	// Note: whitespaceRegex is defined in cleaner.go (same package)
 )
 
@@ -270,14 +270,13 @@ func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
 	}
 	relSlash := filepath.ToSlash(rel)
 	for _, pattern := range pathScope {
-		if matched, err := filepath.Match(pattern, relSlash); err == nil && matched {
+		pattern = normalizePathScopePattern(pattern, walkRoot)
+		matchPattern, matchRel := normalizePathScopeMatchPair(pattern, relSlash)
+		if pathScopePatternMatches(matchPattern, matchRel) {
 			return true
 		}
-		if !strings.ContainsAny(pattern, "*?") {
-			prefix := strings.TrimRight(pattern, "/")
-			if prefix != "" && (relSlash == prefix || strings.HasPrefix(relSlash, prefix+"/")) {
-				return true
-			}
+		if scopePatternMatchesDirPrefix(matchPattern, matchRel) {
+			return true
 		}
 	}
 	return false
@@ -306,9 +305,19 @@ func dirCouldMatchPathScope(absDir, walkRoot string, pathScope []string) bool {
 		return true // root always traversed
 	}
 	for _, pattern := range pathScope {
+		pattern = normalizePathScopePattern(pattern, walkRoot)
+		matchPattern, matchRel := normalizePathScopeMatchPair(pattern, relSlash)
+		literalPrefix := pathScopeLiteralPrefix(matchPattern)
+		if literalPrefix != "" &&
+			matchRel != literalPrefix &&
+			!strings.HasPrefix(matchRel, literalPrefix+"/") &&
+			!strings.HasPrefix(literalPrefix, matchRel+"/") {
+			continue
+		}
+
 		// Pattern contains wildcards -- can't safely prune based on dir name alone;
 		// wildcards like "*" or "*/foo/*" could match any depth. Allow traversal.
-		if strings.ContainsAny(pattern, "*?") {
+		if strings.ContainsAny(matchPattern, "*?") {
 			return true
 		}
 		// Literal pattern: prune only if dir is provably outside all patterns.
@@ -316,14 +325,161 @@ func dirCouldMatchPathScope(absDir, walkRoot string, pathScope []string) bool {
 		//   a) dir IS the pattern prefix (e.g. dir="audio2midi", pattern="audio2midi/dsp.py")
 		//   b) dir is a component of pattern (e.g. dir="docs", pattern="docs/plans")
 		//   c) pattern is a prefix of dir (e.g. dir="audio2midi/sub", pattern="audio2midi")
-		prefix := strings.TrimRight(pattern, "/")
+		prefix := strings.TrimRight(matchPattern, "/")
 		if prefix == "" {
 			continue
 		}
-		if relSlash == prefix ||
-			strings.HasPrefix(relSlash, prefix+"/") ||
-			strings.HasPrefix(prefix, relSlash+"/") {
+		if matchRel == prefix ||
+			strings.HasPrefix(matchRel, prefix+"/") ||
+			strings.HasPrefix(prefix, matchRel+"/") {
 			return true
+		}
+	}
+	return false
+}
+
+func normalizePathScopePattern(pattern, walkRoot string) string {
+	pattern = stripMatchingQuotes(strings.TrimSpace(pattern))
+	pattern = strings.ReplaceAll(pattern, "\\", "/")
+	if pattern == "" {
+		return pattern
+	}
+
+	nativePattern := filepath.FromSlash(pattern)
+	if filepath.IsAbs(nativePattern) {
+		if rel, err := filepath.Rel(walkRoot, nativePattern); err == nil {
+			if relSlash := filepath.ToSlash(rel); relSlash != "." && !strings.HasPrefix(relSlash, "../") && relSlash != ".." {
+				return relSlash
+			}
+		}
+	}
+	return pattern
+}
+
+func normalizePathScopeMatchPair(pattern, relSlash string) (string, string) {
+	if runtime.GOOS != "windows" {
+		return pattern, relSlash
+	}
+	return strings.ToLower(pattern), strings.ToLower(relSlash)
+}
+
+func pathScopePatternMatches(pattern, relSlash string) bool {
+	if pattern == "" {
+		return false
+	}
+	if !strings.Contains(pattern, "/") {
+		if matched, err := path.Match(pattern, path.Base(relSlash)); err == nil && matched {
+			return true
+		}
+	}
+
+	patternParts := splitPathScopeParts(pattern)
+	relParts := splitPathScopeParts(relSlash)
+	return pathScopePartsMatch(patternParts, relParts)
+}
+
+func splitPathScopeParts(s string) []string {
+	s = strings.Trim(s, "/")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "/")
+}
+
+func pathScopePartsMatch(patternParts, relParts []string) bool {
+	if len(patternParts) == 0 {
+		return len(relParts) == 0
+	}
+
+	part := patternParts[0]
+	if part == "**" {
+		if pathScopePartsMatch(patternParts[1:], relParts) {
+			return true
+		}
+		for i := range relParts {
+			if pathScopePartsMatch(patternParts[1:], relParts[i+1:]) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(relParts) == 0 {
+		return false
+	}
+	matched, err := path.Match(part, relParts[0])
+	if err != nil || !matched {
+		return false
+	}
+	return pathScopePartsMatch(patternParts[1:], relParts[1:])
+}
+
+func pathScopeLiteralPrefix(pattern string) string {
+	parts := splitPathScopeParts(pattern)
+	literals := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.ContainsAny(part, "*?") {
+			break
+		}
+		literals = append(literals, part)
+	}
+	return strings.Join(literals, "/")
+}
+
+func scopePatternMatchesDirPrefix(matchPattern, matchRel string) bool {
+	if !strings.ContainsAny(matchPattern, "*?") {
+		prefix := strings.TrimRight(matchPattern, "/")
+		return prefix != "" && (matchRel == prefix || strings.HasPrefix(matchRel, prefix+"/"))
+	}
+
+	if strings.HasSuffix(matchPattern, "/*") {
+		prefix := strings.TrimSuffix(matchPattern, "/*")
+		if prefix != "" && !strings.ContainsAny(prefix, "*?") {
+			return matchRel == prefix || strings.HasPrefix(matchRel, prefix+"/")
+		}
+	}
+	return false
+}
+
+// fileTypeMatcher decides whether a walked path is in scope, given the "-g" glob list the
+// caller built (via config.BuildRipgrepFileTypes / OnlyTypeGlobs). Extension globs ("*.go")
+// match on the lowercased extension for O(1) lookup; name globs ("Dockerfile", "Dockerfile.*")
+// match case-insensitively against the base name. With no globs at all, everything is in scope.
+type fileTypeMatcher struct {
+	exts      map[string]bool
+	nameGlobs []string
+}
+
+func newFileTypeMatcher(fileTypes []string) *fileTypeMatcher {
+	m := &fileTypeMatcher{exts: make(map[string]bool)}
+	for i := 0; i < len(fileTypes); i++ {
+		if fileTypes[i] == "-g" && i+1 < len(fileTypes) {
+			i++
+			glob := fileTypes[i]
+			if strings.HasPrefix(glob, "*.") {
+				m.exts[strings.ToLower(glob[1:])] = true // ".go"
+			} else {
+				m.nameGlobs = append(m.nameGlobs, strings.ToLower(glob))
+			}
+		}
+	}
+	return m
+}
+
+// allows reports whether path passes the type filter.
+func (m *fileTypeMatcher) allows(path string) bool {
+	if len(m.exts) == 0 && len(m.nameGlobs) == 0 {
+		return true // no restriction
+	}
+	if m.exts[strings.ToLower(filepath.Ext(path))] {
+		return true
+	}
+	if len(m.nameGlobs) > 0 {
+		base := strings.ToLower(filepath.Base(path))
+		for _, g := range m.nameGlobs {
+			if ok, err := filepath.Match(g, base); err == nil && ok {
+				return true
+			}
 		}
 	}
 	return false
@@ -337,18 +493,7 @@ func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []strin
 	if walkRoot == "" {
 		walkRoot = "."
 	}
-	// Parse allowed extensions from patterns like "-g", "*.txt"
-	allowed := make(map[string]bool)
-	for i := 0; i < len(fileTypes); i++ {
-		if fileTypes[i] == "-g" && i+1 < len(fileTypes) {
-			i++
-			glob := fileTypes[i]
-			if strings.HasPrefix(glob, "*.") {
-				ext := strings.ToLower(glob[1:]) // ".txt"
-				allowed[ext] = true
-			}
-		}
-	}
+	matcher := newFileTypeMatcher(fileTypes)
 
 	absRoot, err := filepath.Abs(walkRoot)
 	if err != nil {
@@ -371,8 +516,7 @@ func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []strin
 			}
 			return nil
 		}
-		ext := strings.ToLower(filepath.Ext(path))
-		if len(allowed) > 0 && !allowed[ext] {
+		if !matcher.allows(path) {
 			return nil
 		}
 		if !matchesPathScope(path, absRoot, pathScope) {
@@ -399,18 +543,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 	if err != nil {
 		return nil, err
 	}
-	// Parse allowed extensions from patterns like "-g", "*.txt"
-	allowed := make(map[string]bool)
-	for i := 0; i < len(fileTypes); i++ {
-		if fileTypes[i] == "-g" && i+1 < len(fileTypes) {
-			i++
-			glob := fileTypes[i]
-			if strings.HasPrefix(glob, "*.") {
-				ext := strings.ToLower(glob[1:]) // ".txt"
-				allowed[ext] = true
-			}
-		}
-	}
+	matcher := newFileTypeMatcher(fileTypes)
 
 	// Precompute lowercased search word for fast ASCII whole-word scan
 	wLower := strings.ToLower(word)
@@ -439,9 +572,8 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 			return nil
 		}
 
-		// Filter by extension if provided
-		ext := strings.ToLower(filepath.Ext(path))
-		if len(allowed) > 0 && !allowed[ext] {
+		// Filter by type (extension or special name) if provided
+		if !matcher.allows(path) {
 			return nil
 		}
 
@@ -449,7 +581,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 		if !matchesPathScope(path, absRoot, pathScope) {
 			return nil
 		}
-		if heavy[ext] {
+		if heavy[strings.ToLower(filepath.Ext(path))] {
 			// include heavy binary types as candidates; full check later
 			matches = append(matches, path)
 			return nil
@@ -464,7 +596,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 		}
 
 		f, openErr := os.Open(path)
-		_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
+		_ = adviseSequential(f)
 		if openErr != nil {
 			return nil
 		}
@@ -476,7 +608,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 			if found {
 				matches = append(matches, path)
 			}
-			_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+			_ = adviseDontNeed(f)
 			_ = f.Close()
 			return nil
 		}
@@ -521,7 +653,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 		if found {
 			matches = append(matches, path)
 		}
-		_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+		_ = adviseDontNeed(f)
 		_ = f.Close()
 		return nil
 	})
@@ -546,18 +678,7 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 	if err != nil {
 		return nil, err
 	}
-	// Parse allowed extensions from patterns like "-g", "*.txt"
-	allowed := make(map[string]bool)
-	for i := 0; i < len(fileTypes); i++ {
-		if fileTypes[i] == "-g" && i+1 < len(fileTypes) {
-			i++
-			glob := fileTypes[i]
-			if strings.HasPrefix(glob, "*.") {
-				ext := strings.ToLower(glob[1:]) // ".txt"
-				allowed[ext] = true
-			}
-		}
-	}
+	matcher := newFileTypeMatcher(fileTypes)
 
 	// Emit initial progress with unknown total
 	if onProgress != nil {
@@ -613,7 +734,7 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 				maybePaceForMemory()
 
 				f, openErr := os.Open(p)
-				_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
+				_ = adviseSequential(f)
 				if openErr != nil {
 					continue
 				}
@@ -621,7 +742,7 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 				// Early path for small files: read whole file at once, avoid chunk loop
 				if st, stErr := f.Stat(); stErr == nil && st.Size() <= chunkSize {
 					data, _ := io.ReadAll(f)
-					_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+					_ = adviseDontNeed(f)
 					_ = f.Close()
 
 					found := asciiIndexWholeWordCI(data, []byte(primaryLower))
@@ -671,7 +792,7 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 					}
 				}
 
-				_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+				_ = adviseDontNeed(f)
 				_ = f.Close()
 
 				if found || (!found && readTotal >= maxBytes) {
@@ -702,10 +823,10 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 			return nil
 		}
 
-		ext := strings.ToLower(filepath.Ext(path))
-		if len(allowed) > 0 && !allowed[ext] {
+		if !matcher.allows(path) {
 			return nil
 		}
+		ext := strings.ToLower(filepath.Ext(path))
 
 		// Filter by pathScope if provided
 		if !matchesPathScope(path, absRoot, pathScope) {
@@ -769,7 +890,7 @@ func StreamContainsAllWordsDecided(filePath string, words []string) (found bool,
 		return true, true
 	}
 	f, err := os.Open(filePath)
-	_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
+	_ = adviseSequential(f)
 	if err != nil {
 		return false, true
 	}
@@ -818,7 +939,7 @@ func StreamContainsAllWordsDecided(filePath string, words []string) (found bool,
 		maybePaceForMemory()
 		if total >= maxBytes {
 			// Budget reached; we couldn't decide conclusively
-			_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+			_ = adviseDontNeed(f)
 			return false, false
 		}
 		toRead := chunkSize
@@ -833,7 +954,7 @@ func StreamContainsAllWordsDecided(filePath string, words []string) (found bool,
 					foundFlags[i] = true
 					remaining--
 					if remaining == 0 {
-						_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+						_ = adviseDontNeed(f)
 						return true, true
 					}
 				}
@@ -851,12 +972,12 @@ func StreamContainsAllWordsDecided(filePath string, words []string) (found bool,
 		}
 		if rErr == io.EOF {
 			// End of file; if not all found, the decision is conclusive
-			_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+			_ = adviseDontNeed(f)
 			return false, true
 		}
 		if rErr != nil {
 			// I/O error; treat as decided false
-			_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+			_ = adviseDontNeed(f)
 			return false, true
 		}
 	}
@@ -876,7 +997,7 @@ func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBy
 		return true, true
 	}
 	f, err := os.Open(filePath)
-	_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
+	_ = adviseSequential(f)
 	if err != nil {
 		return false, true
 	}
@@ -928,7 +1049,7 @@ func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBy
 	for {
 		maybePaceForMemory()
 		if total >= maxBytes {
-			_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+			_ = adviseDontNeed(f)
 			if !capped {
 				// We reached the end of file without finding all terms
 				return false, true // decided miss
@@ -947,7 +1068,7 @@ func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBy
 					foundFlags[i] = true
 					remaining--
 					if remaining == 0 {
-						_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+						_ = adviseDontNeed(f)
 						return true, true
 					}
 				}
@@ -964,11 +1085,11 @@ func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBy
 			total += int64(n)
 		}
 		if rErr == io.EOF {
-			_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+			_ = adviseDontNeed(f)
 			return false, true // EOF: conclusively not all present
 		}
 		if rErr != nil {
-			_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+			_ = adviseDontNeed(f)
 			return false, true // I/O error: treat as decided false
 		}
 	}
@@ -1004,7 +1125,7 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 		// If we can conclusively determine absence at EOF: return (false, true)
 		// Otherwise (errors, missing entries, or cap reached): return (false, false)
 		f, err := os.Open(filePath)
-		_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
+		_ = adviseSequential(f)
 		if err != nil {
 			return false, false
 		}
@@ -1127,7 +1248,7 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 		// - If all words are conclusively found within a capped budget: (true, true)
 		// - Otherwise: (false, false) — undecided (never mark as conclusively absent)
 		f, err := os.Open(filePath)
-		_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
+		_ = adviseSequential(f)
 		if err != nil {
 			return false, false
 		}
@@ -1220,8 +1341,8 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 		return false, false
 
 	case ".pdf":
-		// DISABLED: PDF scanning completely disabled to prevent system hangs
-		// Always return undecided so PDFs proceed to extraction phase safely
+		// PDF prefilter stays undecided; the pure-Go PDF extractor performs
+		// the authoritative text extraction under the engine's timeout guard.
 		return false, false
 	default:
 		// For other types, leave decision to the main path.
@@ -1240,8 +1361,14 @@ func CheckFileContainsAllWords(filePath string, words []string, distance int, si
 	if err != nil {
 		return false, err
 	}
-	// Clean the content so matching aligns with excerpt generation
-	return CheckTextContainsAllWords(CleanContent(content), words, distance), nil
+	// Clean the content so matching aligns with excerpt generation. Code files use the
+	// minimal code-safe cleaner so markup/operator stripping can't drop a real match
+	// (e.g. a term adjacent to "<?php", "->", or inside a "TList<T>" generic).
+	cleaned := CleanContent(content)
+	if config.IsCodeFile(filePath) {
+		cleaned = CleanContentCode(content)
+	}
+	return CheckTextContainsAllWords(cleaned, words, distance), nil
 }
 
 // CheckFileContainsExcludeWords checks if a file contains any exclude words
@@ -1251,7 +1378,7 @@ func CheckFileContainsExcludeWords(filePath string, excludeWords []string) (bool
 	}
 
 	file, err := os.Open(filePath)
-	_ = unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
+	_ = adviseSequential(file)
 	if err != nil {
 		return false, err
 	}
@@ -1293,7 +1420,7 @@ func CheckFileContainsExcludeWords(filePath string, excludeWords []string) (bool
 // GetFileContent reads and returns file content with size limits
 func GetFileContent(filePath string) (string, int64, error) {
 	file, err := os.Open(filePath)
-	_ = unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
+	_ = adviseSequential(file)
 	if err != nil {
 		return "", 0, err
 	}
@@ -1343,7 +1470,7 @@ func StreamContainsWord(filePath string, word string) bool {
 	re := getWordRegex(pattern)
 
 	f, err := os.Open(filePath)
-	_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_SEQUENTIAL)
+	_ = adviseSequential(f)
 	if err != nil {
 		return false
 	}
@@ -1383,7 +1510,7 @@ func StreamContainsWord(filePath string, word string) bool {
 		if n > 0 {
 			combined := append(prev, buf[:n]...)
 			if re.Match(combined) {
-				_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+				_ = adviseDontNeed(f)
 				return true
 			}
 			if n >= overlap {
@@ -1404,7 +1531,7 @@ func StreamContainsWord(filePath string, word string) bool {
 			break
 		}
 	}
-	_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+	_ = adviseDontNeed(f)
 	return false
 }
 

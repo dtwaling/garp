@@ -5,13 +5,15 @@ package app
 // parseArguments directly.
 
 import (
+	"path/filepath"
 	"testing"
 )
 
 func TestParseArguments_StartDir_Accepted(t *testing.T) {
 	args := parseArguments([]string{"foo", "--startdir", "/home/user/project", "bar"})
-	if args.StartDir != "/home/user/project" {
-		t.Errorf("expected StartDir=/home/user/project, got %q", args.StartDir)
+	expected := filepath.Clean("/home/user/project")
+	if args.StartDir != expected {
+		t.Errorf("expected StartDir=%q, got %q", expected, args.StartDir)
 	}
 	if len(args.SearchWords) != 2 {
 		t.Errorf("expected 2 search words, got %v", args.SearchWords)
@@ -100,7 +102,8 @@ func TestParseArguments_BothFlags_WorkTogether(t *testing.T) {
 		"--pathscope", "*/backend/*/Assembly",
 		"--code",
 	})
-	if args.StartDir != "/home/user/project" {
+	expectedStartDir := filepath.Clean("/home/user/project")
+	if args.StartDir != expectedStartDir {
 		t.Errorf("unexpected StartDir: %q", args.StartDir)
 	}
 	if len(args.PathScope) != 1 || args.PathScope[0] != "*/backend/*/Assembly" {

@@ -41,7 +41,7 @@ func ValidateStartDir(raw string) (string, error) {
 // all rejected.
 var pathScopeRejectedChars = []string{
 	"[", "]", "{", "}", "|", ";", "&", "$", "`",
-	">", "<", "\n", "\r", "(", ")", "^", "+", "\\",
+	">", "<", "\n", "\r", "(", ")", "^", "+",
 }
 
 // ValidatePathScope validates and parses a --pathscope argument.
@@ -59,10 +59,12 @@ func ValidatePathScope(raw string) ([]string, error) {
 	if raw == "" {
 		return nil, nil
 	}
+	raw = stripMatchingQuotes(strings.TrimSpace(raw))
 	parts := strings.Split(raw, ",")
 	result := make([]string, 0, len(parts))
 	for _, p := range parts {
-		seg := strings.TrimSpace(p)
+		seg := stripMatchingQuotes(strings.TrimSpace(p))
+		seg = strings.ReplaceAll(seg, "\\", "/")
 		if seg == "" {
 			continue
 		}
@@ -82,4 +84,16 @@ func ValidatePathScope(raw string) ([]string, error) {
 		return nil, nil
 	}
 	return result, nil
+}
+
+func stripMatchingQuotes(s string) string {
+	if len(s) < 2 {
+		return s
+	}
+	first := s[0]
+	last := s[len(s)-1]
+	if (first == '\'' && last == '\'') || (first == '"' && last == '"') {
+		return strings.TrimSpace(s[1 : len(s)-1])
+	}
+	return s
 }

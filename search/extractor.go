@@ -215,9 +215,7 @@ func (r *ExtractorRegistry) registerBuiltIns() {
 	// Other
 	r.extractors["rtf"] = &RTFExtractor{}
 	r.extractors["doc"] = &DOCExtractor{}
-
-	// PDFs DISABLED: Removed PDF extractor to prevent system hangs
-	// r.extractors["pdf"] = &PDFExtractor{}
+	r.extractors["pdf"] = &PDFExtractor{}
 }
 
 // IsBinaryFormat checks if a file extension requires text extraction
@@ -450,16 +448,8 @@ func (e *PDFExtractor) ExtractText(data []byte) (out string, err error) {
 		return out, nil
 	}
 
-	// Try plain text extraction first; fallback to per-page scan
-	if plain, gerr := reader.GetPlainText(); gerr == nil {
-		pb, _ := io.ReadAll(plain)
-		s := strings.TrimSpace(string(pb))
-		if s != "" {
-			return s, nil
-		}
-	}
-
-	// Extract text page-by-page with panic protection for each page.
+	// Extract positioned text page-by-page. GetPlainText can collapse adjacent
+	// PDF text runs together, which breaks whole-word matching.
 	for i := 1; i <= pages; i++ {
 		func() {
 			defer func() { _ = recover() }()
@@ -468,19 +458,71 @@ func (e *PDFExtractor) ExtractText(data []byte) (out string, err error) {
 				return
 			}
 			content := page.Content()
-			for _, item := range content.Text {
-				b.WriteString(item.S)
-				b.WriteString(" ")
+			pageText := pdfTextItemsToString(content.Text)
+			if pageText != "" {
+				b.WriteString(pageText)
+				b.WriteString("\n")
 			}
-			b.WriteString("\n")
 		}()
 	}
 
 	extracted := strings.TrimSpace(b.String())
-	if extracted == "" {
-		return out, nil
+	if extracted != "" {
+		return extracted, nil
 	}
-	return extracted, nil
+
+	// Fallback to the library's plain text path if positioned text is empty.
+	if plain, gerr := reader.GetPlainText(); gerr == nil {
+		pb, _ := io.ReadAll(plain)
+		s := strings.TrimSpace(string(pb))
+		if s != "" {
+			return s, nil
+		}
+	}
+	return out, nil
+}
+
+func pdfTextItemsToString(items []pdf.Text) string {
+	if len(items) == 0 {
+		return ""
+	}
+	text := append([]pdf.Text(nil), items...)
+	sort.Sort(pdf.TextVertical(text))
+
+	var b strings.Builder
+	var prev pdf.Text
+	havePrev := false
+	for _, item := range text {
+		s := strings.TrimSpace(item.S)
+		if s == "" {
+			continue
+		}
+		if havePrev {
+			lineThreshold := item.FontSize * 0.5
+			if lineThreshold < 2 {
+				lineThreshold = 2
+			}
+			if absFloat(item.Y-prev.Y) > lineThreshold {
+				b.WriteByte('\n')
+			} else {
+				gap := item.X - (prev.X + prev.W)
+				if gap > item.FontSize*0.25 {
+					b.WriteByte(' ')
+				}
+			}
+		}
+		b.WriteString(s)
+		prev = item
+		havePrev = true
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func absFloat(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // PDFContainsAllWordsNoDistance quickly checks if ALL words appear anywhere in the PDF

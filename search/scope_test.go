@@ -176,6 +176,70 @@ func TestValidatePathScope_MultipleSegments(t *testing.T) {
 	}
 }
 
+func TestValidatePathScope_NormalizesWindowsSeparators(t *testing.T) {
+	got, err := search.ValidatePathScope(`backend\Assembly,tests\*`)
+	if err != nil {
+		t.Fatalf("unexpected error for Windows separators: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 segments, got %d: %v", len(got), got)
+	}
+	if got[0] != "backend/Assembly" {
+		t.Errorf("expected first segment to normalize to backend/Assembly, got %q", got[0])
+	}
+	if got[1] != "tests/*" {
+		t.Errorf("expected second segment to normalize to tests/*, got %q", got[1])
+	}
+}
+
+func TestValidatePathScope_AllowsGlobstar(t *testing.T) {
+	got, err := search.ValidatePathScope(`app\Http\**\*Controller.php,**\*.pdf`)
+	if err != nil {
+		t.Fatalf("unexpected error for globstar pathscope: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 segments, got %d: %v", len(got), got)
+	}
+	if got[0] != "app/Http/**/*Controller.php" {
+		t.Errorf("expected first globstar segment to normalize, got %q", got[0])
+	}
+	if got[1] != "**/*.pdf" {
+		t.Errorf("expected second globstar segment to normalize, got %q", got[1])
+	}
+}
+
+func TestValidatePathScope_StripsQuotesAroundCommaSeparatedValue(t *testing.T) {
+	got, err := search.ValidatePathScope(`'app\Http\**\*.php,app\**\*Controller.php'`)
+	if err != nil {
+		t.Fatalf("unexpected error for quoted comma-separated pathscope: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 segments, got %d: %v", len(got), got)
+	}
+	if got[0] != "app/Http/**/*.php" {
+		t.Errorf("expected first segment app/Http/**/*.php, got %q", got[0])
+	}
+	if got[1] != "app/**/*Controller.php" {
+		t.Errorf("expected second segment app/**/*Controller.php, got %q", got[1])
+	}
+}
+
+func TestValidatePathScope_StripsAccidentalShellQuotes(t *testing.T) {
+	got, err := search.ValidatePathScope(`'app\Http\*',"database\migrations"`)
+	if err != nil {
+		t.Fatalf("unexpected error for quoted Windows separators: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 segments, got %d: %v", len(got), got)
+	}
+	if got[0] != "app/Http/*" {
+		t.Errorf("expected first segment to normalize to app/Http/*, got %q", got[0])
+	}
+	if got[1] != "database/migrations" {
+		t.Errorf("expected second segment to normalize to database/migrations, got %q", got[1])
+	}
+}
+
 func TestValidatePathScope_TrimsWhitespace(t *testing.T) {
 	got, err := search.ValidatePathScope("  */backend/* ,  tests/*  ")
 	if err != nil {
