@@ -253,15 +253,18 @@ type FileInfo struct {
 }
 
 // matchesPathScope returns true if the file path (relative to walkRoot) matches
-// at least one pattern in pathScope. If pathScope is empty, all files match.
+// at least one pattern in normScope. If normScope is empty, all files match.
 // Patterns use filepath.Match semantics (simple globs: * and ? only).
 // The comparison uses forward-slash paths for cross-platform consistency.
 //
 // Directory-prefix shorthand: a pattern with no wildcards that ends in "/" (or
 // a bare dir name) is treated as a prefix match so "audio2midi/" matches any
 // file under audio2midi/ at any depth.
-func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
-	if len(pathScope) == 0 {
+//
+// normScope must already be run through normalizePathScopePatterns -- the
+// per-pattern normalization is hoisted out of this per-entry hot path.
+func matchesPathScope(absPath, walkRoot string, normScope []string) bool {
+	if len(normScope) == 0 {
 		return true
 	}
 	rel, err := filepath.Rel(walkRoot, absPath)
@@ -269,8 +272,7 @@ func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
 		return false
 	}
 	relSlash := filepath.ToSlash(rel)
-	for _, pattern := range pathScope {
-		pattern = normalizePathScopePattern(pattern, walkRoot)
+	for _, pattern := range normScope {
 		matchPattern, matchRel := normalizePathScopeMatchPair(pattern, relSlash)
 		if pathScopePatternMatches(matchPattern, matchRel) {
 			return true
@@ -291,9 +293,10 @@ func matchesPathScope(absPath, walkRoot string, pathScope []string) bool {
 //  2. Has a wildcard that could span into this dir (e.g. pattern "*/foo/*" can match dirs at any level)
 //  3. Is a bare wildcard pattern like "*" or "**"
 //
-// When pathScope is empty (no restriction) all dirs are traversed.
-func dirCouldMatchPathScope(absDir, walkRoot string, pathScope []string) bool {
-	if len(pathScope) == 0 {
+// When normScope is empty (no restriction) all dirs are traversed.
+// normScope must already be run through normalizePathScopePatterns.
+func dirCouldMatchPathScope(absDir, walkRoot string, normScope []string) bool {
+	if len(normScope) == 0 {
 		return true
 	}
 	rel, err := filepath.Rel(walkRoot, absDir)
@@ -304,8 +307,7 @@ func dirCouldMatchPathScope(absDir, walkRoot string, pathScope []string) bool {
 	if relSlash == "." {
 		return true // root always traversed
 	}
-	for _, pattern := range pathScope {
-		pattern = normalizePathScopePattern(pattern, walkRoot)
+	for _, pattern := range normScope {
 		matchPattern, matchRel := normalizePathScopeMatchPair(pattern, relSlash)
 		literalPrefix := pathScopeLiteralPrefix(matchPattern)
 		if literalPrefix != "" &&
@@ -336,6 +338,20 @@ func dirCouldMatchPathScope(absDir, walkRoot string, pathScope []string) bool {
 		}
 	}
 	return false
+}
+
+// normalizePathScopePatterns normalizes every pattern once, before the walk, so
+// the per-file/per-directory matchers don't repeat this pure (pattern, walkRoot)
+// work on the hot path. Returns nil for an empty scope.
+func normalizePathScopePatterns(pathScope []string, walkRoot string) []string {
+	if len(pathScope) == 0 {
+		return nil
+	}
+	out := make([]string, len(pathScope))
+	for i, p := range pathScope {
+		out[i] = normalizePathScopePattern(p, walkRoot)
+	}
+	return out
 }
 
 func normalizePathScopePattern(pattern, walkRoot string) string {
@@ -499,6 +515,7 @@ func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []strin
 	if err != nil {
 		return 0, err
 	}
+	normScope := normalizePathScopePatterns(pathScope, absRoot)
 
 	count := 0
 	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
@@ -511,7 +528,7 @@ func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []strin
 				return filepath.SkipDir
 			}
 			// Prune entire subtree if no pathScope pattern can match anything under it.
-			if len(pathScope) > 0 && !dirCouldMatchPathScope(path, absRoot, pathScope) {
+			if len(normScope) > 0 && !dirCouldMatchPathScope(path, absRoot, normScope) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -519,7 +536,7 @@ func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []strin
 		if !matcher.allows(path) {
 			return nil
 		}
-		if !matchesPathScope(path, absRoot, pathScope) {
+		if !matchesPathScope(path, absRoot, normScope) {
 			return nil
 		}
 		count++
@@ -544,6 +561,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 		return nil, err
 	}
 	matcher := newFileTypeMatcher(fileTypes)
+	normScope := normalizePathScopePatterns(pathScope, absRoot)
 
 	// Precompute lowercased search word for fast ASCII whole-word scan
 	wLower := strings.ToLower(word)
@@ -566,7 +584,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 				return filepath.SkipDir
 			}
 			// Prune entire subtree if no pathScope pattern can match anything under it.
-			if len(pathScope) > 0 && !dirCouldMatchPathScope(path, absRoot, pathScope) {
+			if len(normScope) > 0 && !dirCouldMatchPathScope(path, absRoot, normScope) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -578,7 +596,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 		}
 
 		// Filter by pathScope if provided
-		if !matchesPathScope(path, absRoot, pathScope) {
+		if !matchesPathScope(path, absRoot, normScope) {
 			return nil
 		}
 		if heavy[strings.ToLower(filepath.Ext(path))] {
@@ -679,6 +697,7 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 		return nil, err
 	}
 	matcher := newFileTypeMatcher(fileTypes)
+	normScope := normalizePathScopePatterns(pathScope, absRoot)
 
 	// Emit initial progress with unknown total
 	if onProgress != nil {
@@ -769,7 +788,7 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 					}
 					n, rErr := f.Read(buf[:toRead])
 					if n > 0 {
-						combined := append(prev, buf[:toRead]...)
+						combined := append(prev, buf[:n]...)
 						if asciiIndexWholeWordCI(combined, []byte(primaryLower)) {
 							found = true
 						}
@@ -817,7 +836,7 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 				return filepath.SkipDir
 			}
 			// Prune entire subtree if no pathScope pattern can match anything under it.
-			if len(pathScope) > 0 && !dirCouldMatchPathScope(path, absRoot, pathScope) {
+			if len(normScope) > 0 && !dirCouldMatchPathScope(path, absRoot, normScope) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -829,7 +848,7 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 		ext := strings.ToLower(filepath.Ext(path))
 
 		// Filter by pathScope if provided
-		if !matchesPathScope(path, absRoot, pathScope) {
+		if !matchesPathScope(path, absRoot, normScope) {
 			return nil
 		}
 
@@ -1448,97 +1467,6 @@ func GetFileContent(filePath string) (string, int64, error) {
 	}
 
 	return string(content), stat.Size(), nil
-}
-
-// FormatFileSize formats file size in human readable format
-func FormatFileSize(size int64) string {
-	const unit = 1024
-	if size < unit {
-		return strconv.FormatInt(size, 10) + " B"
-	}
-	div, exp := int64(unit), 0
-	for n := size / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return strconv.FormatFloat(float64(size)/float64(div), 'f', 1, 64) + " " + "KMGTPE"[exp:exp+1] + "B"
-}
-
-// StreamContainsWord checks if a file contains a given word using streaming read
-func StreamContainsWord(filePath string, word string) bool {
-	pattern := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(word))
-	re := getWordRegex(pattern)
-
-	f, err := os.Open(filePath)
-	_ = adviseSequential(f)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-
-	const chunkSize = 64 * 1024
-	const overlap = 128
-
-	// Compute maxBytes consistent with GetFileContent limits
-	stat, statErr := f.Stat()
-	var maxBytes int64
-	if statErr == nil {
-		switch {
-		case stat.Size() > 50*1024*1024:
-			maxBytes = 10 * 1024 * 1024
-		case stat.Size() > 10*1024*1024:
-			maxBytes = 5 * 1024 * 1024
-		default:
-			maxBytes = stat.Size()
-		}
-	} else {
-		// Fallback to previous hard cap if stat fails
-		maxBytes = 10 * 1024 * 1024
-	}
-	var total int64
-	prev := make([]byte, 0, overlap)
-	buf := make([]byte, chunkSize)
-	for {
-		if total >= maxBytes {
-			break
-		}
-		toRead := chunkSize
-		if rem := maxBytes - total; rem < int64(toRead) {
-			toRead = int(rem)
-		}
-		n, rErr := f.Read(buf[:toRead])
-		if n > 0 {
-			combined := append(prev, buf[:n]...)
-			if re.Match(combined) {
-				_ = adviseDontNeed(f)
-				return true
-			}
-			if n >= overlap {
-				prev = append(prev[:0], buf[n-overlap:n]...)
-			} else {
-				if len(combined) >= overlap {
-					prev = append(prev[:0], combined[len(combined)-overlap:]...)
-				} else {
-					prev = append(prev[:0], combined...)
-				}
-			}
-			total += int64(n)
-		}
-		if rErr == io.EOF {
-			break
-		}
-		if rErr != nil {
-			break
-		}
-	}
-	_ = adviseDontNeed(f)
-	return false
-}
-
-// pdfIsolatedScan is now disabled - PDFs are always treated as undecided to prevent system hangs
-func pdfIsolatedScan(filePath string, words []string) (bool, bool) {
-	// DISABLED: Always return undecided to prevent PDF library from causing system hangs
-	return false, false
 }
 
 func asciiIndexWholeWordCI(buf []byte, wordLower []byte) bool {

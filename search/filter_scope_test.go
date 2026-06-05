@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"garp/search"
@@ -65,6 +66,58 @@ func buildTestTree(t *testing.T) string {
 		}
 	}
 	return root
+}
+
+// TestFindFilesWithFirstWordProgress_MultiChunkBoundary exercises the streaming
+// (>64KiB) candidate-filter path, which previously had no coverage. The needle's
+// only occurrence straddles the 64KiB chunk boundary, so finding it requires the
+// reader's overlap+multi-read logic (the loop that carried the buf[:toRead] vs
+// buf[:n] slicing). A large non-matching file must not be reported.
+func TestFindFilesWithFirstWordProgress_MultiChunkBoundary(t *testing.T) {
+	root := t.TempDir()
+	const chunk = 64 * 1024
+
+	// big.md: a single long token fills chunk 1, a word boundary lands at the
+	// 64KiB edge, then "needlematch" straddles it, then trailing filler keeps
+	// the file multi-chunk (~73KB).
+	var b strings.Builder
+	b.Grow(80 * 1024)
+	b.WriteString(strings.Repeat("x", chunk-4)) // 65532 bytes: one big token
+	b.WriteByte(' ')                            // word boundary at offset 65532
+	b.WriteString("needlematch")                // starts at 65533, crosses 65536
+	b.WriteByte(' ')
+	b.WriteString(strings.Repeat("x", 8*1024)) // trailing filler -> 2+ chunks
+	if err := os.WriteFile(filepath.Join(root, "big.md"), []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write big.md: %v", err)
+	}
+
+	// ctrl.md: large, multi-chunk, no needle anywhere.
+	ctrl := strings.Repeat("filler ", 12000) // ~84KB
+	if err := os.WriteFile(filepath.Join(root, "ctrl.md"), []byte(ctrl), 0o644); err != nil {
+		t.Fatalf("write ctrl.md: %v", err)
+	}
+
+	files, err := search.FindFilesWithFirstWordProgress(
+		[]string{"needlematch"}, []string{"-g", "*.md"}, 2, nil, root, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var gotBig, gotCtrl bool
+	for _, f := range files {
+		switch filepath.Base(f) {
+		case "big.md":
+			gotBig = true
+		case "ctrl.md":
+			gotCtrl = true
+		}
+	}
+	if !gotBig {
+		t.Errorf("needle straddling the 64KiB boundary not found in big.md; matches=%v", files)
+	}
+	if gotCtrl {
+		t.Errorf("control file with no needle was incorrectly reported as a match")
+	}
 }
 
 // allFileTypes includes both doc and code types for tests

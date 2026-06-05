@@ -89,6 +89,22 @@ func TestOnlyTypeGlobsDockerfile(t *testing.T) {
 	}
 }
 
+func TestShouldSkipDirectory(t *testing.T) {
+	// Directories that must be pruned during the walk.
+	for _, d := range []string{".git", ".svn", "node_modules", "vendor", "__pycache__",
+		"target", "dist", ".pytest_cache", ".idea", ".vscode"} {
+		if !ShouldSkipDirectory(d) {
+			t.Errorf("ShouldSkipDirectory(%q) = false, want true", d)
+		}
+	}
+	// Dot-directories that must NOT be blanket-skipped (real config/source can live here).
+	for _, d := range []string{".config", ".local", ".github", "src", "docs", "app", "internal"} {
+		if ShouldSkipDirectory(d) {
+			t.Errorf("ShouldSkipDirectory(%q) = true, want false", d)
+		}
+	}
+}
+
 func TestYamlBothExtensionsPresent(t *testing.T) {
 	// Regression guard: both .yaml and .yml must be searchable as documents.
 	for _, ext := range []string{"yaml", "yml"} {

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -69,9 +68,6 @@ var (
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#f7768e")).
 			Bold(true)
-
-	separatorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#565f89"))
 )
 
 type model struct {
@@ -744,56 +740,11 @@ func (m model) runSearch() tea.Cmd {
 	)
 }
 
-func renderSearchTerms(searchWords, excludeWords []string, width int) string {
-	var terms []string
-	for _, w := range searchWords {
-		terms = append(terms, fmt.Sprintf("\"%s\"", w))
-	}
-	search := strings.Join(terms, " ")
-	if len(excludeWords) > 0 {
-		var excludes []string
-		for _, w := range excludeWords {
-			excludes = append(excludes, fmt.Sprintf("\"%s\"", w))
-		}
-		search += " (excluding " + strings.Join(excludes, ", ") + ")"
-	}
-	prefix := "🔍 Searching:"
-	styled := lipgloss.NewStyle().Foreground(lipgloss.Color("#e0af68"))
-	return styled.Render(wrapTextWithIndent(prefix, search, width))
-}
-
-func clipLines(text string, maxLines int) string {
-	lines := strings.Split(text, "\n")
-	if len(lines) <= maxLines {
-		return text
-	}
-	return strings.Join(lines[:maxLines], "\n") + "\n..."
-}
-
 func wrapTextWithIndent(prefix, text string, width int) string {
 	prefixWidth := lipgloss.Width(prefix)
 	indent := strings.Repeat(" ", prefixWidth)
 	wrapped := lipgloss.NewStyle().Width(width - prefixWidth).Render(text)
 	return prefix + strings.ReplaceAll(wrapped, "\n", "\n"+indent)
-}
-
-func runeLen(s string) int {
-	return utf8.RuneCountInString(s)
-}
-
-func buildDynamicExcerpt(content string, searchTerms []string, maxLen int) string {
-	// Simplified excerpt building
-	return content[:min(maxLen, len(content))]
-}
-
-func highlightTermsANSI(text string, searchTerms []string) string {
-	const hi = "\033[1;31m" // bold red
-	const nc = "\033[0m"
-	result := text
-	for _, term := range searchTerms {
-		result = strings.ReplaceAll(result, term, hi+term+nc)
-	}
-	return result
 }
 
 func (m model) memUsageTick() tea.Cmd {
@@ -856,13 +807,6 @@ func formatBytes(b uint64) string {
 
 func formatFileSize(size int64) string {
 	return formatBytes(uint64(size))
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // Messages for TUI updates

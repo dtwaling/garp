@@ -361,11 +361,17 @@ type jsonQuery struct {
 
 // runJSON executes the search without the TUI and writes a JSON document to stdout.
 // Errors go to stderr as plain text; the exit code is non-zero on failure.
-func runJSON(args *Arguments) int {
-	fileTypes := config.BuildRipgrepFileTypes(args.IncludeCode)
-	if args.OnlyType != "" {
-		fileTypes = config.OnlyTypeGlobs(args.OnlyType)
+// buildFileTypes returns the ripgrep-style -g globs for a search: a single
+// --only type when given, otherwise the document (and optionally code) set.
+func buildFileTypes(includeCode bool, onlyType string) []string {
+	if onlyType != "" {
+		return config.OnlyTypeGlobs(onlyType)
 	}
+	return config.BuildRipgrepFileTypes(includeCode)
+}
+
+func runJSON(args *Arguments) int {
+	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
 	se := search.NewSearchEngineWithWorkers(
 		args.SearchWords,
 		args.ExcludeWords,
@@ -445,10 +451,7 @@ func runJSON(args *Arguments) int {
 // Zero matches produces a single "NO RESULTS" line.
 // Errors go to stderr with no ANSI color.
 func runPlain(args *Arguments) int {
-	fileTypes := config.BuildRipgrepFileTypes(args.IncludeCode)
-	if args.OnlyType != "" {
-		fileTypes = config.OnlyTypeGlobs(args.OnlyType)
-	}
+	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
 	se := search.NewSearchEngineWithWorkers(
 		args.SearchWords,
 		args.ExcludeWords,
@@ -535,10 +538,7 @@ func Run() int {
 	// Preflight: automatic safe mode for single-word scans over huge file counts
 	// Reduce internal parallelism to protect system memory/page cache without requiring flags.
 	if len(args.SearchWords) == 1 {
-		fileTypes := config.BuildRipgrepFileTypes(args.IncludeCode)
-		if args.OnlyType != "" {
-			fileTypes = config.OnlyTypeGlobs(args.OnlyType)
-		}
+		fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
 		if total, err := search.GetDocumentFileCount(fileTypes, "", nil); err == nil {
 			// Threshold tuned for very large trees to avoid cache blowouts on single-term scans
 			const hugeSingleWordThreshold = 200000

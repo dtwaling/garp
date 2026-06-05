@@ -26,9 +26,6 @@ var (
 	controlCharRegex = regexp.MustCompile(`[\x00-\x1f\x7f-\x9f]`)
 	whitespaceRegex  = regexp.MustCompile(`\s+`)
 
-	// Lines with too many special characters (likely markup remnants)
-	junkLineRegex = regexp.MustCompile(`^[^a-zA-Z]*$|^[{}[\]();:=<>|\\]{3,}`)
-
 	// Junk divider lines with excessive =, #, -, or _
 	junkSymbolsRegex = regexp.MustCompile(`(?m)^\s*[-_=#]{5,}\s*$`)
 
@@ -722,68 +719,12 @@ func chunkText(text string, chunkSize int) []string {
 	return chunks
 }
 
-// isObviousJunk determines if a line is obviously just markup/noise - less strict than isJunkLine
-func isObviousJunk(line string) bool {
-	// Skip email headers
-	if emailHeaderRegex.MatchString(line) {
-		return true
-	}
-
-	// Skip lines that are ONLY special characters
-	if junkLineRegex.MatchString(line) {
-		return true
-	}
-
-	// If line has at least some letters, keep it
-	letterCount := 0
-	for _, r := range line {
-		if unicode.IsLetter(r) {
-			letterCount++
-		}
-	}
-
-	// Only reject if there are no letters at all
-	return letterCount == 0
-}
-
-// isJunkLine determines if a line is likely noise/markup
-func isJunkLine(line string) bool {
-	// Skip email headers
-	if emailHeaderRegex.MatchString(line) {
-		return true
-	}
-
-	// Skip lines that are mostly special characters
-	if junkLineRegex.MatchString(line) {
-		return true
-	}
-
-	// Count special characters vs letters
-	specialCount := 0
-	letterCount := 0
-
-	for _, r := range line {
-		if unicode.IsLetter(r) {
-			letterCount++
-		} else if unicode.IsPunct(r) || unicode.IsSymbol(r) {
-			specialCount++
-		}
-	}
-
-	// If more than 60% special characters, consider it junk
-	if letterCount > 0 && float64(specialCount)/float64(letterCount) > 0.6 {
-		return true
-	}
-
-	return false
-}
-
 // containsWholeWord checks if text contains a whole word (case insensitive, plural-aware)
 func containsWholeWord(text, word string) bool {
-	// Match base, base+s, or base+es
-	pattern := fmt.Sprintf(`\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(word))
-	regex := regexp.MustCompile(`(?i)` + pattern)
-	return regex.MatchString(text)
+	// Match base, base+s, or base+es. getWordRegex caches the compiled pattern so
+	// this stays cheap when called per-file across many exclude words.
+	pattern := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(word))
+	return getWordRegex(pattern).MatchString(text)
 }
 
 // HighlightTerms highlights search terms in text with color codes (plural-aware)
@@ -793,38 +734,12 @@ func HighlightTerms(text string, searchTerms []string) string {
 
 	result := text
 	for _, term := range searchTerms {
-		// Highlight base, base+s, or base+es as whole words
-		pattern := fmt.Sprintf(`\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(term))
-		regex := regexp.MustCompile(`(?i)` + pattern)
-		result = regex.ReplaceAllStringFunc(result, func(match string) string {
+		// Highlight base, base+s, or base+es as whole words (cached compile).
+		pattern := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(term))
+		result = getWordRegex(pattern).ReplaceAllStringFunc(result, func(match string) string {
 			return HI + match + NC
 		})
 	}
 
 	return result
-}
-
-// hasLetters checks if a string contains any letters
-func hasLetters(text string) bool {
-	for _, r := range text {
-		if unicode.IsLetter(r) {
-			return true
-		}
-	}
-	return false
-}
-
-// Helper functions
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

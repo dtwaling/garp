@@ -6,7 +6,8 @@ GO_FILES=$(shell find . -name "*.go" -type f)
 
 # Version embedding
 VERSION=0.8
-LDFLAGS=-X garp/app.version=$(VERSION)
+# -s -w strip the symbol table and DWARF debug info (~29% smaller binary).
+LDFLAGS=-s -w -X garp/app.version=$(VERSION)
 
 # Default target
 all: build
@@ -17,7 +18,7 @@ build: $(BINARY_PATH)
 $(BINARY_PATH): $(GO_FILES) Makefile
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p bin
-	go build -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) .
+	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) .
 	@echo "Build completed: $(BINARY_PATH)"
 
 # Clean build artifacts

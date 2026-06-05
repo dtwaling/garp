@@ -19,6 +19,21 @@ import (
 // clamped to [240, 600] to keep the window stable.
 var ExcerptCharBudget func() int
 
+// Compiled once at load: email header extractors used to enrich .eml/.msg results.
+var (
+	emailDateRe    = regexp.MustCompile(`(?mi)^Date:\s*(.+)$`)
+	emailSubjectRe = regexp.MustCompile(`(?mi)^Subject:\s*(.+)$`)
+)
+
+// capForBinaryPrefilter returns the byte cap for the bounded streaming prefilter:
+// a smaller window for EML/MSG, a conservative default for PDFs and other binaries.
+func capForBinaryPrefilter(ext string) int64 {
+	if strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg") {
+		return 256 * 1024
+	}
+	return 1024 * 1024
+}
+
 // SearchResult represents a file that matches all search criteria
 type SearchResult struct {
 	FilePath     string
@@ -246,11 +261,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				ext := filepath.Ext(filePath)
 
 				// Bounded streaming prefilter for supported binary types.
-				// EML/MSG use a smaller cap; PDFs and others use a conservative default.
-				cap := int64(1024 * 1024)
-				if strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg") {
-					cap = int64(256 * 1024)
-				}
+				cap := capForBinaryPrefilter(ext)
 				startPF := time.Now()
 				found, decided := BinaryStreamingPrefilterDecided(filePath, se.SearchWords, cap)
 				durPF := time.Since(startPF)
@@ -329,10 +340,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 			if IsBinaryFormat(filePath) {
 				ext := filepath.Ext(filePath)
 				// Run bounded prefilter for binary types before extraction.
-				cap := int64(1024 * 1024)
-				if strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg") {
-					cap = int64(256 * 1024)
-				}
+				cap := capForBinaryPrefilter(ext)
 				foundPF, decidedPF := BinaryStreamingPrefilterDecided(filePath, []string{word}, cap)
 				// Decided negative => safe skip
 				if decidedPF && !foundPF {
@@ -523,10 +531,10 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 
 			// Best-effort email metadata for EML/MSG from raw headers (without heavy parsing)
 			if strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg") {
-				if m := regexp.MustCompile(`(?mi)^Date:\s*(.+)$`).FindStringSubmatch(rawContent); m != nil {
+				if m := emailDateRe.FindStringSubmatch(rawContent); m != nil {
 					emailDate = strings.TrimSpace(m[1])
 				}
-				if m := regexp.MustCompile(`(?mi)^Subject:\s*(.+)$`).FindStringSubmatch(rawContent); m != nil {
+				if m := emailSubjectRe.FindStringSubmatch(rawContent); m != nil {
 					emailSubject = strings.TrimSpace(m[1])
 				}
 			}
@@ -581,12 +589,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 				budget = b
 			}
 		}
-		if budget < 240 {
-			budget = 240
-		}
-		if budget > 600 {
-			budget = 600
-		}
+		budget = max(240, min(budget, 600))
 
 		// Map the character budget to a context limit for excerpt generation (roughly half).
 		SetExcerptContextLimit(budget / 2)
@@ -770,20 +773,6 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 	return results, nil
 }
 
-// GetAbsolutePath returns the absolute path for a file
-func GetAbsolutePath(filePath string) string {
-	if filepath.IsAbs(filePath) {
-		return filePath
-	}
-
-	abs, err := filepath.Abs(filePath)
-	if err != nil {
-		return filePath
-	}
-
-	return abs
-}
-
 // formatNumber formats a number with thousands separators
 func formatNumber(n int) string {
 	str := fmt.Sprintf("%d", n)
@@ -800,11 +789,6 @@ func formatNumber(n int) string {
 	}
 
 	return result.String()
-}
-
-// GetPDFStats returns PDF processing counters: processed and skipped due to budget.
-func (se *SearchEngine) GetPDFStats() (processed int64, skippedBudget int64) {
-	return atomic.LoadInt64(&se.pdfProcessed), atomic.LoadInt64(&se.pdfSkippedBudget)
 }
 
 // GetPDFStatsDetailed returns PDF counters including truncated page count for UI/metrics.

@@ -80,11 +80,15 @@ func computeExcerptLines(raw string, excerpts []string, terms []string, window i
 		}
 		re := buildWordRegexCI(tt)
 		locs := re.FindAllStringIndex(raw, -1)
-		offs := make([]int, 0, len(locs))
-		for _, l := range locs {
-			offs = append(offs, l[0])
+		offs := make([]int, len(locs))
+		for k, l := range locs {
+			offs[k] = l[0]
 		}
-		infos = append(infos, termInfo{term: tt, offsets: offs})
+		// A term with no raw occurrences can never be an anchor; skip it here so the
+		// per-excerpt loop below doesn't have to filter empty-offset entries.
+		if len(offs) > 0 {
+			infos = append(infos, termInfo{term: tt, offsets: offs})
+		}
 	}
 
 	// nearest returns the offset in offs closest to pos within window, if any.
@@ -111,9 +115,6 @@ func computeExcerptLines(raw string, excerpts []string, terms []string, window i
 		var anchor *termInfo
 		present := make([]*termInfo, 0, len(infos))
 		for j := range infos {
-			if len(infos[j].offsets) == 0 {
-				continue
-			}
 			if buildWordRegexCI(infos[j].term).MatchString(ex) {
 				present = append(present, &infos[j])
 				if anchor == nil || len(infos[j].offsets) < len(anchor.offsets) {

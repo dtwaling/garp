@@ -37,15 +37,6 @@ var CodeFilenames = []string{
 	"Containerfile", // Podman equivalent
 }
 
-// IsDocumentFile checks if a file extension is a document type
-func IsDocumentFile(filename string) bool {
-	ext := strings.ToLower(strings.TrimPrefix(getFileExtension(filename), "."))
-	if slices.Contains(DocumentTypes, ext) {
-		return true
-	}
-	return false
-}
-
 // IsCodeFile reports whether a file should be treated as source code -- by extension
 // (CodeTypes) or, for extensionless files like Dockerfiles, by name (CodeFilenames).
 // Used both to gate discovery and to pick the code-safe content cleaner.
@@ -69,65 +60,6 @@ func IsCodeFilename(filename string) bool {
 	return false
 }
 
-// GetAllSupportedTypes returns all supported file types based on includeCode flag
-func GetAllSupportedTypes(includeCode bool) []string {
-	types := make([]string, len(DocumentTypes))
-	copy(types, DocumentTypes)
-
-	if includeCode {
-		types = append(types, CodeTypes...)
-	}
-
-	return types
-}
-
-// BuildFileTypeMap creates a map for O(1) file type lookups
-func BuildFileTypeMap(includeCode bool) map[string]bool {
-	typeMap := make(map[string]bool)
-
-	// Add document types
-	for _, ext := range DocumentTypes {
-		typeMap["."+ext] = true
-	}
-
-	// Add code types if requested
-	if includeCode {
-		for _, ext := range CodeTypes {
-			typeMap["."+ext] = true
-		}
-	}
-
-	return typeMap
-}
-
-// GetEstimatedSearchTime returns time estimate based on file count
-func GetEstimatedSearchTime(fileCount int) string {
-	switch {
-	case fileCount < 100:
-		return "under 10 seconds"
-	case fileCount < 1000:
-		return "10-30 seconds"
-	case fileCount < 5000:
-		return "30 seconds - 2 minutes"
-	default:
-		return "2-10 minutes (depends on file sizes)"
-	}
-}
-
-// GetPerformanceProfile returns optimal settings based on file count
-func GetPerformanceProfile(fileCount int) (workers int, bufferSize int) {
-	switch {
-	case fileCount < 100:
-		return 2, 50 // Light workload
-	case fileCount < 1000:
-		return 4, 200 // Medium workload
-	case fileCount < 10000:
-		return 8, 500 // Heavy workload
-	default:
-		return 16, 1000 // Very heavy workload
-	}
-}
-
 // getFileExtension extracts file extension from filename
 func getFileExtension(filename string) string {
 	lastDot := strings.LastIndex(filename, ".")
@@ -137,57 +69,56 @@ func getFileExtension(filename string) string {
 	return filename[lastDot:]
 }
 
-// IsHiddenFile checks if a file should be treated as hidden
-func IsHiddenFile(filename string) bool {
-	return strings.HasPrefix(filename, ".")
+// skipDirs is the set of directory base names pruned during the tree walk. It is
+// built once at package load rather than rebuilt on every directory entry (this
+// lookup sits on the walk hot path). Note: do NOT blanket-skip all dot-directories;
+// .config, .local, etc. must still be traversed.
+var skipDirs = map[string]bool{
+	// VCS and caches
+	".git":   true,
+	".svn":   true,
+	".hg":    true,
+	".cache": true,
+
+	// Language/tool chains and local caches
+	".cargo":        true,
+	".rustup":       true,
+	".npm":          true,
+	".yarn":         true,
+	".gradle":       true,
+	".m2":           true,
+	".tox":          true,
+	".terraform":    true,
+	".terraform.d":  true,
+	".pytest_cache": true,
+	".mypy_cache":   true,
+	"__pycache__":   true,
+
+	// Browsers and large app caches
+	".mozilla":  true,
+	".chromium": true,
+
+	// IDE/project artifacts
+	".vscode":      true,
+	".idea":        true,
+	"node_modules": true,
+	"vendor":       true,
+	"target":       true,
+	"build":        true,
+	"dist":         true,
+	".next":        true,
+	".nuxt":        true,
+
+	// Misc
+	"coverage":  true,
+	"tmp":       true,
+	"temp":      true,
+	".DS_Store": true,
 }
 
-// ShouldSkipDirectory determines if a directory should be skipped during traversal
+// ShouldSkipDirectory reports whether a directory base name should be skipped
+// during traversal. Called once per directory entry on the walk hot path.
 func ShouldSkipDirectory(dirName string) bool {
-	skipDirs := map[string]bool{
-		// VCS and caches
-		".git":   true,
-		".svn":   true,
-		".hg":    true,
-		".cache": true,
-
-		// Language/tool chains and local caches
-		".cargo":        true,
-		".rustup":       true,
-		".npm":          true,
-		".yarn":         true,
-		".gradle":       true,
-		".m2":           true,
-		".tox":          true,
-		".terraform":    true,
-		".terraform.d":  true,
-		".pytest_cache": true,
-		".mypy_cache":   true,
-		"__pycache__":   true,
-
-		// Browsers and large app caches
-		".mozilla":  true,
-		".chromium": true,
-
-		// IDE/project artifacts
-		".vscode":      true,
-		".idea":        true,
-		"node_modules": true,
-		"vendor":       true,
-		"target":       true,
-		"build":        true,
-		"dist":         true,
-		".next":        true,
-		".nuxt":        true,
-
-		// Misc
-		"coverage":  true,
-		"tmp":       true,
-		"temp":      true,
-		".DS_Store": true,
-	}
-
-	// Note: do NOT blanket-skip all dot-directories; allow .config, .local, etc.
 	return skipDirs[dirName]
 }
 
@@ -258,18 +189,4 @@ func OnlyTypeGlobs(onlyType string) []string {
 		return DockerfileGlobs()
 	}
 	return []string{"-g", "*." + ext}
-}
-
-// EstimateMemoryUsage provides memory usage estimate based on file count
-func EstimateMemoryUsage(fileCount int) string {
-	switch {
-	case fileCount < 1000:
-		return "~50-100 MB"
-	case fileCount < 10000:
-		return "~100-500 MB"
-	case fileCount < 50000:
-		return "~500MB-1GB"
-	default:
-		return "~1-2GB (large dataset)"
-	}
 }

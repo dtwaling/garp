@@ -6,6 +6,7 @@
 ![License](https://img.shields.io/github/license/dtwaling/garp?color=4338ca&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-linux-4338ca?logo=linux&logoColor=white&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-macos-4338ca?logo=apple&logoColor=white&labelColor=3730a3)
+![Platform](https://img.shields.io/badge/platform-windows-4338ca?logo=windows&logoColor=white&labelColor=3730a3)
 
 ![Last Commit](https://img.shields.io/github/last-commit/dtwaling/garp?color=5b21b6&labelColor=4c1d95)
 ![Code Size](https://img.shields.io/github/languages/code-size/dtwaling/garp?color=4338ca&labelColor=3730a3)
@@ -216,6 +217,26 @@ make install          # build + copy to ~/.local/bin/garp
 make test             # run tests
 make fmt              # format
 make tidy             # go mod tidy
+```
+
+### Windows
+
+A stock Windows install has no `make`, so drive the Go toolchain directly. This
+produces `bin\garp.exe` using the same release flags as the Makefile (`-trimpath`,
+stripped symbol table + DWARF, embedded version):
+
+```powershell
+go build -trimpath -ldflags "-s -w -X garp/app.version=0.8" -o bin\garp.exe .
+go test ./...                                              # run tests
+go vet ./...                                               # vet
+```
+
+The `.exe` is git-ignored -- it's a local artifact, not committed. The tracked
+`bin/garp` is the Linux build. To cross-compile a Windows binary from Linux/macOS:
+
+```bash
+GOOS=windows GOARCH=amd64 go build -trimpath \
+  -ldflags "-s -w -X garp/app.version=0.8" -o bin/garp.exe .
 ```
 
 ## TUI navigation
