@@ -5,6 +5,8 @@ package app
 // parseArguments directly.
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -114,6 +116,56 @@ func TestParseArguments_BothFlags_WorkTogether(t *testing.T) {
 	}
 	if len(args.SearchWords) != 2 {
 		t.Errorf("expected 2 search words, got %v", args.SearchWords)
+	}
+}
+
+func TestRunJSON_PathScopeUsesPlatformSeparators(t *testing.T) {
+	root := t.TempDir()
+	buildDir := filepath.Join(root, "doc", "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatalf("mkdir build dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(buildDir, "deployment.md"),
+		[]byte("The approved parent AMI produces the shared base AMI."),
+		0o644,
+	); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	args := parseArguments([]string{
+		"ami", "parent", "base",
+		"--startdir", root,
+		"--pathscope", `doc\`,
+		"--only", "md",
+		"--distance", "200",
+		"--json",
+	})
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+	originalStdout := os.Stdout
+	os.Stdout = writer
+	code := runJSON(args)
+	_ = writer.Close()
+	os.Stdout = originalStdout
+	defer reader.Close()
+
+	if code != 0 {
+		t.Fatalf("runJSON() exit code = %d, want 0", code)
+	}
+	var out jsonOutput
+	if err := json.NewDecoder(reader).Decode(&out); err != nil {
+		t.Fatalf("decode JSON output: %v", err)
+	}
+	wantScope := filepath.FromSlash("doc/")
+	if len(out.Query.PathScope) != 1 || out.Query.PathScope[0] != wantScope {
+		t.Errorf("JSON path_scope = %v, want [%q]", out.Query.PathScope, wantScope)
+	}
+	if out.Matches != 1 {
+		t.Errorf("JSON matches = %d, want 1", out.Matches)
 	}
 }
 

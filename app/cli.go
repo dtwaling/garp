@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -359,6 +360,17 @@ type jsonQuery struct {
 	Code      bool     `json:"include_code"`
 }
 
+func nativePathScope(pathScope []string) []string {
+	if len(pathScope) == 0 {
+		return nil
+	}
+	native := make([]string, len(pathScope))
+	for i, pattern := range pathScope {
+		native[i] = filepath.FromSlash(pattern)
+	}
+	return native
+}
+
 // runJSON executes the search without the TUI and writes a JSON document to stdout.
 // Errors go to stderr as plain text; the exit code is non-zero on failure.
 // buildFileTypes returns the ripgrep-style -g globs for a search: a single
@@ -404,7 +416,7 @@ func runJSON(args *Arguments) int {
 			Terms:     args.SearchWords,
 			Excludes:  args.ExcludeWords,
 			StartDir:  args.StartDir,
-			PathScope: args.PathScope,
+			PathScope: nativePathScope(args.PathScope),
 			OnlyType:  args.OnlyType,
 			Code:      args.IncludeCode,
 		},
