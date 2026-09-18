@@ -460,6 +460,53 @@ func TestGetDocumentFileCount_PathScope_BareDir(t *testing.T) {
 	}
 }
 
+func TestSearchEngine_FindsMatchesUnderBuildDirectory(t *testing.T) {
+	root := t.TempDir()
+	buildDir := filepath.Join(root, "doc", "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatalf("mkdir build dir: %v", err)
+	}
+	for _, name := range []string{"deployment-process.md", "deployment-plan.md"} {
+		content := "The approved parent AMI produces the shared base AMI."
+		if err := os.WriteFile(filepath.Join(buildDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	tests := []struct {
+		name  string
+		scope []string
+	}{
+		{name: "unscoped"},
+		{name: "Windows-style doc scope", scope: []string{`doc\`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := search.NewSearchEngineWithWorkers(
+				[]string{"ami", "parent", "base"},
+				nil,
+				[]string{"-g", "*.md"},
+				false,
+				1,
+				1000,
+				2,
+			)
+			engine.StartDir = root
+			engine.PathScope = tt.scope
+			engine.Distance = 200
+			engine.Silent = true
+
+			results, err := engine.Execute()
+			if err != nil {
+				t.Fatalf("Execute() error: %v", err)
+			}
+			if len(results) != 2 {
+				t.Fatalf("Execute() returned %d build-directory matches, want 2", len(results))
+			}
+		})
+	}
+}
+
 // fileUnderRoot returns true if path is under (or equal to) root.
 func fileUnderRoot(path, root string) bool {
 	rel, err := filepath.Rel(root, path)

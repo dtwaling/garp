@@ -103,6 +103,11 @@ func TestShouldSkipDirectory(t *testing.T) {
 			t.Errorf("ShouldSkipDirectory(%q) = true, want false", d)
 		}
 	}
+	// "build" is also a common source-document directory (for example,
+	// docs/build). Skipping it by basename silently drops valid results.
+	if ShouldSkipDirectory("build") {
+		t.Error(`ShouldSkipDirectory("build") = true, want false`)
+	}
 }
 
 func TestYamlBothExtensionsPresent(t *testing.T) {

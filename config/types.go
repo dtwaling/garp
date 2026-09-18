@@ -104,7 +104,6 @@ var skipDirs = map[string]bool{
 	"node_modules": true,
 	"vendor":       true,
 	"target":       true,
-	"build":        true,
 	"dist":         true,
 	".next":        true,
 	".nuxt":        true,
