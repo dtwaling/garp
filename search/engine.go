@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -703,6 +704,18 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 
 		results = append(results, result)
 	}
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		if results[i].TermCount != results[j].TermCount {
+			return results[i].TermCount > results[j].TermCount
+		}
+		if results[i].SpanLength != results[j].SpanLength {
+			return results[i].SpanLength < results[j].SpanLength
+		}
+		return results[i].FilePath < results[j].FilePath
+	})
 	return results, nil
 }
 
