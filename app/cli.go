@@ -36,6 +36,8 @@ type Arguments struct {
 	FileTimeoutBinary int
 	MaxExcerpts       int
 	OnlyType          string
+	Partial           search.PartialMode
+	PartialErr        error // non-nil if --partial validation failed
 
 	// StartDir: base directory for file walks (--startdir flag).
 	// Empty string means use the current working directory.
@@ -170,6 +172,8 @@ func parseArguments(args []string) *Arguments {
 			expectPathScope = true
 		case "--smart-forms":
 			result.SmartForms = true
+		case "--partial":
+			result.Partial = search.PartialModePrefix
 		case "--plain":
 			result.PlainOutput = true
 		case "--json":
@@ -181,7 +185,18 @@ func parseArguments(args []string) *Arguments {
 			showVersion()
 			os.Exit(0)
 		default:
-			if parsingExcludes {
+			if strings.HasPrefix(a, "--partial=") {
+				switch strings.TrimPrefix(a, "--partial=") {
+				case "off":
+					result.Partial = search.PartialModeOff
+				case string(search.PartialModePrefix):
+					result.Partial = search.PartialModePrefix
+				case string(search.PartialModeContains):
+					result.Partial = search.PartialModeContains
+				default:
+					result.PartialErr = fmt.Errorf("invalid --partial mode %q; supported modes: prefix, contains, off", strings.TrimPrefix(a, "--partial="))
+				}
+			} else if parsingExcludes {
 				result.ExcludeWords = append(result.ExcludeWords, a)
 			} else {
 				result.SearchWords = append(result.SearchWords, a)
@@ -260,13 +275,16 @@ func showUsage() {
 
 	// Usage
 	fmt.Println(subHeaderStyle.Render("USAGE"))
-	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--distance N] [--max-excerpts N] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
+	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
 	fmt.Println()
 
 	// Flags
 	fmt.Println(subHeaderStyle.Render("FLAGS"))
 	fmt.Println(infoStyle.Render("  --code                  Include code files in the search"))
 	fmt.Println(infoStyle.Render("  --strict                Require all search terms to match"))
+	fmt.Println(infoStyle.Render("  --partial[=MODE]        Enable partial word matching (prefix, contains)."))
+	fmt.Println(infoStyle.Render("                          Default mode: prefix. When omitted: whole-word."))
+	fmt.Println(infoStyle.Render("                          Tip: append * to a term (e.g. deploy*) for per-term prefix."))
 	fmt.Println(infoStyle.Render("  --distance N            Proximity window in characters (default 5000)"))
 	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum non-overlapping excerpts per file (default 1, max 50)"))
 	fmt.Println(infoStyle.Render("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted)"))
@@ -404,6 +422,7 @@ func runJSON(args *Arguments) int {
 	)
 	se.Silent = true
 	se.Strict = args.Strict
+	se.Partial = args.Partial
 	if args.Distance > 0 {
 		se.Distance = args.Distance
 	}
@@ -490,6 +509,7 @@ func runPlain(args *Arguments) int {
 	)
 	se.Silent = true
 	se.Strict = args.Strict
+	se.Partial = args.Partial
 	if args.Distance > 0 {
 		se.Distance = args.Distance
 	}
@@ -546,6 +566,10 @@ func Run() int {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.PathScopeErr.Error()))
 		return 1
 	}
+	if args.PartialErr != nil {
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.PartialErr.Error()))
+		return 1
+	}
 	// Hook for matching layer: advertise smart-forms via environment (consumed by matching)
 	if args.SmartForms {
 		_ = os.Setenv("GARP_SMART_FORMS", "1")
@@ -600,6 +624,7 @@ func Run() int {
 		excludeWords:      args.ExcludeWords,
 		includeCode:       args.IncludeCode,
 		strict:            args.Strict,
+		partial:           args.Partial,
 		onlyType:          args.OnlyType,
 		distance:          args.Distance,
 		heavyConcurrency:  args.HeavyConcurrency,
