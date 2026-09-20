@@ -381,6 +381,7 @@ type jsonQuery struct {
 	Terms     []string `json:"terms"`
 	Strict    bool     `json:"strict,omitempty"`
 	Excludes  []string `json:"excludes,omitempty"`
+	Partial   string   `json:"partial,omitempty"`
 	StartDir  string   `json:"start_dir,omitempty"`
 	PathScope []string `json:"path_scope,omitempty"`
 	OnlyType  string   `json:"only_type,omitempty"`
@@ -445,6 +446,7 @@ func runJSON(args *Arguments) int {
 			Terms:     args.SearchWords,
 			Strict:    args.Strict,
 			Excludes:  args.ExcludeWords,
+			Partial:   string(args.Partial),
 			StartDir:  args.StartDir,
 			PathScope: nativePathScope(args.PathScope),
 			OnlyType:  args.OnlyType,
@@ -525,6 +527,9 @@ func runPlain(args *Arguments) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
 		return 1
+	}
+	if args.Partial != search.PartialModeOff {
+		fmt.Printf("Mode: partial (%s)\n", args.Partial)
 	}
 
 	if len(results) == 0 {
