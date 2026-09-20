@@ -163,7 +163,13 @@ func buildTermRegexCI(word string, mode PartialMode) *regexp.Regexp {
 }
 
 func buildTermRegex(base string, mode PartialMode, caseInsensitive bool) *regexp.Regexp {
-	if len(base) <= 2 {
+	isGlob := strings.HasSuffix(base, "*") && len(strings.TrimSuffix(base, "*")) > 1
+	if isGlob {
+		base = strings.TrimSuffix(base, "*")
+		if mode != PartialModeContains {
+			mode = PartialModePrefix
+		}
+	} else if len(base) <= 2 {
 		mode = PartialModeOff
 	}
 

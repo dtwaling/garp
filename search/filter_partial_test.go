@@ -108,3 +108,77 @@ func TestBuildTermRegexPrefixRejectsInternalSubstring(t *testing.T) {
 		t.Errorf("%q does not contain a capture group", re.String())
 	}
 }
+
+func TestInlineGlob(t *testing.T) {
+	tests := []struct {
+		name    string
+		word    string
+		mode    PartialMode
+		matches []string
+		rejects []string
+	}{
+		{
+			name:    "glob expands prefix while off",
+			word:    "deploy*",
+			mode:    PartialModeOff,
+			matches: []string{"deploy", "deployment", "deployed"},
+			rejects: []string{"redeploy"},
+		},
+		{
+			name:    "glob is idempotent with prefix mode",
+			word:    "deploy*",
+			mode:    PartialModePrefix,
+			matches: []string{"deploy", "deployment", "deployed"},
+			rejects: []string{"redeploy"},
+		},
+		{
+			name:    "glob cleans suffix in contains mode",
+			word:    "deploy*",
+			mode:    PartialModeContains,
+			matches: []string{"deploy", "redeploy"},
+		},
+		{
+			name:    "one character glob stays literal",
+			word:    "a*",
+			mode:    PartialModeOff,
+			rejects: []string{"a", "apple"},
+		},
+		{
+			name:    "two character glob expands prefix",
+			word:    "in*",
+			mode:    PartialModeOff,
+			matches: []string{"inside"},
+			rejects: []string{"begin"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			re := buildTermRegexLower(tt.word, tt.mode)
+			for _, text := range tt.matches {
+				if !re.MatchString(text) {
+					t.Errorf("%q did not match %q", re.String(), text)
+				}
+			}
+			for _, text := range tt.rejects {
+				if re.MatchString(text) {
+					t.Errorf("%q unexpectedly matched %q", re.String(), text)
+				}
+			}
+		})
+	}
+
+	ci := buildTermRegexCI("Deploy*", PartialModeOff)
+	if !ci.MatchString("DEPLOYMENT") {
+		t.Errorf("case-insensitive glob %q did not match DEPLOYMENT", ci.String())
+	}
+
+	glob := buildTermRegexLower("deploy*", PartialModeOff)
+	strict := buildTermRegexLower("service", PartialModeOff)
+	if !glob.MatchString("deployment") {
+		t.Error("deploy* did not match deployment in a mixed query")
+	}
+	if strict.MatchString("services_handler") {
+		t.Error("unmarked service matched services_handler in a mixed query")
+	}
+}
