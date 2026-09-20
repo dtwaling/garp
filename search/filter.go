@@ -684,6 +684,22 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 	return matches, nil
 }
 
+// heavyBinaryPrefilterTerms keeps the discovery anchor while selecting the most
+// specific secondary term for bounded heavy-binary prefiltering.
+func heavyBinaryPrefilterTerms(words []string) []string {
+	if len(words) < 3 {
+		return words
+	}
+
+	longestSecondary := words[1]
+	for _, term := range words[2:] {
+		if len(term) > len(longestSecondary) {
+			longestSecondary = term
+		}
+	}
+	return []string{words[0], longestSecondary}
+}
+
 // FindFilesWithFirstWordProgress is like FindFilesWithFirstWord but emits per-file discovery progress.
 // walkRoot specifies the directory to search from; use "" or "." for the current directory.
 // pathScope, if non-empty, restricts results to files whose relative path matches at least
@@ -705,13 +721,7 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 	}
 
 	primaryLower := strings.ToLower(words[0])
-	termsToCheck := words
-	if len(words) >= 3 {
-		terms := make([]string, len(words))
-		copy(terms, words)
-		sort.Slice(terms, func(i, j int) bool { return len(terms[i]) > len(terms[j]) })
-		termsToCheck = terms[:2]
-	}
+	termsToCheck := heavyBinaryPrefilterTerms(words)
 	heavy := map[string]bool{
 		".pdf":  true,
 		".docx": true,
@@ -1121,19 +1131,13 @@ func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBy
 //   - found = false, decided = false => inconclusive (do not skip; proceed to extraction)
 //
 // It uses the existing StreamContainsAllWordsDecidedWithCap checker and, for 3+ terms,
-// picks two longest terms as a rarity proxy to improve prefilter efficiency.
+// checks the first query term and the longest secondary term.
 func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes int64) (bool, bool) {
 	ext := strings.ToLower(filepath.Ext(filePath))
+	termsToCheck := heavyBinaryPrefilterTerms(words)
 	switch ext {
 	case ".eml", ".msg", ".mbox", ".rtf":
 		// Existing streaming prefilter for email/rtf-like formats
-		termsToCheck := words
-		if len(words) >= 3 {
-			terms := make([]string, len(words))
-			copy(terms, words)
-			sort.Slice(terms, func(i, j int) bool { return len(terms[i]) > len(terms[j]) })
-			termsToCheck = terms[:2]
-		}
 		return StreamContainsAllWordsDecidedWithCap(filePath, termsToCheck, capBytes)
 
 	case ".docx", ".odt":
@@ -1186,8 +1190,8 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 		defer rc.Close()
 
 		// Build plural/smart-forms aware whole-word regexes
-		res := make([]*regexp.Regexp, 0, len(words))
-		for _, w := range words {
+		res := make([]*regexp.Regexp, 0, len(termsToCheck))
+		for _, w := range termsToCheck {
 			w = strings.TrimSpace(w)
 			if w == "" {
 				continue
