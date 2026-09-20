@@ -677,7 +677,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 		// Highlight search terms in excerpts
 		highlightedExcerpts := make([]string, len(excerpts))
 		for i, excerpt := range excerpts {
-			highlightedExcerpts[i] = HighlightTerms(excerpt, se.SearchWords)
+			highlightedExcerpts[i] = HighlightTermsPartial(excerpt, se.SearchWords, se.Partial)
 		}
 
 		// Resolve 1-based start line per excerpt by anchoring it back to the raw content.

@@ -41,3 +41,30 @@ func TestTUIFormatting(t *testing.T) {
 		t.Errorf("TUI augmented excerpt with unmatched query term:\n%s", view)
 	}
 }
+
+func TestTUIPartialExcerptDoesNotAugmentPresentTerm(t *testing.T) {
+	lastExcerptInnerWidth = 0
+	lastContentHeight = 0
+
+	m := model{
+		results: []search.SearchResult{{
+			FilePath:     "partial.txt",
+			FileSize:     1024,
+			Score:        6,
+			TermCount:    1,
+			MatchedTerms: []string{"deploy"},
+			Excerpts:     []string{"_deployment is active."},
+			CleanContent: "_deployment is active. phantom deploy context must not be appended.",
+		}},
+		width:           200,
+		height:          60,
+		searchWords:     []string{"deploy"},
+		partial:         search.PartialModePrefix,
+		totalFiles:      1,
+		confirmSelected: "yes",
+	}
+
+	if view := m.View(); strings.Contains(view, "phantom deploy") {
+		t.Errorf("TUI augmented excerpt despite partial term already being present:\n%s", view)
+	}
+}

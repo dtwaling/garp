@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -95,6 +94,7 @@ type model struct {
 	excludeWords      []string
 	includeCode       bool
 	strict            bool
+	partial           search.PartialMode
 	onlyType          string
 	distance          int
 	heavyConcurrency  int
@@ -482,12 +482,10 @@ func (m model) View() string {
 					totalLen += len(ex)
 				}
 				if totalLen < 400 {
-					// Find missing terms (plural-aware whole-word)
+					// Find missing terms with the engine's active matching semantics.
 					missing := make([]string, 0, len(result.MatchedTerms))
 					for _, term := range result.MatchedTerms {
-						pat := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(term))
-						re := regexp.MustCompile(pat)
-						if !re.MatchString(excerpt) {
+						if search.FindTermIndexCI(excerpt, term, m.partial) == nil {
 							missing = append(missing, term)
 						}
 					}
@@ -499,9 +497,7 @@ func (m model) View() string {
 							if len(extra) >= budget {
 								break
 							}
-							pat := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(term))
-							re := regexp.MustCompile(pat)
-							loc := re.FindStringIndex(result.CleanContent)
+							loc := search.FindTermIndexCI(result.CleanContent, term, m.partial)
 							if loc != nil {
 								start := loc[0] - 120
 								if start < 0 {
@@ -519,7 +515,7 @@ func (m model) View() string {
 							}
 						}
 						if extra != "" {
-							extra = search.HighlightTerms(extra, m.searchWords)
+							extra = search.HighlightTermsPartial(extra, m.searchWords, m.partial)
 							excerpt = excerpt + "\n" + extra
 						}
 					}
@@ -643,6 +639,7 @@ func (m model) runSearch() tea.Cmd {
 	)
 	se.Silent = true
 	se.Strict = m.strict
+	se.Partial = m.partial
 	// Override default proximity window if provided
 	if m.distance > 0 {
 		se.Distance = m.distance

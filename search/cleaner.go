@@ -750,18 +750,42 @@ func containsWholeWord(text, word string) bool {
 	return getWordRegex(pattern).MatchString(text)
 }
 
-// HighlightTerms highlights search terms in text with color codes (plural-aware)
+// HighlightTerms highlights search terms in text with legacy whole-word matching.
 func HighlightTerms(text string, searchTerms []string) string {
+	return HighlightTermsPartial(text, searchTerms, PartialModeOff)
+}
+
+// HighlightTermsPartial highlights search terms without coloring left boundary
+// characters consumed by prefix-match patterns.
+func HighlightTermsPartial(text string, searchTerms []string, partial PartialMode) string {
 	const HI = "\033[1;31m" // bold red for stronger, more visible highlighting
 	const NC = "\033[0m"
 
 	result := text
 	for _, term := range searchTerms {
-		// Highlight base, base+s, or base+es as whole words (cached compile).
-		pattern := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(term))
-		result = getWordRegex(pattern).ReplaceAllStringFunc(result, func(match string) string {
-			return HI + match + NC
-		})
+		base := strings.TrimSpace(term)
+		mode := partial
+		isGlob := strings.HasSuffix(base, "*") && len(strings.TrimSuffix(base, "*")) > 1
+		if isGlob {
+			base = strings.TrimSuffix(base, "*")
+			if mode != PartialModeContains {
+				mode = PartialModePrefix
+			}
+		} else if len(base) <= 2 {
+			mode = PartialModeOff
+		}
+
+		switch mode {
+		case PartialModePrefix:
+			pattern := fmt.Sprintf(`(?i)(^|[^a-zA-Z0-9_]|_)(%s\w*)`, regexp.QuoteMeta(base))
+			result = getWordRegex(pattern).ReplaceAllString(result, "$1"+HI+"$2"+NC)
+		case PartialModeContains:
+			pattern := fmt.Sprintf(`(?i)(%s)`, regexp.QuoteMeta(base))
+			result = getWordRegex(pattern).ReplaceAllString(result, HI+"$1"+NC)
+		default:
+			pattern := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(term))
+			result = getWordRegex(pattern).ReplaceAllString(result, HI+"$0"+NC)
+		}
 	}
 
 	return result

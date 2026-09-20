@@ -162,6 +162,20 @@ func buildTermRegexCI(word string, mode PartialMode) *regexp.Regexp {
 	return buildTermRegex(base, mode, true)
 }
 
+// FindTermIndexCI returns the exact matched token range using the requested
+// partial-match mode. Prefix patterns consume their left boundary, so prefer
+// the token capture group when present.
+func FindTermIndexCI(text, term string, mode PartialMode) []int {
+	idx := buildTermRegexCI(term, mode).FindStringSubmatchIndex(text)
+	if len(idx) >= 4 && idx[2] >= 0 {
+		return []int{idx[2], idx[3]}
+	}
+	if len(idx) >= 2 {
+		return []int{idx[0], idx[1]}
+	}
+	return nil
+}
+
 func buildTermRegex(base string, mode PartialMode, caseInsensitive bool) *regexp.Regexp {
 	isGlob := strings.HasSuffix(base, "*") && len(strings.TrimSuffix(base, "*")) > 1
 	if isGlob {
