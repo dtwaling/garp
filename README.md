@@ -38,6 +38,11 @@ garp bank wire update --not .txt test
 garp approval crypto gemini --smart-forms
 garp report earnings --only pdf
 
+# Partial word matching
+garp deploy service --partial             # boundary-aware prefix: deployment, deploy_service
+garp deploy* service                      # inline glob: prefix on deploy only; service stays whole-word
+garp deploy service --partial=contains    # raw substring: redeploy, autodeploy
+
 # Three or more terms use Strategy A ranked matching by default
 garp pitch onset midi --distance 500  # ranked by term-length rarity score
 garp pitch onset midi --strict        # enforce all terms with strict AND
@@ -104,6 +109,7 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `--pathscope <patterns>` | (all) | Comma-separated directory patterns. Prunes the walk -- directories outside scope are never descended into. Trailing slash optional: `audio2midi/` and `audio2midi` both work. |
 | `--only <type>` | (all) | Search only one file type, e.g. `--only pdf` |
 | `--smart-forms` | off | Match word forms (plurals, -ing, -ed, -tion) |
+| `--partial[=MODE]` | off | Enable partial word matching. Bare `--partial` defaults to `prefix`; modes: `prefix`, `contains`, `off` |
 | `--not <excl...>` | (none) | Tokens after this flag are exclusions. Dot-prefixed = extension exclude (`.pdf`); others = word exclude |
 | `--strict` | off | Require every search term in the proximity window, including searches with three or more terms |
 | `--json` | off | Skip TUI; emit structured JSON to stdout. Preferred for MCP/agent callers |
@@ -113,6 +119,32 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `--file-timeout-binary N` | 1000 | Timeout in ms for binary extraction |
 | `--help`, `-h` | | Show help |
 | `--version`, `-v` | | Show version |
+
+### Partial word matching and inline globs
+
+By default, garp uses whole-word matching with plural support. `--partial` enables
+boundary-aware `prefix` matching, so `deploy` matches `deployment`, `deployed`,
+and `deploy_service` without matching internal substrings such as `redeploy`.
+`--partial=prefix` is equivalent to bare `--partial`.
+
+Use `--partial=contains` for raw substring matching when internal matches are
+useful: `deploy` also matches `redeploy` and `autodeploy`. Contains mode is broad,
+so prefer prefix mode for technical terms and code identifiers when possible.
+
+Append `*` to an individual query term for an inline glob. For example,
+`garp deploy* service` applies prefix matching to `deploy` while `service` remains
+whole-word matching, without enabling a global partial mode. This is useful when
+only one term needs expansion.
+
+Prefix matching supports standard punctuation plus `snake_case` and `kebab-case`
+identifier boundaries. Go's RE2 regex engine does not support zero-width
+lookbehinds, so camelCase transitions without separators, such as `autoDeploy`,
+are not recognized as prefix boundaries. Supporting those transitions requires a
+future custom scanner.
+
+Terms supplied after `--not` are always whole-word exclusions, regardless of
+`--partial` or inline globs. This prevents a broad partial query from accidentally
+filtering unrelated results.
 
 ### --json output shape
 
@@ -147,6 +179,11 @@ Each result includes ranked-match metadata. `score` is the sum of the lengths
 of the distinct matched query terms, `term_count` is their count, and
 `matched_terms` lists them in query order. Results sort by score, then term
 count, then tighter match span, then file path.
+
+When partial matching is active, the JSON query object includes
+`query.partial` with the selected mode, for example `"partial": "prefix"` or
+`"partial": "contains"`. The field is omitted when partial matching is off,
+preserving compatibility for callers that use the legacy whole-word default.
 
 Each excerpt is an object: `text` plus a 1-based `start_line`. `start_line` points at the line
 of the **earliest matched search term** in that chunk -- not necessarily the first line of the
