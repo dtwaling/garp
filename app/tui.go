@@ -94,6 +94,7 @@ type model struct {
 	searchWords       []string
 	excludeWords      []string
 	includeCode       bool
+	strict            bool
 	onlyType          string
 	distance          int
 	heavyConcurrency  int
@@ -641,6 +642,7 @@ func (m model) runSearch() tea.Cmd {
 		m.filterWorkers,
 	)
 	se.Silent = true
+	se.Strict = m.strict
 	// Override default proximity window if provided
 	if m.distance > 0 {
 		se.Distance = m.distance

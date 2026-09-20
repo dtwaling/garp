@@ -28,6 +28,7 @@ type Arguments struct {
 	SearchWords       []string
 	ExcludeWords      []string
 	IncludeCode       bool
+	Strict            bool
 	SmartForms        bool
 	Distance          int
 	HeavyConcurrency  int
@@ -147,6 +148,8 @@ func parseArguments(args []string) *Arguments {
 		switch a {
 		case "--code":
 			result.IncludeCode = true
+		case "--strict":
+			result.Strict = true
 		case "--not":
 			parsingExcludes = true
 		case "--distance", "-distance":
@@ -257,12 +260,13 @@ func showUsage() {
 
 	// Usage
 	fmt.Println(subHeaderStyle.Render("USAGE"))
-	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--distance N] [--max-excerpts N] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
+	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--distance N] [--max-excerpts N] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
 	fmt.Println()
 
 	// Flags
 	fmt.Println(subHeaderStyle.Render("FLAGS"))
 	fmt.Println(infoStyle.Render("  --code                  Include code files in the search"))
+	fmt.Println(infoStyle.Render("  --strict                Require all search terms to match"))
 	fmt.Println(infoStyle.Render("  --distance N            Proximity window in characters (default 5000)"))
 	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum non-overlapping excerpts per file (default 1, max 50)"))
 	fmt.Println(infoStyle.Render("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted)"))
@@ -394,6 +398,7 @@ func runJSON(args *Arguments) int {
 		args.FilterWorkers,
 	)
 	se.Silent = true
+	se.Strict = args.Strict
 	if args.Distance > 0 {
 		se.Distance = args.Distance
 	}
@@ -474,6 +479,7 @@ func runPlain(args *Arguments) int {
 		args.FilterWorkers,
 	)
 	se.Silent = true
+	se.Strict = args.Strict
 	if args.Distance > 0 {
 		se.Distance = args.Distance
 	}
@@ -583,6 +589,7 @@ func Run() int {
 		searchWords:       args.SearchWords,
 		excludeWords:      args.ExcludeWords,
 		includeCode:       args.IncludeCode,
+		strict:            args.Strict,
 		onlyType:          args.OnlyType,
 		distance:          args.Distance,
 		heavyConcurrency:  args.HeavyConcurrency,
