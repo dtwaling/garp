@@ -449,7 +449,7 @@ func (m model) View() string {
 	} else {
 		// Display current result
 		result := m.results[m.currentPage]
-		boxContent = fmt.Sprintf("File: %s (%s)\n\n", result.FilePath, formatFileSize(result.FileSize))
+		boxContent = fmt.Sprintf("File: %s (%s) • Score: %d (%d/%d terms)\n\n", result.FilePath, formatFileSize(result.FileSize), result.Score, result.TermCount, len(m.searchWords))
 
 		// Add email metadata if available
 		if result.EmailSubject != "" {
@@ -483,8 +483,8 @@ func (m model) View() string {
 				}
 				if totalLen < 400 {
 					// Find missing terms (plural-aware whole-word)
-					missing := make([]string, 0, len(m.searchWords))
-					for _, term := range m.searchWords {
+					missing := make([]string, 0, len(result.MatchedTerms))
+					for _, term := range result.MatchedTerms {
 						pat := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(term))
 						re := regexp.MustCompile(pat)
 						if !re.MatchString(excerpt) {
@@ -602,7 +602,7 @@ func (m model) View() string {
 			noBtn = noUn.Render("[ No ]")
 		}
 
-		cont := infoStyle.Render(fmt.Sprintf("Result [ %d / %d ] -- Continue?  ", m.currentPage+1, len(m.results))) + yesBtn + "      " + noBtn
+		cont := infoStyle.Render(fmt.Sprintf("Result [ %d / %d ] (Score %d, %d/%d terms) -- Continue?  ", m.currentPage+1, len(m.results), m.results[m.currentPage].Score, m.results[m.currentPage].TermCount, len(m.searchWords))) + yesBtn + "      " + noBtn
 		bottomStatus = cont
 	}
 
