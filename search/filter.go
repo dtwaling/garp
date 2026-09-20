@@ -29,6 +29,15 @@ var (
 	// Note: whitespaceRegex is defined in cleaner.go (same package)
 )
 
+// PartialMode controls how search terms expand beyond legacy whole-word matching.
+type PartialMode string
+
+const (
+	PartialModeOff      PartialMode = ""
+	PartialModePrefix   PartialMode = "prefix"
+	PartialModeContains PartialMode = "contains"
+)
+
 // getWordRegex returns a cached compiled regex or compiles and caches it.
 func getWordRegex(pattern string) *regexp.Regexp {
 	wordRegexCacheMu.RLock()
@@ -135,32 +144,59 @@ func smartFormsEnabled() bool {
 	return strings.EqualFold(os.Getenv("GARP_SMART_FORMS"), "1")
 }
 
-func buildWordRegexLower(word string) *regexp.Regexp {
+func buildTermRegexLower(word string, mode PartialMode) *regexp.Regexp {
 	base := strings.ToLower(strings.TrimSpace(word))
 	if base == "" {
 		// never matches; safe fallback
 		return getWordRegex(`a\A`)
 	}
-	suffix := `(?:es|s)?`
-	if smartFormsEnabled() {
-		suffix = `(?:es|s|ed|ing|al|tion|ation)?`
-	}
-	pat := fmt.Sprintf(`\b(?:%s%s)\b`, regexp.QuoteMeta(base), suffix)
-	return getWordRegex(pat)
+	return buildTermRegex(base, mode, false)
 }
 
-func buildWordRegexCI(word string) *regexp.Regexp {
+func buildTermRegexCI(word string, mode PartialMode) *regexp.Regexp {
 	base := strings.TrimSpace(word)
 	if base == "" {
 		// never matches; safe fallback
 		return getWordRegex(`a\A`)
 	}
+	return buildTermRegex(base, mode, true)
+}
+
+func buildTermRegex(base string, mode PartialMode, caseInsensitive bool) *regexp.Regexp {
+	if len(base) <= 2 {
+		mode = PartialModeOff
+	}
+
+	prefix := ""
+	if caseInsensitive {
+		prefix = "(?i)"
+	}
+
+	switch mode {
+	case PartialModePrefix:
+		pat := fmt.Sprintf(`%s(?:^|[^a-zA-Z0-9_]|_)(%s\w*)`, prefix, regexp.QuoteMeta(base))
+		return getWordRegex(pat)
+	case PartialModeContains:
+		pat := fmt.Sprintf(`%s(%s)`, prefix, regexp.QuoteMeta(base))
+		return getWordRegex(pat)
+	}
+
 	suffix := `(?:es|s)?`
 	if smartFormsEnabled() {
 		suffix = `(?:es|s|ed|ing|al|tion|ation)?`
 	}
-	pat := fmt.Sprintf(`(?i)\b(?:%s%s)\b`, regexp.QuoteMeta(base), suffix)
+	pat := fmt.Sprintf(`%s\b(?:%s%s)\b`, prefix, regexp.QuoteMeta(base), suffix)
 	return getWordRegex(pat)
+}
+
+// buildWordRegexLower preserves the legacy whole-word matcher API.
+func buildWordRegexLower(word string) *regexp.Regexp {
+	return buildTermRegexLower(word, PartialModeOff)
+}
+
+// buildWordRegexCI preserves the legacy case-insensitive whole-word matcher API.
+func buildWordRegexCI(word string) *regexp.Regexp {
+	return buildTermRegexCI(word, PartialModeOff)
 }
 
 // CheckTextContainsAllWords preserves the legacy strict-conjunction behavior.
