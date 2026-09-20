@@ -15,9 +15,9 @@
 
 </div>
 
-A high-performance, pure-Go document search tool. garp finds files containing ALL
+An agent-friendly, high-performance, pure-Go document search tool. garp finds files containing ALL
 specified terms within a proximity window and supports common document formats --
-text, email, Office, and PDF -- with pure-Go extractors and a clean TUI.
+text, email, Office, and PDF -- with pure-Go extractors and a clean JSON output.
 
 No relation to the [John Irving novel](https://en.wikipedia.org/wiki/The_World_According_to_Garp).
 More like a mispronounced "grep" that's easy to remember.
