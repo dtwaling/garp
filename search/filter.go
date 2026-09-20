@@ -163,69 +163,136 @@ func buildWordRegexCI(word string) *regexp.Regexp {
 	return getWordRegex(pat)
 }
 
+// CheckTextContainsAllWords preserves the legacy strict-conjunction behavior.
 func CheckTextContainsAllWords(text string, words []string, distance int) bool {
+	_, _, _, _, ok := CheckTextContainsRankedWords(text, words, distance, true)
+	return ok
+}
+
+// CheckTextContainsRankedWords finds the highest-scoring proximity cluster in
+// text. A score is the sum of the lengths of distinct query terms in the
+// cluster. For three or more terms, non-strict mode requires the first term
+// plus at least one secondary term; strict mode requires every term.
+func CheckTextContainsRankedWords(text string, words []string, distance int, strict bool) (score int, termCount int, matchedTerms []string, spanLen int, ok bool) {
 	if len(words) == 0 {
-		return true
+		return 0, 0, nil, 0, true
+	}
+
+	type queryTerm struct {
+		word string
+	}
+	type match struct {
+		start     int
+		end       int
+		termIndex int
+	}
+
+	// A repeated query term is one distinct term for both matching and scoring.
+	terms := make([]queryTerm, 0, len(words))
+	termIndexes := make(map[string]int, len(words))
+	for _, word := range words {
+		trimmed := strings.TrimSpace(word)
+		key := strings.ToLower(trimmed)
+		if _, exists := termIndexes[key]; exists {
+			continue
+		}
+		termIndexes[key] = len(terms)
+		terms = append(terms, queryTerm{word: trimmed})
+	}
+	if len(terms) == 0 {
+		return 0, 0, nil, 0, false
 	}
 
 	contentStr := strings.ToLower(text)
-
-	// Single-term case: just check presence quickly
-	if len(words) == 1 {
-		regex := buildWordRegexLower(words[0])
-		return regex.FindStringIndex(contentStr) != nil
-	}
-
-	// Collect positions for each word
-	type match struct {
-		pos       int
-		wordIndex int
-	}
-	var matches []match
-	for i, word := range words {
-		regex := buildWordRegexLower(word)
-		indexes := regex.FindAllStringIndex(contentStr, -1)
+	matches := make([]match, 0)
+	for i, term := range terms {
+		indexes := buildWordRegexLower(term.word).FindAllStringIndex(contentStr, -1)
 		for _, idx := range indexes {
-			matches = append(matches, match{pos: idx[0], wordIndex: i})
+			matches = append(matches, match{start: idx[0], end: idx[1], termIndex: i})
 		}
 	}
-
 	if len(matches) == 0 {
-		return false
+		return 0, 0, nil, 0, false
 	}
 
-	// Sort all matches by position
-	sort.Slice(matches, func(i, j int) bool { return matches[i].pos < matches[j].pos })
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].start != matches[j].start {
+			return matches[i].start < matches[j].start
+		}
+		if matches[i].end != matches[j].end {
+			return matches[i].end < matches[j].end
+		}
+		return matches[i].termIndex < matches[j].termIndex
+	})
 
-	// Sliding window over matches to find a window that covers all words
-	counts := make(map[int]int)
+	requiredCount := len(terms)
+	minimumCount := requiredCount
+	if !strict && requiredCount >= 3 {
+		minimumCount = 2
+	}
+
+	counts := make([]int, requiredCount)
 	covered := 0
-	required := len(words)
 	left := 0
-
+	bestSpan := 0
 	for right := 0; right < len(matches); right++ {
-		rw := matches[right].wordIndex
-		if counts[rw] == 0 {
+		termIndex := matches[right].termIndex
+		if counts[termIndex] == 0 {
 			covered++
 		}
-		counts[rw]++
+		counts[termIndex]++
 
-		// When all words covered, try to shrink from left and check distance
-		for covered == required && left <= right {
-			window := matches[right].pos - matches[left].pos
-			if window <= distance {
-				return true
-			}
-			lw := matches[left].wordIndex
-			counts[lw]--
-			if counts[lw] == 0 {
+		// Preserve the legacy distance rule: match start positions must fit in
+		// the requested window. SpanLength below additionally includes the
+		// final matched term's end for ranking ties.
+		for left <= right && matches[right].start-matches[left].start > distance {
+			leftTermIndex := matches[left].termIndex
+			counts[leftTermIndex]--
+			if counts[leftTermIndex] == 0 {
 				covered--
 			}
 			left++
 		}
+
+		// A duplicate at the left cannot improve the term set, so drop it to
+		// retain the tightest window for the current set of distinct terms.
+		for left < right && counts[matches[left].termIndex] > 1 {
+			counts[matches[left].termIndex]--
+			left++
+		}
+
+		valid := covered >= minimumCount && counts[0] > 0
+		if strict {
+			valid = covered == requiredCount
+		}
+		if !valid {
+			continue
+		}
+
+		windowScore := 0
+		windowTerms := make([]string, 0, covered)
+		for i, count := range counts {
+			if count > 0 {
+				windowScore += len(terms[i].word)
+				windowTerms = append(windowTerms, terms[i].word)
+			}
+		}
+		windowSpan := matches[right].end - matches[left].start
+		if !ok || windowScore > score ||
+			(windowScore == score && covered > termCount) ||
+			(windowScore == score && covered == termCount && windowSpan < bestSpan) {
+			score = windowScore
+			termCount = covered
+			matchedTerms = windowTerms
+			bestSpan = windowSpan
+			ok = true
+		}
 	}
 
-	return false
+	if !ok {
+		return 0, 0, nil, 0, false
+	}
+	return score, termCount, matchedTerms, bestSpan, true
 }
 
 // CheckTextContainsExcludeWords checks if extracted text contains any exclude words
