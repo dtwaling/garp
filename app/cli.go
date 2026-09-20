@@ -325,9 +325,13 @@ type jsonExcerpt struct {
 
 // jsonResult is a single file match in --json output.
 type jsonResult struct {
-	File     string        `json:"file"`
-	SizeB    int64         `json:"size_bytes"`
-	Excerpts []jsonExcerpt `json:"excerpts"`
+	File         string        `json:"file"`
+	SizeB        int64         `json:"size_bytes"`
+	Score        int           `json:"score"`
+	TermCount    int           `json:"term_count"`
+	MatchedTerms []string      `json:"matched_terms"`
+	SpanLength   int           `json:"span_length,omitempty"`
+	Excerpts     []jsonExcerpt `json:"excerpts"`
 }
 
 // excerptStartLineAt returns the start line for excerpt index i from the parallel
@@ -357,6 +361,7 @@ type jsonOutput struct {
 // jsonQuery echoes the search parameters back to the caller so the response is self-describing.
 type jsonQuery struct {
 	Terms     []string `json:"terms"`
+	Strict    bool     `json:"strict,omitempty"`
 	Excludes  []string `json:"excludes,omitempty"`
 	StartDir  string   `json:"start_dir,omitempty"`
 	PathScope []string `json:"path_scope,omitempty"`
@@ -419,6 +424,7 @@ func runJSON(args *Arguments) int {
 	out := jsonOutput{
 		Query: jsonQuery{
 			Terms:     args.SearchWords,
+			Strict:    args.Strict,
 			Excludes:  args.ExcludeWords,
 			StartDir:  args.StartDir,
 			PathScope: nativePathScope(args.PathScope),
@@ -435,9 +441,13 @@ func runJSON(args *Arguments) int {
 			excerpts[i] = jsonExcerpt{Text: ex, StartLine: excerptStartLineAt(r.StartLines, i)}
 		}
 		out.Results = append(out.Results, jsonResult{
-			File:     r.FilePath,
-			SizeB:    r.FileSize,
-			Excerpts: excerpts,
+			File:         r.FilePath,
+			SizeB:        r.FileSize,
+			Score:        r.Score,
+			TermCount:    r.TermCount,
+			MatchedTerms: r.MatchedTerms,
+			SpanLength:   r.SpanLength,
+			Excerpts:     excerpts,
 		})
 	}
 
@@ -504,7 +514,7 @@ func runPlain(args *Arguments) int {
 
 	// Use RawExcerpts (pre-highlight) -- no ANSI stripping needed.
 	for i, r := range results {
-		fmt.Printf("MATCH %d/%d\n", i+1, len(results))
+		fmt.Printf("MATCH %d/%d [Score: %d (%d/%d terms)]\n", i+1, len(results), r.Score, r.TermCount, len(args.SearchWords))
 		fmt.Printf("FILE: %s\n", r.FilePath)
 		fmt.Printf("SIZE: %d\n", r.FileSize)
 		for j, ex := range r.RawExcerpts {
