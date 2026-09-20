@@ -112,17 +112,17 @@ func CleanContentCode(content string) string {
 // ExtractMeaningfulExcerpts returns targeted, per-match snippets around each term.
 // We extract tight, local windows around each match with email-aware boundaries,
 // paragraph fallbacks, and punctuation-aware sentence ends. We avoid global scans.
-func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int) []string {
-	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, false)
+func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, targetScore int) []string {
+	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, targetScore, false)
 }
 
 // ExtractMeaningfulExcerptsCode is the code-aware variant of ExtractMeaningfulExcerpts. It uses
 // minimal, code-safe cleaning so source tokens (angle brackets, operators, PHP/markup) survive.
-func ExtractMeaningfulExcerptsCode(content string, searchTerms []string, maxExcerpts int) []string {
-	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, true)
+func ExtractMeaningfulExcerptsCode(content string, searchTerms []string, maxExcerpts int, targetScore int) []string {
+	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, targetScore, true)
 }
 
-func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, isCode bool) []string {
+func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, targetScore int, isCode bool) []string {
 	var cleaned string
 	if isCode {
 		// Minimal cleaning: preserve every code token; only normalize control chars/whitespace.
@@ -160,6 +160,9 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 	}
 	if len(termRE) == 0 {
 		return []string{}
+	}
+	if targetScore <= 0 || targetScore > len(termRE) {
+		targetScore = len(termRE)
 	}
 
 	// Clamp window for scanning sentence boundaries around each match
@@ -207,7 +210,7 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 			r := 0
 			candidates := make([]candidate, 0, maxExcerpts)
 			for l := 0; l < len(all); l++ {
-				for r < len(all) && covered < len(termRE) {
+				for r < len(all) && covered < targetScore {
 					mm := all[r]
 					if counts[mm.idx] == 0 {
 						covered++
@@ -215,7 +218,7 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 					counts[mm.idx]++
 					r++
 				}
-				if covered == len(termRE) {
+				if covered == targetScore {
 					right := all[l].end
 					for i := l; i < r; i++ {
 						if all[i].end > right {

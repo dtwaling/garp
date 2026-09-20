@@ -610,9 +610,9 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 
 		var excerpts []string
 		if isCode {
-			excerpts = ExtractMeaningfulExcerptsCode(cleanContent, se.SearchWords, maxExcerpts)
+			excerpts = ExtractMeaningfulExcerptsCode(cleanContent, se.SearchWords, maxExcerpts, match.termCount)
 		} else {
-			excerpts = ExtractMeaningfulExcerpts(cleanContent, se.SearchWords, maxExcerpts)
+			excerpts = ExtractMeaningfulExcerpts(cleanContent, se.SearchWords, maxExcerpts, match.termCount)
 		}
 
 		// If excerpts are very short (e.g., only a single terse sentence), expand the first excerpt
