@@ -641,7 +641,9 @@ func (m *fileTypeMatcher) allows(path string) bool {
 		return true
 	}
 	if len(m.nameGlobs) > 0 {
-		base := strings.ToLower(filepath.Base(path))
+		// filepath.Base only recognizes the native separator. Normalize Windows
+		// paths as well because searches can receive paths from either platform.
+		base := strings.ToLower(filepath.Base(strings.ReplaceAll(path, "\\", "/")))
 		for _, g := range m.nameGlobs {
 			if ok, err := filepath.Match(g, base); err == nil && ok {
 				return true
