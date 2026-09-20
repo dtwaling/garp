@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,12 +37,25 @@ func capForBinaryPrefilter(ext string) int64 {
 type SearchResult struct {
 	FilePath     string
 	FileSize     int64
+	Score        int      // Sum of distinct matched term lengths in the best window.
+	TermCount    int      // Number of distinct query terms in the best window.
+	MatchedTerms []string // Distinct query terms from the best window.
+	SpanLength   int      // Character span of the best window.
 	Excerpts     []string // ANSI-highlighted, for TUI display
 	RawExcerpts  []string // plain text before highlighting -- for machine-readable output (--json, --plain)
 	StartLines   []int    // 1-based start line per excerpt (parallel to RawExcerpts); 0 = unknown
 	CleanContent string
 	EmailDate    string
 	EmailSubject string
+}
+
+// candidateMatch retains ranked metadata between filtering and result building.
+type candidateMatch struct {
+	filePath     string
+	score        int
+	termCount    int
+	matchedTerms []string
+	spanLen      int
 }
 
 // ProgressFunc is an optional callback to report progress like: processed, total, path
@@ -102,6 +114,7 @@ type SearchEngine struct {
 	ExcludeWords      []string
 	FileTypes         []string
 	IncludeCode       bool
+	Strict            bool
 	Registry          *ExtractorRegistry
 	Distance          int
 	Silent            bool
@@ -188,7 +201,7 @@ func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error)
 }
 
 // FilterCandidates filters candidates for all words and excludes
-func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, startTime time.Time) ([]string, error) {
+func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, startTime time.Time) ([]candidateMatch, error) {
 	if !se.Silent {
 		fmt.Println("Filtering for files containing ALL words...")
 	}
@@ -215,7 +228,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 	}
 
 	// Results and synchronization
-	var matchingFiles []string
+	var matchingFiles []candidateMatch
 	var mu sync.Mutex
 
 	// Progress (atomic across workers)
@@ -233,22 +246,16 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 	var wg sync.WaitGroup
 
 	handleOne := func(filePath string) bool {
+		match := candidateMatch{filePath: filePath}
 		// Check for excluded extensions
 		ext := filepath.Ext(filePath)
 		if slices.Contains(extExcludes, ext) {
 			return false
 		}
 
-		// Consolidated prefilter for text files: single streaming pass on rarest-two or both terms
+		// The ranked prefilter preserves Strategy A candidates in relaxed mode.
 		if !IsBinaryFormat(filePath) && len(se.SearchWords) >= 2 {
-			termsToCheck := se.SearchWords
-			if len(se.SearchWords) >= 3 {
-				terms := make([]string, len(se.SearchWords))
-				copy(terms, se.SearchWords)
-				sort.Slice(terms, func(i, j int) bool { return len(terms[i]) > len(terms[j]) })
-				termsToCheck = terms[:2]
-			}
-			found, decided := StreamContainsAllWordsDecided(filePath, termsToCheck)
+			found, decided := StreamContainsRankedWordsDecided(filePath, se.SearchWords, se.Strict)
 			if decided && !found {
 				return false
 			}
@@ -316,7 +323,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 						}
 						return false
 					}
-					hasAllWords = CheckTextContainsAllWords(CleanContent(extractedText), se.SearchWords, se.Distance)
+					match.score, match.termCount, match.matchedTerms, match.spanLen, hasAllWords = CheckTextContainsRankedWords(CleanContent(extractedText), se.SearchWords, se.Distance, se.Strict)
 				} else {
 					if !se.Silent {
 						fmt.Printf("Warning: No extractor for %s\n", ext)
@@ -325,13 +332,14 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				}
 			} else {
 				// Text file: stream+distance
-				ok, err := CheckFileContainsAllWords(filePath, se.SearchWords, se.Distance, se.Silent)
+				score, termCount, matchedTerms, spanLen, ok, err := CheckFileContainsRankedWords(filePath, se.SearchWords, se.Distance, se.Strict, se.Silent)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
 					}
 					return false
 				}
+				match.score, match.termCount, match.matchedTerms, match.spanLen = score, termCount, matchedTerms, spanLen
 				hasAllWords = ok
 			}
 		} else {
@@ -383,7 +391,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 						}
 						return false
 					}
-					hasAllWords = CheckTextContainsAllWords(CleanContent(extractedText), []string{word}, se.Distance)
+					match.score, match.termCount, match.matchedTerms, match.spanLen, hasAllWords = CheckTextContainsRankedWords(CleanContent(extractedText), []string{word}, se.Distance, se.Strict)
 				} else {
 					if !se.Silent {
 						fmt.Printf("Warning: No extractor for %s\n", ext)
@@ -391,13 +399,14 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 					return false
 				}
 			} else {
-				ok, err := CheckFileContainsAllWords(filePath, []string{word}, se.Distance, se.Silent)
+				score, termCount, matchedTerms, spanLen, ok, err := CheckFileContainsRankedWords(filePath, []string{word}, se.Distance, se.Strict, se.Silent)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
 					}
 					return false
 				}
+				match.score, match.termCount, match.matchedTerms, match.spanLen = score, termCount, matchedTerms, spanLen
 				hasAllWords = ok
 			}
 		}
@@ -459,6 +468,9 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 			return false
 		}
 
+		mu.Lock()
+		matchingFiles = append(matchingFiles, match)
+		mu.Unlock()
 		return true
 	}
 
@@ -471,12 +483,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				maybePaceForMemory()
 				matched := handleOne(filePath)
 
-				// Append results if matched
-				if matched {
-					mu.Lock()
-					matchingFiles = append(matchingFiles, filePath)
-					mu.Unlock()
-				}
+				_ = matched
 
 				// Atomic progress update
 				cur := atomic.AddInt64(&processed, 1)
@@ -506,11 +513,12 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 }
 
 // ExtractAndBuildResults extracts content and builds search results
-func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]SearchResult, error) {
+func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) ([]SearchResult, error) {
 	results := make([]SearchResult, 0, len(matchingFiles))
 	cm := NewConcurrencyManager(se.HeavyConcurrency)
 
-	for _, filePath := range matchingFiles {
+	for _, match := range matchingFiles {
+		filePath := match.filePath
 		maybePaceForMemory()
 		var content string
 		var fileSize int64
@@ -681,6 +689,10 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []string) ([]Search
 		result := SearchResult{
 			FilePath:     filePath,
 			FileSize:     fileSize,
+			Score:        match.score,
+			TermCount:    match.termCount,
+			MatchedTerms: match.matchedTerms,
+			SpanLength:   match.spanLen,
 			Excerpts:     highlightedExcerpts,
 			RawExcerpts:  excerpts,
 			StartLines:   startLines,
