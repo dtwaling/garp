@@ -116,6 +116,7 @@ type SearchEngine struct {
 	FileTypes         []string
 	IncludeCode       bool
 	Strict            bool
+	Partial           PartialMode
 	Registry          *ExtractorRegistry
 	Distance          int
 	Silent            bool
@@ -180,11 +181,11 @@ func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error)
 	if !se.Silent {
 		fmt.Printf("Finding files with '%s'...\n", se.SearchWords[0])
 	}
-	candidateFiles, err := FindFilesWithFirstWordProgress(se.SearchWords, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
+	candidateFiles, err := FindFilesWithFirstWordProgressPartial(se.SearchWords, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
 		if se.OnProgress != nil {
 			se.OnProgress("discovery", processed, total, path)
 		}
-	}, se.StartDir, se.PathScope)
+	}, se.StartDir, se.PathScope, se.Partial)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to find files with first word: %w", err)
 	}
@@ -256,7 +257,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 
 		// The ranked prefilter preserves Strategy A candidates in relaxed mode.
 		if !IsBinaryFormat(filePath) && len(se.SearchWords) >= 2 {
-			found, decided := StreamContainsRankedWordsDecided(filePath, se.SearchWords, se.Strict)
+			found, decided := StreamContainsRankedWordsDecidedPartial(filePath, se.SearchWords, se.Strict, se.Partial)
 			if decided && !found {
 				return false
 			}
@@ -271,7 +272,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				// Bounded streaming prefilter for supported binary types.
 				cap := capForBinaryPrefilter(ext)
 				startPF := time.Now()
-				found, decided := BinaryStreamingPrefilterDecided(filePath, se.SearchWords, cap)
+				found, decided := BinaryStreamingPrefilterDecidedPartial(filePath, se.SearchWords, cap, se.Partial)
 				durPF := time.Since(startPF)
 				switch strings.ToLower(ext) {
 				case ".eml":
@@ -324,7 +325,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 						}
 						return false
 					}
-					match.score, match.termCount, match.matchedTerms, match.spanLen, hasAllWords = CheckTextContainsRankedWords(CleanContent(extractedText), se.SearchWords, se.Distance, se.Strict)
+					match.score, match.termCount, match.matchedTerms, match.spanLen, hasAllWords = CheckTextContainsRankedWordsPartial(CleanContent(extractedText), se.SearchWords, se.Distance, se.Strict, se.Partial)
 				} else {
 					if !se.Silent {
 						fmt.Printf("Warning: No extractor for %s\n", ext)
@@ -333,7 +334,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				}
 			} else {
 				// Text file: stream+distance
-				score, termCount, matchedTerms, spanLen, ok, err := CheckFileContainsRankedWords(filePath, se.SearchWords, se.Distance, se.Strict, se.Silent)
+				score, termCount, matchedTerms, spanLen, ok, err := CheckFileContainsRankedWordsPartial(filePath, se.SearchWords, se.Distance, se.Strict, se.Silent, se.Partial)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
@@ -350,7 +351,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				ext := filepath.Ext(filePath)
 				// Run bounded prefilter for binary types before extraction.
 				cap := capForBinaryPrefilter(ext)
-				foundPF, decidedPF := BinaryStreamingPrefilterDecided(filePath, []string{word}, cap)
+				foundPF, decidedPF := BinaryStreamingPrefilterDecidedPartial(filePath, []string{word}, cap, se.Partial)
 				// Decided negative => safe skip
 				if decidedPF && !foundPF {
 					return false
@@ -392,7 +393,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 						}
 						return false
 					}
-					match.score, match.termCount, match.matchedTerms, match.spanLen, hasAllWords = CheckTextContainsRankedWords(CleanContent(extractedText), []string{word}, se.Distance, se.Strict)
+					match.score, match.termCount, match.matchedTerms, match.spanLen, hasAllWords = CheckTextContainsRankedWordsPartial(CleanContent(extractedText), []string{word}, se.Distance, se.Strict, se.Partial)
 				} else {
 					if !se.Silent {
 						fmt.Printf("Warning: No extractor for %s\n", ext)
@@ -400,7 +401,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 					return false
 				}
 			} else {
-				score, termCount, matchedTerms, spanLen, ok, err := CheckFileContainsRankedWords(filePath, []string{word}, se.Distance, se.Strict, se.Silent)
+				score, termCount, matchedTerms, spanLen, ok, err := CheckFileContainsRankedWordsPartial(filePath, []string{word}, se.Distance, se.Strict, se.Silent, se.Partial)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)

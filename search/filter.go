@@ -205,9 +205,26 @@ func buildWordRegexCI(word string) *regexp.Regexp {
 	return buildTermRegexCI(word, PartialModeOff)
 }
 
+func termRegexesCI(words []string, partial PartialMode) []*regexp.Regexp {
+	res := make([]*regexp.Regexp, 0, len(words))
+	for _, word := range words {
+		word = strings.TrimSpace(word)
+		if word != "" {
+			res = append(res, buildTermRegexCI(word, partial))
+		}
+	}
+	return res
+}
+
 // CheckTextContainsAllWords preserves the legacy strict-conjunction behavior.
 func CheckTextContainsAllWords(text string, words []string, distance int) bool {
-	_, _, _, _, ok := CheckTextContainsRankedWords(text, words, distance, true)
+	return CheckTextContainsAllWordsPartial(text, words, distance, PartialModeOff)
+}
+
+// CheckTextContainsAllWordsPartial checks strict proximity conjunction using
+// the requested partial-match mode.
+func CheckTextContainsAllWordsPartial(text string, words []string, distance int, partial PartialMode) bool {
+	_, _, _, _, ok := CheckTextContainsRankedWordsPartial(text, words, distance, true, partial)
 	return ok
 }
 
@@ -216,6 +233,12 @@ func CheckTextContainsAllWords(text string, words []string, distance int) bool {
 // cluster. For three or more terms, non-strict mode requires the first term
 // plus at least one secondary term; strict mode requires every term.
 func CheckTextContainsRankedWords(text string, words []string, distance int, strict bool) (score int, termCount int, matchedTerms []string, spanLen int, ok bool) {
+	return CheckTextContainsRankedWordsPartial(text, words, distance, strict, PartialModeOff)
+}
+
+// CheckTextContainsRankedWordsPartial finds the highest-scoring proximity
+// cluster using the requested partial-match mode.
+func CheckTextContainsRankedWordsPartial(text string, words []string, distance int, strict bool, partial PartialMode) (score int, termCount int, matchedTerms []string, spanLen int, ok bool) {
 	if len(words) == 0 {
 		return 0, 0, nil, 0, true
 	}
@@ -248,9 +271,13 @@ func CheckTextContainsRankedWords(text string, words []string, distance int, str
 	contentStr := strings.ToLower(text)
 	matches := make([]match, 0)
 	for i, term := range terms {
-		indexes := buildWordRegexLower(term.word).FindAllStringIndex(contentStr, -1)
+		indexes := buildTermRegexLower(term.word, partial).FindAllStringSubmatchIndex(contentStr, -1)
 		for _, idx := range indexes {
-			matches = append(matches, match{start: idx[0], end: idx[1], termIndex: i})
+			start, end := idx[0], idx[1]
+			if len(idx) >= 4 && idx[2] >= 0 {
+				start, end = idx[2], idx[3]
+			}
+			matches = append(matches, match{start: start, end: end, termIndex: i})
 		}
 	}
 	if len(matches) == 0 {
@@ -1004,7 +1031,7 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 			default:
 				capBytes = 2 * 1024 * 1024
 			}
-			found, decided := BinaryStreamingPrefilterDecided(path, termsToCheck, capBytes)
+			found, decided := BinaryStreamingPrefilterDecidedPartial(path, termsToCheck, capBytes, partial)
 			if decided && !found {
 				return nil // safe to skip
 			}
@@ -1032,8 +1059,14 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 	return matches, nil
 }
 
-// StreamContainsAllWords streams a file and returns true if all words are present (unordered, plural-aware, CI).
+// StreamContainsAllWordsDecided streams a file and returns whether all words are present.
 func StreamContainsAllWordsDecided(filePath string, words []string) (found bool, decided bool) {
+	return StreamContainsAllWordsDecidedPartial(filePath, words, PartialModeOff)
+}
+
+// StreamContainsAllWordsDecidedPartial streams a file and checks each term
+// using the requested partial-match mode.
+func StreamContainsAllWordsDecidedPartial(filePath string, words []string, partial PartialMode) (found bool, decided bool) {
 	if len(words) == 0 {
 		return true, true
 	}
@@ -1044,15 +1077,14 @@ func StreamContainsAllWordsDecided(filePath string, words []string) (found bool,
 	}
 	defer f.Close()
 
-	// Build plural-aware whole-word regexes (?i)\b(?:word(?:es|s)?)\b
+	// Build partial-aware, case-insensitive term regexes.
 	res := make([]*regexp.Regexp, 0, len(words))
 	for _, w := range words {
 		w = strings.TrimSpace(w)
 		if w == "" {
 			continue
 		}
-		pat := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(w))
-		res = append(res, getWordRegex(pat))
+		res = append(res, buildTermRegexCI(w, partial))
 	}
 	if len(res) == 0 {
 		return true, true
@@ -1141,8 +1173,14 @@ func StreamContainsAllWords(filePath string, words []string) bool {
 // requires the primary term plus at least one secondary term; strict matching
 // requires every query term.
 func StreamContainsRankedWordsDecided(filePath string, words []string, strict bool) (found bool, decided bool) {
+	return StreamContainsRankedWordsDecidedPartial(filePath, words, strict, PartialModeOff)
+}
+
+// StreamContainsRankedWordsDecidedPartial streams a text file using the
+// requested partial-match mode before the distance check.
+func StreamContainsRankedWordsDecidedPartial(filePath string, words []string, strict bool, partial PartialMode) (found bool, decided bool) {
 	if len(words) <= 1 {
-		return StreamContainsAllWordsDecided(filePath, words)
+		return StreamContainsAllWordsDecidedPartial(filePath, words, partial)
 	}
 
 	f, err := os.Open(filePath)
@@ -1158,10 +1196,10 @@ func StreamContainsRankedWordsDecided(filePath string, words []string, strict bo
 		if word == "" {
 			continue
 		}
-		res = append(res, buildWordRegexCI(word))
+		res = append(res, buildTermRegexCI(word, partial))
 	}
 	if len(res) <= 1 {
-		return StreamContainsAllWordsDecided(filePath, words)
+		return StreamContainsAllWordsDecidedPartial(filePath, words, partial)
 	}
 
 	const chunkSize = 64 * 1024
@@ -1215,6 +1253,12 @@ func StreamContainsRankedWordsDecided(filePath string, words []string, strict bo
 // - found = false, decided = true: conclusively not all words present
 // - found = false, decided = false: budget reached; prefilter is undecided (do not skip)
 func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBytes int64) (bool, bool) {
+	return StreamContainsAllWordsDecidedWithCapPartial(filePath, words, capBytes, PartialModeOff)
+}
+
+// StreamContainsAllWordsDecidedWithCapPartial is the capped streaming
+// prefilter using the requested partial-match mode.
+func StreamContainsAllWordsDecidedWithCapPartial(filePath string, words []string, capBytes int64, partial PartialMode) (bool, bool) {
 	if len(words) == 0 {
 		return true, true
 	}
@@ -1225,15 +1269,7 @@ func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBy
 	}
 	defer f.Close()
 
-	// Build plural/smart-forms aware whole-word regexes
-	res := make([]*regexp.Regexp, 0, len(words))
-	for _, w := range words {
-		w = strings.TrimSpace(w)
-		if w == "" {
-			continue
-		}
-		res = append(res, buildWordRegexCI(w))
-	}
+	res := termRegexesCI(words, partial)
 	if len(res) == 0 {
 		return true, true
 	}
@@ -1326,12 +1362,18 @@ func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBy
 // It uses the existing StreamContainsAllWordsDecidedWithCap checker and, for 3+ terms,
 // checks the first query term and the longest secondary term.
 func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes int64) (bool, bool) {
+	return BinaryStreamingPrefilterDecidedPartial(filePath, words, capBytes, PartialModeOff)
+}
+
+// BinaryStreamingPrefilterDecidedPartial performs bounded binary prefiltering
+// with partial-aware term matchers.
+func BinaryStreamingPrefilterDecidedPartial(filePath string, words []string, capBytes int64, partial PartialMode) (bool, bool) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	termsToCheck := heavyBinaryPrefilterTerms(words)
 	switch ext {
 	case ".eml", ".msg", ".mbox", ".rtf":
 		// Existing streaming prefilter for email/rtf-like formats
-		return StreamContainsAllWordsDecidedWithCap(filePath, termsToCheck, capBytes)
+		return StreamContainsAllWordsDecidedWithCapPartial(filePath, termsToCheck, capBytes, partial)
 
 	case ".docx", ".odt":
 		// Conservative ZIP sniff + capped XML stream:
@@ -1382,15 +1424,7 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 		}
 		defer rc.Close()
 
-		// Build plural/smart-forms aware whole-word regexes
-		res := make([]*regexp.Regexp, 0, len(termsToCheck))
-		for _, w := range termsToCheck {
-			w = strings.TrimSpace(w)
-			if w == "" {
-				continue
-			}
-			res = append(res, buildWordRegexCI(w))
-		}
+		res := termRegexesCI(termsToCheck, partial)
 		if len(res) == 0 {
 			return true, true
 		}
@@ -1475,15 +1509,7 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 			return false, false
 		}
 
-		// Build plural/smart-forms aware whole-word regexes
-		res := make([]*regexp.Regexp, 0, len(words))
-		for _, w := range words {
-			w = strings.TrimSpace(w)
-			if w == "" {
-				continue
-			}
-			res = append(res, buildWordRegexCI(w))
-		}
+		res := termRegexesCI(words, partial)
 		if len(res) == 0 {
 			return true, true
 		}
@@ -1568,8 +1594,15 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 
 // CheckFileContainsAllWords checks if a file contains all search words
 func CheckFileContainsAllWords(filePath string, words []string, distance int, silent bool) (bool, error) {
+	return CheckFileContainsAllWordsPartial(filePath, words, distance, silent, PartialModeOff)
+}
+
+// CheckFileContainsAllWordsPartial checks streamed and extracted text using
+// the requested partial-match mode.
+func CheckFileContainsAllWordsPartial(filePath string, words []string, distance int, silent bool, partial PartialMode) (bool, error) {
 	// Fast prefilter: require presence of all words before full distance check
-	if !StreamContainsAllWords(filePath, words) {
+	found, decided := StreamContainsAllWordsDecidedPartial(filePath, words, partial)
+	if decided && !found {
 		return false, nil
 	}
 
@@ -1584,13 +1617,19 @@ func CheckFileContainsAllWords(filePath string, words []string, distance int, si
 	if config.IsCodeFile(filePath) {
 		cleaned = CleanContentCode(content)
 	}
-	return CheckTextContainsAllWords(cleaned, words, distance), nil
+	return CheckTextContainsAllWordsPartial(cleaned, words, distance, partial), nil
 }
 
 // CheckFileContainsRankedWords checks a text file using the ranked matching
 // semantics after a streaming candidate prefilter.
 func CheckFileContainsRankedWords(filePath string, words []string, distance int, strict bool, silent bool) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
-	found, decided := StreamContainsRankedWordsDecided(filePath, words, strict)
+	return CheckFileContainsRankedWordsPartial(filePath, words, distance, strict, silent, PartialModeOff)
+}
+
+// CheckFileContainsRankedWordsPartial checks a text file using the requested
+// partial-match mode after a streaming candidate prefilter.
+func CheckFileContainsRankedWordsPartial(filePath string, words []string, distance int, strict bool, silent bool, partial PartialMode) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
+	found, decided := StreamContainsRankedWordsDecidedPartial(filePath, words, strict, partial)
 	if decided && !found {
 		return 0, 0, nil, 0, false, nil
 	}
@@ -1603,7 +1642,7 @@ func CheckFileContainsRankedWords(filePath string, words []string, distance int,
 	if config.IsCodeFile(filePath) {
 		cleaned = CleanContentCode(content)
 	}
-	score, termCount, matchedTerms, spanLen, ok = CheckTextContainsRankedWords(cleaned, words, distance, strict)
+	score, termCount, matchedTerms, spanLen, ok = CheckTextContainsRankedWordsPartial(cleaned, words, distance, strict, partial)
 	return score, termCount, matchedTerms, spanLen, ok, nil
 }
 
