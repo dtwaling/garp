@@ -1084,6 +1084,80 @@ func StreamContainsAllWords(filePath string, words []string) bool {
 	return found
 }
 
+// StreamContainsRankedWordsDecided streams a text file and determines whether
+// it can satisfy ranked matching before the distance check. Relaxed matching
+// requires the primary term plus at least one secondary term; strict matching
+// requires every query term.
+func StreamContainsRankedWordsDecided(filePath string, words []string, strict bool) (found bool, decided bool) {
+	if len(words) <= 1 {
+		return StreamContainsAllWordsDecided(filePath, words)
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false, true
+	}
+	_ = adviseSequential(f)
+	defer f.Close()
+
+	res := make([]*regexp.Regexp, 0, len(words))
+	for _, word := range words {
+		word = strings.TrimSpace(word)
+		if word == "" {
+			continue
+		}
+		res = append(res, buildWordRegexCI(word))
+	}
+	if len(res) <= 1 {
+		return StreamContainsAllWordsDecided(filePath, words)
+	}
+
+	const chunkSize = 64 * 1024
+	const overlap = 128
+	foundFlags := make([]bool, len(res))
+	remaining := len(res)
+	var total int64
+	prev := make([]byte, 0, overlap)
+	buf := make([]byte, chunkSize)
+	for {
+		maybePaceForMemory()
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			combined := append(prev, buf[:n]...)
+			for i, re := range res {
+				if !foundFlags[i] && re.Match(combined) {
+					foundFlags[i] = true
+					remaining--
+				}
+			}
+			secondaryFound := false
+			for _, matched := range foundFlags[1:] {
+				secondaryFound = secondaryFound || matched
+			}
+			if (strict && remaining == 0) || (!strict && foundFlags[0] && secondaryFound) {
+				_ = adviseDontNeed(f)
+				return true, true
+			}
+			if n >= overlap {
+				prev = append(prev[:0], buf[n-overlap:n]...)
+			} else if len(combined) >= overlap {
+				prev = append(prev[:0], combined[len(combined)-overlap:]...)
+			} else {
+				prev = append(prev[:0], combined...)
+			}
+			total += int64(n)
+		}
+		if readErr == io.EOF {
+			_ = adviseDontNeed(f)
+			return false, true
+		}
+		if readErr != nil {
+			_ = adviseDontNeed(f)
+			return false, true
+		}
+	}
+}
+
 // StreamContainsAllWordsDecidedWithCap streams a file and returns whether all words are present.
 // - found = true, decided = true: conclusively found all words
 // - found = false, decided = true: conclusively not all words present
@@ -1459,6 +1533,26 @@ func CheckFileContainsAllWords(filePath string, words []string, distance int, si
 		cleaned = CleanContentCode(content)
 	}
 	return CheckTextContainsAllWords(cleaned, words, distance), nil
+}
+
+// CheckFileContainsRankedWords checks a text file using the ranked matching
+// semantics after a streaming candidate prefilter.
+func CheckFileContainsRankedWords(filePath string, words []string, distance int, strict bool, silent bool) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
+	found, decided := StreamContainsRankedWordsDecided(filePath, words, strict)
+	if decided && !found {
+		return 0, 0, nil, 0, false, nil
+	}
+
+	content, _, err := GetFileContent(filePath)
+	if err != nil {
+		return 0, 0, nil, 0, false, err
+	}
+	cleaned := CleanContent(content)
+	if config.IsCodeFile(filePath) {
+		cleaned = CleanContentCode(content)
+	}
+	score, termCount, matchedTerms, spanLen, ok = CheckTextContainsRankedWords(cleaned, words, distance, strict)
+	return score, termCount, matchedTerms, spanLen, ok, nil
 }
 
 // CheckFileContainsExcludeWords checks if a file contains any exclude words
