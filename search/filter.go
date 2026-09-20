@@ -662,6 +662,11 @@ func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []strin
 // pathScope, if non-empty, restricts results to files whose relative path matches at least
 // one simple glob pattern.
 func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pathScope []string) ([]string, error) {
+	return FindFilesWithFirstWordPartial(word, fileTypes, walkRoot, pathScope, PartialModeOff)
+}
+
+// FindFilesWithFirstWordPartial finds candidates using the requested Stage 1 match mode.
+func FindFilesWithFirstWordPartial(word string, fileTypes []string, walkRoot string, pathScope []string, partial PartialMode) ([]string, error) {
 	if walkRoot == "" {
 		walkRoot = "."
 	}
@@ -731,8 +736,8 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 		// Early path for small files: read whole file at once, avoid chunk loop
 		if st, stErr := f.Stat(); stErr == nil && st.Size() <= chunkSize {
 			data, _ := io.ReadAll(f)
-			found := asciiIndexWholeWordCI(data, []byte(wLower))
-			if found {
+			found := asciiIndexPartialCI(data, []byte(wLower), partial)
+			if found >= 0 {
 				matches = append(matches, path)
 			}
 			_ = adviseDontNeed(f)
@@ -755,7 +760,7 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 			n, rErr := f.Read(buf[:toRead])
 			if n > 0 {
 				combined := append(prev, buf[:n]...)
-				if asciiIndexWholeWordCI(combined, []byte(wLower)) {
+				if asciiIndexPartialCI(combined, []byte(wLower), partial) >= 0 {
 					found = true
 				}
 				if n >= overlap {
@@ -814,6 +819,11 @@ func heavyBinaryPrefilterTerms(words []string) []string {
 // pathScope, if non-empty, restricts results to files whose relative path matches at least
 // one simple glob pattern.
 func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string) ([]string, error) {
+	return FindFilesWithFirstWordProgressPartial(words, fileTypes, workers, onProgress, walkRoot, pathScope, PartialModeOff)
+}
+
+// FindFilesWithFirstWordProgressPartial emits discovery progress using partial matching.
+func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string, partial PartialMode) ([]string, error) {
 	if walkRoot == "" {
 		walkRoot = "."
 	}
@@ -883,8 +893,8 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 					_ = adviseDontNeed(f)
 					_ = f.Close()
 
-					found := asciiIndexWholeWordCI(data, []byte(primaryLower))
-					if found {
+					found := asciiIndexPartialCI(data, []byte(primaryLower), partial)
+					if found >= 0 {
 						mu.Lock()
 						matches = append(matches, p)
 						mu.Unlock()
@@ -908,7 +918,7 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 					n, rErr := f.Read(buf[:toRead])
 					if n > 0 {
 						combined := append(prev, buf[:n]...)
-						if asciiIndexWholeWordCI(combined, []byte(primaryLower)) {
+						if asciiIndexPartialCI(combined, []byte(primaryLower), partial) >= 0 {
 							found = true
 						}
 						if n >= overlap {
@@ -1677,9 +1687,24 @@ func GetFileContent(filePath string) (string, int64, error) {
 }
 
 func asciiIndexWholeWordCI(buf []byte, wordLower []byte) bool {
-	if len(wordLower) == 0 || len(buf) < len(wordLower) {
-		return false
+	return asciiIndexPartialCI(buf, wordLower, PartialModeOff) >= 0
+}
+
+// asciiIndexPartialCI returns the first ASCII case-insensitive match for wordLower.
+func asciiIndexPartialCI(buf []byte, wordLower []byte, mode PartialMode) int {
+	if len(wordLower) == 0 {
+		return -1
 	}
+	if len(wordLower) >= 3 && wordLower[len(wordLower)-1] == '*' {
+		wordLower = wordLower[:len(wordLower)-1]
+		if mode == PartialModeOff {
+			mode = PartialModePrefix
+		}
+	}
+	if len(wordLower) == 0 || len(buf) < len(wordLower) {
+		return -1
+	}
+
 	isWordChar := func(b byte) bool {
 		switch {
 		case b >= 'A' && b <= 'Z':
@@ -1702,39 +1727,39 @@ func asciiIndexWholeWordCI(buf []byte, wordLower []byte) bool {
 	wl := len(wordLower)
 	limit := len(buf) - wl
 	for i := 0; i <= limit; i++ {
-		// left boundary
-		if i > 0 && isWordChar(buf[i-1]) {
+		if mode != PartialModeContains && i > 0 && isWordChar(buf[i-1]) && (mode == PartialModeOff || buf[i-1] != '_') {
 			continue
 		}
 
-		// try exact base match
 		j := 0
 		for ; j < wl; j++ {
 			if toLower(buf[i+j]) != wordLower[j] {
 				break
 			}
 		}
-		if j == wl {
-			// check boundary after base
-			end := i + wl
-			if end >= len(buf) || !isWordChar(buf[end]) {
-				return true
+		if j != wl {
+			continue
+		}
+		if mode == PartialModeContains || mode == PartialModePrefix {
+			return i
+		}
+
+		end := i + wl
+		if end >= len(buf) || !isWordChar(buf[end]) {
+			return i
+		}
+		if end < len(buf) && toLower(buf[end]) == 's' {
+			endS := end + 1
+			if endS >= len(buf) || !isWordChar(buf[endS]) {
+				return i
 			}
-			// try 's' plural
-			if end < len(buf) && toLower(buf[end]) == 's' {
-				endS := end + 1
-				if endS >= len(buf) || !isWordChar(buf[endS]) {
-					return true
-				}
-			}
-			// try 'es' plural
-			if end+1 < len(buf) && toLower(buf[end]) == 'e' && toLower(buf[end+1]) == 's' {
-				endES := end + 2
-				if endES >= len(buf) || !isWordChar(buf[endES]) {
-					return true
-				}
+		}
+		if end+1 < len(buf) && toLower(buf[end]) == 'e' && toLower(buf[end+1]) == 's' {
+			endES := end + 2
+			if endES >= len(buf) || !isWordChar(buf[endES]) {
+				return i
 			}
 		}
 	}
-	return false
+	return -1
 }
