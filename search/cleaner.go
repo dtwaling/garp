@@ -113,16 +113,27 @@ func CleanContentCode(content string) string {
 // We extract tight, local windows around each match with email-aware boundaries,
 // paragraph fallbacks, and punctuation-aware sentence ends. We avoid global scans.
 func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, targetScore int) []string {
-	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, targetScore, false)
+	return ExtractMeaningfulExcerptsPartial(content, searchTerms, maxExcerpts, targetScore, PartialModeOff)
+}
+
+// ExtractMeaningfulExcerptsPartial returns targeted excerpts using the requested
+// term matching mode.
+func ExtractMeaningfulExcerptsPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, partial PartialMode) []string {
+	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, targetScore, false, partial)
 }
 
 // ExtractMeaningfulExcerptsCode is the code-aware variant of ExtractMeaningfulExcerpts. It uses
 // minimal, code-safe cleaning so source tokens (angle brackets, operators, PHP/markup) survive.
 func ExtractMeaningfulExcerptsCode(content string, searchTerms []string, maxExcerpts int, targetScore int) []string {
-	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, targetScore, true)
+	return ExtractMeaningfulExcerptsCodePartial(content, searchTerms, maxExcerpts, targetScore, PartialModeOff)
 }
 
-func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, targetScore int, isCode bool) []string {
+// ExtractMeaningfulExcerptsCodePartial is the code-aware partial-match variant.
+func ExtractMeaningfulExcerptsCodePartial(content string, searchTerms []string, maxExcerpts int, targetScore int, partial PartialMode) []string {
+	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, targetScore, true, partial)
+}
+
+func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, targetScore int, isCode bool, partial PartialMode) []string {
 	var cleaned string
 	if isCode {
 		// Minimal cleaning: preserve every code token; only normalize control chars/whitespace.
@@ -149,14 +160,14 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 		return []string{}
 	}
 
-	// Build regexes for each term (whole-word, case-insensitive)
+	// Build regexes for each term using the same partial-aware matcher as filtering.
 	termRE := make([]*regexp.Regexp, 0, len(searchTerms))
 	for _, t := range searchTerms {
 		tt := strings.TrimSpace(t)
 		if tt == "" {
 			continue
 		}
-		termRE = append(termRE, regexp.MustCompile(fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(tt))))
+		termRE = append(termRE, buildTermRegexCI(tt, partial))
 	}
 	if len(termRE) == 0 {
 		return []string{}
@@ -198,9 +209,10 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 		}
 		all := make([]tmatch, 0, 128)
 		for i, re := range termRE {
-			idxs := re.FindAllStringIndex(cleaned, -1)
+			idxs := re.FindAllStringSubmatchIndex(cleaned, -1)
 			for _, loc := range idxs {
-				all = append(all, tmatch{start: loc[0], end: loc[1], idx: i})
+				start, end := submatchRange(loc)
+				all = append(all, tmatch{start: start, end: end, idx: i})
 			}
 		}
 		if len(all) > 0 {
@@ -296,11 +308,12 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 						parts := make([]string, 0, len(termRE))
 						spanText := cleaned[c.left:c.right]
 						for _, re := range termRE {
-							loc := re.FindStringIndex(spanText)
+							loc := re.FindStringSubmatchIndex(spanText)
 							if loc == nil {
 								continue
 							}
-							center := c.left + loc[0] + (loc[1]-loc[0])/2
+							start, end := submatchRange(loc)
+							center := c.left + start + (end-start)/2
 							partLeft := max(0, center-perTerm/2)
 							partRight := min(len(cleaned), center+perTerm/2)
 							frag := strings.TrimSpace(cleaned[partLeft:partRight])
@@ -337,13 +350,12 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 		if len(excerpts) >= maxExcerpts {
 			break
 		}
-		locs := re.FindAllStringIndex(cleaned, 3) // up to 3 matches per term
+		locs := re.FindAllStringSubmatchIndex(cleaned, 3) // up to 3 matches per term
 		for _, loc := range locs {
 			if len(excerpts) >= maxExcerpts {
 				break
 			}
-			start := loc[0]
-			end := loc[1]
+			start, end := submatchRange(loc)
 
 			// Find local sentence boundaries with clamped scan (email-aware + punctuation)
 			left := start
@@ -471,12 +483,11 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 
 	// Fallback: find the first occurrence of any term and expand within a small window
 	for _, re := range termRE {
-		loc := re.FindStringIndex(cleaned)
+		loc := re.FindStringSubmatchIndex(cleaned)
 		if loc == nil {
 			continue
 		}
-		start := loc[0]
-		end := loc[1]
+		start, end := submatchRange(loc)
 
 		left := start
 		limitLeft := left - maxContext/2
@@ -553,6 +564,15 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 	}
 
 	return []string{}
+}
+
+// submatchRange returns the first capture group when present, preserving the
+// exact token range for boundary-aware prefix patterns.
+func submatchRange(loc []int) (int, int) {
+	if len(loc) >= 4 && loc[2] >= 0 && loc[3] >= 0 {
+		return loc[2], loc[3]
+	}
+	return loc[0], loc[1]
 }
 
 // matchInfo represents a search term match location

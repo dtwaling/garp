@@ -51,6 +51,11 @@ func (li *lineIndexer) lineOf(off int) int {
 // not invoke this for binary/extracted formats (PDF, DOCX, email) where source lines don't exist.
 // window bounds how far apart clustered terms may be (typically the search distance).
 func computeExcerptLines(raw string, excerpts []string, terms []string, window int) []int {
+	return computeExcerptLinesPartial(raw, excerpts, terms, window, PartialModeOff)
+}
+
+// computeExcerptLinesPartial anchors excerpts using the requested term matching mode.
+func computeExcerptLinesPartial(raw string, excerpts []string, terms []string, window int, partial PartialMode) []int {
 	out := make([]int, len(excerpts))
 	if raw == "" || len(excerpts) == 0 || len(terms) == 0 {
 		return out
@@ -66,8 +71,8 @@ func computeExcerptLines(raw string, excerpts []string, terms []string, window i
 
 	li := newLineIndexer(raw)
 
-	// Precompute whole-word occurrence offsets per term, using the same matcher the engine
-	// uses (case-insensitive, plural/smart-forms aware) so anchors line up with matches.
+	// Precompute occurrence offsets using the same partial-aware matcher as the engine so
+	// anchors line up with matches.
 	type termInfo struct {
 		term    string
 		offsets []int
@@ -78,11 +83,11 @@ func computeExcerptLines(raw string, excerpts []string, terms []string, window i
 		if tt == "" {
 			continue
 		}
-		re := buildWordRegexCI(tt)
-		locs := re.FindAllStringIndex(raw, -1)
+		re := buildTermRegexCI(tt, partial)
+		locs := re.FindAllStringSubmatchIndex(raw, -1)
 		offs := make([]int, len(locs))
 		for k, l := range locs {
-			offs[k] = l[0]
+			offs[k], _ = submatchRange(l)
 		}
 		// A term with no raw occurrences can never be an anchor; skip it here so the
 		// per-excerpt loop below doesn't have to filter empty-offset entries.
@@ -115,7 +120,7 @@ func computeExcerptLines(raw string, excerpts []string, terms []string, window i
 		var anchor *termInfo
 		present := make([]*termInfo, 0, len(infos))
 		for j := range infos {
-			if buildWordRegexCI(infos[j].term).MatchString(ex) {
+			if buildTermRegexCI(infos[j].term, partial).MatchString(ex) {
 				present = append(present, &infos[j])
 				if anchor == nil || len(infos[j].offsets) < len(anchor.offsets) {
 					anchor = &infos[j]

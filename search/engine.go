@@ -611,9 +611,9 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 
 		var excerpts []string
 		if isCode {
-			excerpts = ExtractMeaningfulExcerptsCode(cleanContent, se.SearchWords, maxExcerpts, match.termCount)
+			excerpts = ExtractMeaningfulExcerptsCodePartial(cleanContent, se.SearchWords, maxExcerpts, match.termCount, se.Partial)
 		} else {
-			excerpts = ExtractMeaningfulExcerpts(cleanContent, se.SearchWords, maxExcerpts, match.termCount)
+			excerpts = ExtractMeaningfulExcerptsPartial(cleanContent, se.SearchWords, maxExcerpts, match.termCount, se.Partial)
 		}
 
 		// If excerpts are very short (e.g., only a single terse sentence), expand the first excerpt
@@ -685,7 +685,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 		// email) do not, so we leave their line numbers unknown (nil/0).
 		var startLines []int
 		if !IsBinaryFormat(filePath) {
-			startLines = computeExcerptLines(content, excerpts, se.SearchWords, se.Distance)
+			startLines = computeExcerptLinesPartial(content, excerpts, se.SearchWords, se.Distance, se.Partial)
 		}
 
 		result := SearchResult{
