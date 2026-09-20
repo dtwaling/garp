@@ -51,7 +51,9 @@ func IsCodeFile(filename string) bool {
 // IsCodeFilename reports whether the file's base name matches one of the special, mostly
 // extensionless code filenames in CodeFilenames (e.g. Dockerfile, Dockerfile.prod).
 func IsCodeFilename(filename string) bool {
-	base := strings.ToLower(filepath.Base(filename))
+	// filepath.Base only recognizes the host OS separator. Normalize first so
+	// Windows paths passed to a Unix build still match Dockerfile name globs.
+	base := strings.ToLower(filepath.Base(strings.ReplaceAll(filename, "\\", "/")))
 	for _, pattern := range CodeFilenames {
 		if ok, err := filepath.Match(strings.ToLower(pattern), base); err == nil && ok {
 			return true
