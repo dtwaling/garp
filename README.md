@@ -38,6 +38,10 @@ garp bank wire update --not .txt test
 garp approval crypto gemini --smart-forms
 garp report earnings --only pdf
 
+# Three or more terms use Strategy A ranked matching by default
+garp pitch onset midi --distance 500  # ranked by term-length rarity score
+garp pitch onset midi --strict        # enforce all terms with strict AND
+
 # Scope search to specific directories (prunes the walk -- never descends outside scope)
 garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/,tests/' --code
 
@@ -48,7 +52,13 @@ garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,d
 ## Key features
 
 - Pure Go -- zero external tool dependencies
-- Multi-word AND logic, unordered, within a proximity window (default 5000 chars)
+- Unordered multi-word proximity matching within a window (default 5000 chars)
+- Strategy A ranked matching for three or more terms: finds the best proximity
+  cluster containing the first query term and at least one secondary term
+- Term-length rarity weighting: chunks matching longer domain terms rank above
+  chunks that match only short, common words
+- One- and two-term searches remain strict AND; `--strict` enforces strict AND
+  for searches with three or more terms
 - Directory-scoped search: `--startdir` sets the root, `--pathscope` prunes the walk
 - Machine-readable output: `--json` (structured envelope) and `--plain` (line-oriented)
   designed for scripting and MCP tool callers
@@ -95,6 +105,7 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `--only <type>` | (all) | Search only one file type, e.g. `--only pdf` |
 | `--smart-forms` | off | Match word forms (plurals, -ing, -ed, -tion) |
 | `--not <excl...>` | (none) | Tokens after this flag are exclusions. Dot-prefixed = extension exclude (`.pdf`); others = word exclude |
+| `--strict` | off | Require every search term in the proximity window, including searches with three or more terms |
 | `--json` | off | Skip TUI; emit structured JSON to stdout. Preferred for MCP/agent callers |
 | `--plain` | off | Skip TUI; emit plain line-oriented text to stdout. Useful for shell scripts |
 | `--workers N` | 4 | Stage 2 filter worker count |
@@ -118,6 +129,9 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
     {
       "file": "/path/to/audio2midi/dsp.py",
       "size_bytes": 15649,
+      "score": 14,
+      "term_count": 2,
+      "matched_terms": ["pitch", "frequency"],
       "excerpts": [
         {
           "text": "...clean text snippet around matched terms...",
@@ -129,12 +143,20 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 }
 ```
 
+Each result includes ranked-match metadata. `score` is the sum of the lengths
+of the distinct matched query terms, `term_count` is their count, and
+`matched_terms` lists them in query order. Results sort by score, then term
+count, then tighter match span, then file path.
+
 Each excerpt is an object: `text` plus a 1-based `start_line`. `start_line` points at the line
 of the **earliest matched search term** in that chunk -- not necessarily the first line of the
 rendered `text` (the excerpt window pads a little context around the match and collapses newlines
 into one line). In practice this is what you want: it lands you on the match. Line numbers are
 present for text/code files and omitted for binary/extracted formats (PDF, DOCX, email) that have
 no stable source lines. The plain (`--plain`) output prefixes each excerpt with `[L<start>]` when known.
+Each plain result begins with `MATCH X/Y [Score: S (T/N terms)]`, where `X/Y`
+is the result position and total, `S` is the score, `T` is the matched-term
+count, and `N` is the total query-term count.
 
 `matches` is always present as a top-level integer so callers can zero-check without
 iterating `results`. Errors go to stderr; check exit code before parsing stdout as JSON.
@@ -254,8 +276,12 @@ GOOS=windows GOARCH=amd64 go build -trimpath \
 ## FAQ
 
 **How does multi-word matching work?**
-Unordered AND within a proximity window. All terms must appear within `--distance`
-characters of each other (default 5000) somewhere in the file.
+One- and two-term searches use unordered strict AND within a proximity window:
+all terms must appear within `--distance` characters of each other (default
+5000) somewhere in the file. Searches with three or more terms use Strategy A
+ranked matching by default: a result needs the first query term plus at least
+one secondary term, and the best clusters rank by term-length rarity score.
+Pass `--strict` to require all terms for any search size.
 
 **Does `--pathscope` filter results or restrict the walk?**
 It restricts the walk. Directories outside the scope are pruned at directory-entry
