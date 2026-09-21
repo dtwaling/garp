@@ -109,6 +109,99 @@ func CleanContentCode(content string) string {
 	return strings.TrimSpace(content)
 }
 
+// excerptSpan is one emitted chunk: its final text plus the [left, right)
+// half-open span it occupies in the cleaned string.
+type excerptSpan struct {
+	text  string
+	left  int
+	right int
+}
+
+func excerptSpanTexts(spans []excerptSpan) []string {
+	excerpts := make([]string, len(spans))
+	for i, span := range spans {
+		excerpts[i] = span.text
+	}
+	return excerpts
+}
+
+// expandToBoundaries widens [left, right) around the match span to sentence,
+// paragraph, or email-header boundaries within the maxContext scan clamp.
+func expandToBoundaries(cleaned string, left, right, maxContext int) (int, int) {
+	matchLeft, matchRight := left, right
+	limitLeft := left - maxContext/2
+	if limitLeft < 0 {
+		limitLeft = 0
+	}
+	// Expand left until punctuation or email header boundary.
+	for left > limitLeft {
+		if cleaned[left] == '.' || cleaned[left] == '!' || cleaned[left] == '?' {
+			break
+		}
+		// Stop at email header lines (From:, To:, Subject:, Date:, etc.).
+		if cleaned[left] == '\n' {
+			ls := left + 1
+			le := ls
+			for le < len(cleaned) && cleaned[le] != '\n' && le-ls < 128 {
+				le++
+			}
+			if ls < len(cleaned) && emailHeaderRegex.MatchString(cleaned[ls:le]) {
+				break
+			}
+		}
+		left--
+	}
+	if left > 0 && (cleaned[left] == '.' || cleaned[left] == '!' || cleaned[left] == '?') {
+		left++
+	} else if left <= limitLeft {
+		// Paragraph fallback: last blank line in window.
+		if idx := strings.LastIndex(cleaned[limitLeft:matchLeft], "\n\n"); idx != -1 {
+			left = limitLeft + idx + 2
+		} else if idx := strings.LastIndex(cleaned[limitLeft:matchLeft], "\n"); idx != -1 {
+			// Single newline fallback.
+			left = limitLeft + idx + 1
+		} else {
+			left = limitLeft
+		}
+	}
+
+	limitRight := right + maxContext/2
+	if limitRight > len(cleaned) {
+		limitRight = len(cleaned)
+	}
+	// Expand right until punctuation or email header boundary.
+	for right < limitRight {
+		if cleaned[right] == '.' || cleaned[right] == '!' || cleaned[right] == '?' {
+			right++
+			break
+		}
+		// Stop at email header lines (From:, To:, Subject:, Date:, etc.).
+		if cleaned[right] == '\n' {
+			ls := right + 1
+			le := ls
+			for le < len(cleaned) && cleaned[le] != '\n' && le-ls < 128 {
+				le++
+			}
+			if ls < len(cleaned) && emailHeaderRegex.MatchString(cleaned[ls:le]) {
+				break
+			}
+		}
+		right++
+	}
+	if right >= limitRight {
+		// Paragraph fallback: next blank line in window.
+		if idx := strings.Index(cleaned[matchRight:limitRight], "\n\n"); idx != -1 {
+			right = matchRight + idx
+		} else if idx := strings.Index(cleaned[matchRight:limitRight], "\n"); idx != -1 {
+			right = matchRight + idx
+		} else {
+			right = limitRight
+		}
+	}
+
+	return left, right
+}
+
 // ExtractMeaningfulExcerpts returns targeted, per-match snippets around each term.
 // We extract tight, local windows around each match with email-aware boundaries,
 // paragraph fallbacks, and punctuation-aware sentence ends. We avoid global scans.
@@ -119,7 +212,7 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 // ExtractMeaningfulExcerptsPartial returns targeted excerpts using the requested
 // term matching mode.
 func ExtractMeaningfulExcerptsPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, partial PartialMode) []string {
-	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, targetScore, false, partial)
+	return excerptSpanTexts(extractExcerptSpansPartial(content, searchTerms, maxExcerpts, targetScore, false, partial))
 }
 
 // ExtractMeaningfulExcerptsCode is the code-aware variant of ExtractMeaningfulExcerpts. It uses
@@ -130,10 +223,15 @@ func ExtractMeaningfulExcerptsCode(content string, searchTerms []string, maxExce
 
 // ExtractMeaningfulExcerptsCodePartial is the code-aware partial-match variant.
 func ExtractMeaningfulExcerptsCodePartial(content string, searchTerms []string, maxExcerpts int, targetScore int, partial PartialMode) []string {
-	return extractMeaningfulExcerpts(content, searchTerms, maxExcerpts, targetScore, true, partial)
+	return excerptSpanTexts(extractExcerptSpansPartial(content, searchTerms, maxExcerpts, targetScore, true, partial))
 }
 
-func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, targetScore int, isCode bool, partial PartialMode) []string {
+// extractExcerptSpans extracts spans with default whole-word matching.
+func extractExcerptSpans(content string, searchTerms []string, maxExcerpts int, isCode bool) []excerptSpan {
+	return extractExcerptSpansPartial(content, searchTerms, maxExcerpts, len(searchTerms), isCode, PartialModeOff)
+}
+
+func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, isCode bool, partial PartialMode) []excerptSpan {
 	var cleaned string
 	if isCode {
 		// Minimal cleaning: preserve every code token; only normalize control chars/whitespace.
@@ -157,7 +255,7 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 		maxExcerpts = 3
 	}
 	if len(cleaned) == 0 || len(searchTerms) == 0 {
-		return []string{}
+		return []excerptSpan{}
 	}
 
 	// Build regexes for each term using the same partial-aware matcher as filtering.
@@ -170,7 +268,7 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 		termRE = append(termRE, buildTermRegexCI(tt, partial))
 	}
 	if len(termRE) == 0 {
-		return []string{}
+		return []excerptSpan{}
 	}
 	if targetScore <= 0 || targetScore > len(termRE) {
 		targetScore = len(termRE)
@@ -193,7 +291,7 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 		}
 		return win
 	}()
-	excerpts := make([]string, 0, maxExcerpts)
+	excerpts := make([]excerptSpan, 0, maxExcerpts)
 	seen := make(map[string]struct{})
 
 	// Sliding-window strategy: collect non-overlapping spans covering all terms.
@@ -298,7 +396,7 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 						}
 						if _, ok := seen[ex]; !ok && ex != "" {
 							seen[ex] = struct{}{}
-							excerpts = append(excerpts, ex)
+							excerpts = append(excerpts, excerptSpan{text: ex, left: left, right: right})
 						}
 					} else {
 						perTerm := budget / max(1, len(termRE))
@@ -331,7 +429,7 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 						}
 						if _, ok := seen[ex]; !ok && ex != "" {
 							seen[ex] = struct{}{}
-							excerpts = append(excerpts, ex)
+							excerpts = append(excerpts, excerptSpan{text: ex, left: c.left, right: c.right})
 						}
 					}
 					if len(excerpts) >= maxExcerpts {
@@ -356,81 +454,7 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 				break
 			}
 			start, end := submatchRange(loc)
-
-			// Find local sentence boundaries with clamped scan (email-aware + punctuation)
-			left := start
-			limitLeft := left - maxContext/2
-			if limitLeft < 0 {
-				limitLeft = 0
-			}
-			// Expand left until punctuation or email header boundary
-			for left > limitLeft {
-				if cleaned[left] == '.' || cleaned[left] == '!' || cleaned[left] == '?' {
-					break
-				}
-				// Stop at email header lines (From:, To:, Subject:, Date:, etc.)
-				if cleaned[left] == '\n' {
-					ls := left + 1
-					le := ls
-					for le < len(cleaned) && cleaned[le] != '\n' && le-ls < 128 {
-						le++
-					}
-					if ls < len(cleaned) && emailHeaderRegex.MatchString(cleaned[ls:le]) {
-						break
-					}
-				}
-				left--
-			}
-			if left > 0 && (cleaned[left] == '.' || cleaned[left] == '!' || cleaned[left] == '?') {
-				left++
-			} else if left <= limitLeft {
-				// Paragraph fallback: last blank line in window
-				if idx := strings.LastIndex(cleaned[limitLeft:start], "\n\n"); idx != -1 {
-					left = limitLeft + idx + 2
-				} else {
-					// Single newline fallback
-					if idx := strings.LastIndex(cleaned[limitLeft:start], "\n"); idx != -1 {
-						left = limitLeft + idx + 1
-					} else {
-						left = limitLeft
-					}
-				}
-			}
-
-			right := end
-			limitRight := right + maxContext/2
-			if limitRight > len(cleaned) {
-				limitRight = len(cleaned)
-			}
-			// Expand right until punctuation or email header boundary
-			for right < limitRight {
-				if cleaned[right] == '.' || cleaned[right] == '!' || cleaned[right] == '?' {
-					right++
-					break
-				}
-				// Stop at email header lines (From:, To:, Subject:, Date:, etc.)
-				if cleaned[right] == '\n' {
-					ls := right + 1
-					le := ls
-					for le < len(cleaned) && cleaned[le] != '\n' && le-ls < 128 {
-						le++
-					}
-					if ls < len(cleaned) && emailHeaderRegex.MatchString(cleaned[ls:le]) {
-						break
-					}
-				}
-				right++
-			}
-			if right >= limitRight {
-				// Paragraph fallback: next blank line in window
-				if idx := strings.Index(cleaned[end:limitRight], "\n\n"); idx != -1 {
-					right = end + idx
-				} else if idx := strings.Index(cleaned[end:limitRight], "\n"); idx != -1 {
-					right = end + idx
-				} else {
-					right = limitRight
-				}
-			}
+			left, right := expandToBoundaries(cleaned, start, end, maxContext)
 
 			// Build sentence snippet and normalize whitespace
 			ex := strings.TrimSpace(cleaned[left:right])
@@ -445,7 +469,7 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 				continue
 			}
 			seen[ex] = struct{}{}
-			excerpts = append(excerpts, ex)
+			excerpts = append(excerpts, excerptSpan{text: ex, left: left, right: right})
 		}
 	}
 
@@ -460,19 +484,19 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 		maxTotal := maxEx * max(1, maxExcerpts)
 		total := 0
 		for i := range excerpts {
-			if len(excerpts[i]) > maxEx {
-				excerpts[i] = excerpts[i][:maxEx]
+			if len(excerpts[i].text) > maxEx {
+				excerpts[i].text = excerpts[i].text[:maxEx]
 			}
-			total += len(excerpts[i])
+			total += len(excerpts[i].text)
 			if total > maxTotal {
 				// Trim current excerpt to fit and drop the rest
 				excess := total - maxTotal
-				cut := len(excerpts[i]) - excess
+				cut := len(excerpts[i].text) - excess
 				if cut < 0 {
 					cut = 0
 				}
-				if cut < len(excerpts[i]) {
-					excerpts[i] = excerpts[i][:cut]
+				if cut < len(excerpts[i].text) {
+					excerpts[i].text = excerpts[i].text[:cut]
 				}
 				excerpts = excerpts[:i+1]
 				break
@@ -488,82 +512,18 @@ func extractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 			continue
 		}
 		start, end := submatchRange(loc)
-
-		left := start
-		limitLeft := left - maxContext/2
-		if limitLeft < 0 {
-			limitLeft = 0
-		}
-		for left > limitLeft {
-			if cleaned[left] == '.' || cleaned[left] == '!' || cleaned[left] == '?' {
-				break
-			}
-			if cleaned[left] == '\n' {
-				ls := left + 1
-				le := ls
-				for le < len(cleaned) && cleaned[le] != '\n' && le-ls < 128 {
-					le++
-				}
-				if ls < len(cleaned) && emailHeaderRegex.MatchString(cleaned[ls:le]) {
-					break
-				}
-			}
-			left--
-		}
-		if left > 0 && (cleaned[left] == '.' || cleaned[left] == '!' || cleaned[left] == '?') {
-			left++
-		} else if left <= limitLeft {
-			if idx := strings.LastIndex(cleaned[limitLeft:start], "\n\n"); idx != -1 {
-				left = limitLeft + idx + 2
-			} else if idx := strings.LastIndex(cleaned[limitLeft:start], "\n"); idx != -1 {
-				left = limitLeft + idx + 1
-			} else {
-				left = limitLeft
-			}
-		}
-
-		right := end
-		limitRight := right + maxContext/2
-		if limitRight > len(cleaned) {
-			limitRight = len(cleaned)
-		}
-		for right < limitRight {
-			if cleaned[right] == '.' || cleaned[right] == '!' || cleaned[right] == '?' {
-				right++
-				break
-			}
-			if cleaned[right] == '\n' {
-				ls := right + 1
-				le := ls
-				for le < len(cleaned) && cleaned[le] != '\n' && le-ls < 128 {
-					le++
-				}
-				if ls < len(cleaned) && emailHeaderRegex.MatchString(cleaned[ls:le]) {
-					break
-				}
-			}
-			right++
-		}
-		if right >= limitRight {
-			if idx := strings.Index(cleaned[end:limitRight], "\n\n"); idx != -1 {
-				right = end + idx
-			} else if idx := strings.Index(cleaned[end:limitRight], "\n"); idx != -1 {
-				right = end + idx
-			} else {
-				right = limitRight
-			}
-		}
+		left, right := expandToBoundaries(cleaned, start, end, maxContext)
 
 		ex := strings.TrimSpace(cleaned[left:right])
 		ex = strings.ReplaceAll(ex, "\n", " ")
-		ex = strings.ReplaceAll(ex, "\t", " ")
+		ex = strings.ReplaceAll(ex, "	", " ")
 		ex = whitespaceRegex.ReplaceAllString(ex, " ")
 		if ex != "" {
-			return []string{ex}
+			return []excerptSpan{{text: ex, left: left, right: right}}
 		}
 	}
 
-	return []string{}
+	return []excerptSpan{}
 }
 
 // submatchRange returns the first capture group when present, preserving the
