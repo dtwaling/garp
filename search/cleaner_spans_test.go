@@ -56,7 +56,7 @@ func TestExtractExcerptSpansWrapperParity(t *testing.T) {
 	}
 }
 
-func TestExtractExcerptSpansCharacterizesDenseOverlap(t *testing.T) {
+func TestExtractExcerptSpansBoundsDenseOverlap(t *testing.T) {
 	SetExcerptContextLimit(100)
 	t.Cleanup(func() { SetExcerptContextLimit(0) })
 
@@ -67,8 +67,8 @@ func TestExtractExcerptSpansCharacterizesDenseOverlap(t *testing.T) {
 	}, " ")
 
 	spans := extractExcerptSpans(content, []string{"needle"}, 3, false)
-	if len(spans) != 3 {
-		t.Fatalf("span count = %d, want 3 (current behavior before skip-ahead)", len(spans))
+	if len(spans) != 1 {
+		t.Fatalf("span count = %d, want 1 bounded-overlap chunk", len(spans))
 	}
 	for i, span := range spans {
 		if span.left < 0 || span.right <= span.left || span.right > len(content) {
@@ -78,22 +78,9 @@ func TestExtractExcerptSpansCharacterizesDenseOverlap(t *testing.T) {
 			t.Fatalf("span %d does not contain the search term: %q", i, span.text)
 		}
 		matchOffset := strings.Index(content, "needle")
-		for occurrence := 0; occurrence < i; occurrence++ {
-			matchOffset += len("needle")
-			next := strings.Index(content[matchOffset:], "needle")
-			if next < 0 {
-				t.Fatalf("missing needle occurrence %d in characterization corpus", i)
-			}
-			matchOffset += next
-		}
 		if matchOffset < span.left || matchOffset >= span.right {
 			t.Fatalf("span %d [%d, %d) does not cover needle at %d", i, span.left, span.right, matchOffset)
 		}
-	}
-
-	// This deliberately captures the overlap bug. Task 04 inverts this assertion.
-	if overlap := spanOverlap(spans[0], spans[1]); overlap == 0 {
-		t.Fatalf("first two current spans do not overlap; expected the pre-Task-04 bug")
 	}
 }
 

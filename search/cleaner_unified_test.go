@@ -32,15 +32,15 @@ func TestUnifiedExcerptSelection(t *testing.T) {
 		}
 	})
 
-	t.Run("dense single term preserves count and order until skip ahead", func(t *testing.T) {
+	t.Run("dense single term is reduced by skip ahead", func(t *testing.T) {
 		content := strings.Join([]string{
 			"opening", strings.Repeat("z", 400), strings.Repeat("a", 130), "needle first", strings.Repeat("b", 130),
 			"needle second", strings.Repeat("c", 130), "needle third", strings.Repeat("d", 130), "closing",
 		}, " ")
 
 		spans := extractExcerptSpans(content, []string{"needle"}, 3, false)
-		if len(spans) != 3 {
-			t.Fatalf("span count = %d, want 3 before skip-ahead selection", len(spans))
+		if len(spans) != 1 {
+			t.Fatalf("span count = %d, want 1 bounded-overlap chunk", len(spans))
 		}
 		for i, span := range spans {
 			if i > 0 && span.left <= spans[i-1].left {

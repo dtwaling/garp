@@ -46,6 +46,10 @@ var (
 	dividerRegex = regexp.MustCompile(`[-_=#]{5,}`)
 )
 
+// excerptOverlapTolerance is the maximum fraction of an emitted window that
+// may overlap prior emitted windows. 0.10 means every chunk is >= 90% new.
+const excerptOverlapTolerance = 0.10
+
 var excerptContextLimit int // 0 means auto (use default heuristic)
 
 // SetExcerptContextLimit allows the engine to set an excerpt window hint (usually the distance).
@@ -123,6 +127,40 @@ func excerptSpanTexts(spans []excerptSpan) []string {
 		excerpts[i] = span.text
 	}
 	return excerpts
+}
+
+func excerptSpanOverlap(a, b excerptSpan) int {
+	return max(0, min(a.right, b.right)-max(a.left, b.left))
+}
+
+// excerptSpanWithinOverlapTolerance checks the relevant tail of the emitted
+// union. Emitted spans are ordered, so a candidate can only intersect the last
+// two spans under the bounded-overlap invariant.
+func excerptSpanWithinOverlapTolerance(candidate excerptSpan, emitted []excerptSpan) bool {
+	last := len(emitted) - 1
+	if last < 0 {
+		return true
+	}
+	overlap := excerptSpanOverlap(candidate, emitted[last])
+	if last > 0 {
+		prior := emitted[last-1]
+		current := emitted[last]
+		overlap += excerptSpanOverlap(candidate, prior)
+		// The two near-disjoint emitted spans can share their tolerance sliver.
+		// Subtract that shared portion so this remains union arithmetic.
+		overlap -= max(0, min(candidate.right, prior.right, current.right)-max(candidate.left, prior.left, current.left))
+	}
+	return overlap <= int(excerptOverlapTolerance*float64(candidate.right-candidate.left))
+}
+
+func emittedOverlapRight(candidate excerptSpan, emitted []excerptSpan) int {
+	right := -1
+	for i := len(emitted) - 1; i >= 0 && i >= len(emitted)-2; i-- {
+		if excerptSpanOverlap(candidate, emitted[i]) > 0 && emitted[i].right > right {
+			right = emitted[i].right
+		}
+	}
+	return right
 }
 
 // expandToBoundaries widens [left, right) around the match span to sentence,
@@ -355,30 +393,62 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 			budget = 200
 		}
 
-		lastRight := -1
-		for _, c := range candidates {
-			// Task 04 replaces this raw-candidate check with emitted-window overlap guards.
-			if c.left <= lastRight {
-				continue
-			}
-			lastRight = c.right
-
+		emitted := make([]excerptSpan, 0, maxExcerpts)
+		for candidateIndex := 0; candidateIndex < len(candidates); {
+			c := candidates[candidateIndex]
 			span := c.right - c.left
+			window := excerptSpan{left: c.left, right: c.right}
 			if span <= budget {
 				pad := (budget - span) / 2
-				left := max(0, c.left-pad)
-				right := min(len(cleaned), c.right+pad)
-				left, right = expandToBoundaries(cleaned, left, right, maxContext)
-				if right-left > budget {
+				window.left = max(0, c.left-pad)
+				window.right = min(len(cleaned), c.right+pad)
+				window.left, window.right = expandToBoundaries(cleaned, window.left, window.right, maxContext)
+				if window.right-window.left > budget {
 					center := c.left + span/2
-					left = max(left, center-budget/2)
-					right = min(right, left+budget)
-					if right-left < budget {
-						left = max(left, right-budget)
+					window.left = max(window.left, center-budget/2)
+					window.right = min(window.right, window.left+budget)
+					if window.right-window.left < budget {
+						window.left = max(window.left, window.right-budget)
 					}
 				}
+			}
 
-				ex := strings.TrimSpace(cleaned[left:right])
+			// The candidate's left edge is a match start. It seeds a novel chunk only
+			// when it is outside prior emitted windows.
+			seedIsNew := true
+			seedRight := -1
+			for i := len(emitted) - 1; i >= 0 && i >= len(emitted)-2; i-- {
+				if c.left >= emitted[i].left && c.left < emitted[i].right {
+					seedIsNew = false
+					if emitted[i].right > seedRight {
+						seedRight = emitted[i].right
+					}
+				}
+			}
+			if !seedIsNew {
+				for candidateIndex < len(candidates) && candidates[candidateIndex].left < seedRight {
+					candidateIndex++
+				}
+				continue
+			}
+			if !excerptSpanWithinOverlapTolerance(window, emitted) {
+				overlapRight := emittedOverlapRight(window, emitted)
+				priorCandidateIndex := candidateIndex
+				for candidateIndex < len(candidates) && candidates[candidateIndex].left < overlapRight {
+					candidateIndex++
+				}
+				// A padded window can overlap an emitted chunk even when its seed is
+				// already beyond that chunk's right edge. In that case the rejected
+				// seed itself must be consumed so the loop always advances.
+				if candidateIndex == priorCandidateIndex {
+					candidateIndex++
+				}
+				continue
+			}
+
+			accepted := false
+			if span <= budget {
+				ex := strings.TrimSpace(cleaned[window.left:window.right])
 				ex = strings.ReplaceAll(ex, "\n", " ")
 				ex = strings.ReplaceAll(ex, "	", " ")
 				ex = dividerRegex.ReplaceAllString(ex, " ")
@@ -388,7 +458,8 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 				}
 				if _, ok := seen[ex]; !ok && ex != "" {
 					seen[ex] = struct{}{}
-					excerpts = append(excerpts, excerptSpan{text: ex, left: left, right: right})
+					excerpts = append(excerpts, excerptSpan{text: ex, left: window.left, right: window.right})
+					accepted = true
 				}
 			} else {
 				perTerm := budget / max(1, len(termRE))
@@ -422,7 +493,17 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 				if _, ok := seen[ex]; !ok && ex != "" {
 					seen[ex] = struct{}{}
 					excerpts = append(excerpts, excerptSpan{text: ex, left: c.left, right: c.right})
+					accepted = true
 				}
+			}
+			if accepted {
+				emitted = append(emitted, window)
+				// Advance only past the accepted chunk's actual captured extent.
+				for candidateIndex < len(candidates) && candidates[candidateIndex].left < window.right {
+					candidateIndex++
+				}
+			} else {
+				candidateIndex++
 			}
 			if len(excerpts) >= maxExcerpts {
 				break
