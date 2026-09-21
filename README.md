@@ -2,7 +2,7 @@
 
 # :: garp ::
 
-![Version](https://img.shields.io/badge/version-0.8-blue?labelColor=0052cc)
+![Version](https://img.shields.io/badge/version-0.9-blue?labelColor=0052cc)
 ![License](https://img.shields.io/github/license/dtwaling/garp?color=4338ca&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-linux-4338ca?logo=linux&logoColor=white&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-macos-4338ca?logo=apple&logoColor=white&labelColor=3730a3)
@@ -94,6 +94,15 @@ The latest binary lives at `bin/garp`. Copy it to any directory on your `PATH`:
 cp bin/garp ~/.local/bin/garp
 chmod +x ~/.local/bin/garp
 ```
+
+## Agent / AI assistant use
+
+A ready-made skill definition ships at `docs/skills/garp-search/SKILL.md`.
+Copy the `garp-search/` directory into your harness skills location (e.g.
+`.claude/skills/` or `.cursor/skills/`) and coding agents get a tight,
+current guide to garp: when to reach for garp over grep/ripgrep, the flags
+that matter, and how to consume the `--json` output (find -> pinpoint ->
+targeted read, no result paging). One skill covers Windows and Linux/macOS.
 
 ## Flags
 
@@ -303,7 +312,7 @@ produces `bin\garp.exe` using the same release flags as the Makefile (`-trimpath
 stripped symbol table + DWARF, embedded version):
 
 ```powershell
-go build -trimpath -ldflags "-s -w -X garp/app.version=0.8" -o bin\garp.exe .
+go build -trimpath -ldflags "-s -w -X garp/app.version=0.9" -o bin\garp.exe .
 go test ./...                                              # run tests
 go vet ./...                                               # vet
 ```
@@ -313,7 +322,7 @@ The `.exe` is git-ignored -- it's a local artifact, not committed. The tracked
 
 ```bash
 GOOS=windows GOARCH=amd64 go build -trimpath \
-  -ldflags "-s -w -X garp/app.version=0.8" -o bin/garp.exe .
+  -ldflags "-s -w -X garp/app.version=0.9" -o bin/garp.exe .
 ```
 
 ## TUI navigation

@@ -21,7 +21,7 @@ import (
 	"garp/search"
 )
 
-var version = "0.8"
+var version = "0.9"
 
 // Arguments for CLI flags (used to seed TUI)
 type Arguments struct {

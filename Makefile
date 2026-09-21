@@ -5,7 +5,7 @@ BINARY_PATH=bin/$(BINARY_NAME)
 GO_FILES=$(shell find . -name "*.go" -type f)
 
 # Version embedding
-VERSION=0.8.10
+VERSION=0.9.0
 # -s -w strip the symbol table and DWARF debug info (~29% smaller binary).
 LDFLAGS=-s -w -X garp/app.version=$(VERSION)
 
