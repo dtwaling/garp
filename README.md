@@ -99,7 +99,8 @@ chmod +x ~/.local/bin/garp
 
 **Option 3: Download from GitHub Releases**
 
-No checkout needed -- the latest release ships OS-specific binaries:
+No checkout needed -- the latest release ships binaries for linux, macOS
+(darwin), and Windows, in amd64 and arm64 flavors (`garp-<os>-<arch>[.exe]`):
 
 ```bash
 # Linux (amd64)
