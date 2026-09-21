@@ -1803,16 +1803,35 @@ func asciiIndexPartialCI(buf []byte, wordLower []byte, mode PartialMode) int {
 		if end >= len(buf) || !isWordChar(buf[end]) {
 			return i
 		}
-		if end < len(buf) && toLower(buf[end]) == 's' {
-			endS := end + 1
-			if endS >= len(buf) || !isWordChar(buf[endS]) {
-				return i
+		if smartFormsEnabled() {
+			for _, suffix := range [][]byte{[]byte("es"), []byte("s"), []byte("ed"), []byte("ing"), []byte("al"), []byte("tion"), []byte("ation")} {
+				suffixEnd := end + len(suffix)
+				if suffixEnd > len(buf) {
+					continue
+				}
+				matchesSuffix := true
+				for j, b := range suffix {
+					if toLower(buf[end+j]) != b {
+						matchesSuffix = false
+						break
+					}
+				}
+				if matchesSuffix && (suffixEnd >= len(buf) || !isWordChar(buf[suffixEnd])) {
+					return i
+				}
 			}
-		}
-		if end+1 < len(buf) && toLower(buf[end]) == 'e' && toLower(buf[end+1]) == 's' {
-			endES := end + 2
-			if endES >= len(buf) || !isWordChar(buf[endES]) {
-				return i
+		} else {
+			if end < len(buf) && toLower(buf[end]) == 's' {
+				endS := end + 1
+				if endS >= len(buf) || !isWordChar(buf[endS]) {
+					return i
+				}
+			}
+			if end+1 < len(buf) && toLower(buf[end]) == 'e' && toLower(buf[end+1]) == 's' {
+				endES := end + 2
+				if endES >= len(buf) || !isWordChar(buf[endES]) {
+					return i
+				}
 			}
 		}
 	}
