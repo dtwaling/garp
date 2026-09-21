@@ -286,7 +286,7 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("                          Default mode: prefix. When omitted: whole-word."))
 	fmt.Println(infoStyle.Render("                          Tip: append * to a term (e.g. deploy*) for per-term prefix."))
 	fmt.Println(infoStyle.Render("  --distance N            Proximity window in characters (default 5000)"))
-	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum non-overlapping excerpts per file (default 1, max 50)"))
+	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum excerpts per file; >=90% new content (up to 10% overlap; default 1, max 50)"))
 	fmt.Println(infoStyle.Render("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted)"))
 	fmt.Println(infoStyle.Render("  --workers N             Stage 2 text filter workers (default 2)"))
 	fmt.Println(infoStyle.Render("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000)"))
@@ -601,7 +601,7 @@ func Run() int {
 			const hugeSingleWordThreshold = 200000
 			if total >= hugeSingleWordThreshold {
 				fmt.Println(warningStyle.Render(
-					fmt.Sprintf("Large single-word scan over %d files — enabling safe mode (reduced parallelism).", total),
+					fmt.Sprintf("Large single-word scan over %d files -- enabling safe mode (reduced parallelism).", total),
 				))
 				// Clamp workers/concurrency to conservative values that keep memory stable.
 				if args.FilterWorkers > 2 {

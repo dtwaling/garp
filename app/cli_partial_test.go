@@ -103,3 +103,15 @@ func TestShowUsageDocumentsPartial(t *testing.T) {
 		}
 	}
 }
+
+func TestShowUsageDocumentsBoundedOverlapExcerpts(t *testing.T) {
+	out := string(captureCLIStdout(t, func() int {
+		showUsage()
+		return 0
+	}))
+	for _, want := range []string{"up to 10% overlap", ">=90% new content"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("usage missing %q:\n%s", want, out)
+		}
+	}
+}

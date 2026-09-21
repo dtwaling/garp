@@ -114,6 +114,7 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `--strict` | off | Require every search term in the proximity window, including searches with three or more terms |
 | `--json` | off | Skip TUI; emit structured JSON to stdout. Preferred for MCP/agent callers |
 | `--plain` | off | Skip TUI; emit plain line-oriented text to stdout. Useful for shell scripts |
+| `--max-excerpts N` | 1 | Maximum excerpts per matching file (maximum 50) |
 | `--workers N` | 4 | Stage 2 filter worker count |
 | `--heavy-concurrency N` | auto | Concurrent heavy (binary) extractions |
 | `--file-timeout-binary N` | 1000 | Timeout in ms for binary extraction |
@@ -197,6 +198,23 @@ count, and `N` is the total query-term count.
 
 `matches` is always present as a top-level integer so callers can zero-check without
 iterating `results`. Errors go to stderr; check exit code before parsing stdout as JSON.
+
+### Bounded-overlap excerpts
+
+`--max-excerpts` controls how many excerpts garp can return for each matching file.
+The default is one and the maximum is 50. When more than one excerpt is requested,
+garp uses skip-ahead selection: after capturing a chunk, it evaluates the next chunk
+outside the prior captured chunk rather than repeatedly returning the same nearby
+match.
+
+Excerpt windows may overlap by up to 10% when a small boundary-context overlap makes
+the result more useful. Every emitted chunk is therefore at least 90% new content
+relative to earlier chunks from the same file. A cluster whose candidate window would
+contain more than 10% old content is skipped as redundant; separate clusters remain
+eligible for their own excerpts.
+
+This per-file guarantee applies consistently to the `excerpts` array in `--json`,
+the excerpt blocks in `--plain`, and the excerpt lists shown in the TUI.
 
 ## Supported formats
 
