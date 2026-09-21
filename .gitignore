@@ -3,6 +3,7 @@ plan.md
 
 # Binaries
 *.exe
+!bin/garp.exe
 *.exe~
 *.dll
 *.so

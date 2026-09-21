@@ -88,11 +88,34 @@ Ensure `~/.local/bin` is on your `PATH`.
 
 **Option 2: Copy the prebuilt binary**
 
-The latest binary lives at `bin/garp`. Copy it to any directory on your `PATH`:
+Both release binaries are committed to the repo: `bin/garp` (Linux) and
+`bin/garp.exe` (Windows, cross-compiled). Copy the one for your OS to any
+directory on your `PATH`:
 
 ```bash
 cp bin/garp ~/.local/bin/garp
 chmod +x ~/.local/bin/garp
+```
+
+**Option 3: Download from GitHub Releases**
+
+No checkout needed -- the latest release ships OS-specific binaries:
+
+```bash
+# Linux (amd64)
+curl -LO https://github.com/dtwaling/garp/releases/latest/download/garp-linux-amd64
+chmod +x garp-linux-amd64 && mkdir -p ~/.local/bin && mv garp-linux-amd64 ~/.local/bin/garp
+```
+
+```powershell
+# Windows (PowerShell)
+curl -LO https://github.com/dtwaling/garp/releases/latest/download/garp-windows-amd64.exe
+```
+
+Or with the GitHub CLI:
+
+```bash
+gh release download --repo dtwaling/garp --pattern 'garp-*' --output ~/.local/bin/
 ```
 
 ## Agent / AI assistant use
@@ -317,8 +340,9 @@ go test ./...                                              # run tests
 go vet ./...                                               # vet
 ```
 
-The `.exe` is git-ignored -- it's a local artifact, not committed. The tracked
-`bin/garp` is the Linux build. To cross-compile a Windows binary from Linux/macOS:
+The `.exe` was cross-compiled from Linux with the same release flags
+(`GOOS=windows GOARCH=amd64`, `-trimpath`, stripped symbol table + DWARF,
+embedded version) and is committed alongside the Linux build at `bin/garp.exe`.
 
 ```bash
 GOOS=windows GOARCH=amd64 go build -trimpath \
