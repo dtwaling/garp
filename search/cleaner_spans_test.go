@@ -61,7 +61,7 @@ func TestExtractExcerptSpansCharacterizesDenseOverlap(t *testing.T) {
 	t.Cleanup(func() { SetExcerptContextLimit(0) })
 
 	content := strings.Join([]string{
-		"opening context", strings.Repeat("a", 130), "needle first marker",
+		"opening context", strings.Repeat("z", 400), strings.Repeat("a", 130), "needle first marker",
 		strings.Repeat("b", 130), "needle second marker", strings.Repeat("c", 130),
 		"needle third marker", strings.Repeat("d", 130), "closing context",
 	}, " ")

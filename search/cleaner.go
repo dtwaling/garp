@@ -294,152 +294,142 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 	excerpts := make([]excerptSpan, 0, maxExcerpts)
 	seen := make(map[string]struct{})
 
-	// Sliding-window strategy: collect non-overlapping spans covering all terms.
-	if len(termRE) > 1 {
-		type tmatch struct {
-			start int
-			end   int
-			idx   int
+	// Sliding-window strategy: collect candidate spans covering the target score.
+	// A single term is a one-term window, so every query shape uses this selector.
+	type tmatch struct {
+		start int
+		end   int
+		idx   int
+	}
+	type candidate struct {
+		left  int
+		right int
+	}
+	all := make([]tmatch, 0, 128)
+	for i, re := range termRE {
+		idxs := re.FindAllStringSubmatchIndex(cleaned, -1)
+		for _, loc := range idxs {
+			start, end := submatchRange(loc)
+			all = append(all, tmatch{start: start, end: end, idx: i})
 		}
-		type candidate struct {
-			left  int
-			right int
-		}
-		all := make([]tmatch, 0, 128)
-		for i, re := range termRE {
-			idxs := re.FindAllStringSubmatchIndex(cleaned, -1)
-			for _, loc := range idxs {
-				start, end := submatchRange(loc)
-				all = append(all, tmatch{start: start, end: end, idx: i})
+	}
+	if len(all) > 0 {
+		sort.Slice(all, func(i, j int) bool { return all[i].start < all[j].start })
+		counts := make(map[int]int, len(termRE))
+		covered := 0
+		r := 0
+		candidates := make([]candidate, 0, maxExcerpts)
+		for l := 0; l < len(all); l++ {
+			for r < len(all) && covered < targetScore {
+				mm := all[r]
+				if counts[mm.idx] == 0 {
+					covered++
+				}
+				counts[mm.idx]++
+				r++
+			}
+			if covered == targetScore {
+				right := all[l].end
+				for i := l; i < r; i++ {
+					if all[i].end > right {
+						right = all[i].end
+					}
+				}
+				candidates = append(candidates, candidate{left: all[l].start, right: right})
+			}
+			leftm := all[l]
+			counts[leftm.idx]--
+			if counts[leftm.idx] == 0 {
+				covered--
 			}
 		}
-		if len(all) > 0 {
-			sort.Slice(all, func(i, j int) bool { return all[i].start < all[j].start })
-			counts := make(map[int]int, len(termRE))
-			covered := 0
-			r := 0
-			candidates := make([]candidate, 0, maxExcerpts)
-			for l := 0; l < len(all); l++ {
-				for r < len(all) && covered < targetScore {
-					mm := all[r]
-					if counts[mm.idx] == 0 {
-						covered++
-					}
-					counts[mm.idx]++
-					r++
-				}
-				if covered == targetScore {
-					right := all[l].end
-					for i := l; i < r; i++ {
-						if all[i].end > right {
-							right = all[i].end
-						}
-					}
-					candidates = append(candidates, candidate{left: all[l].start, right: right})
-				}
-				leftm := all[l]
-				counts[leftm.idx]--
-				if counts[leftm.idx] == 0 {
-					covered--
-				}
+
+		// Dynamic budget from UI (fallback to 400).
+		budget := 400
+		if ExcerptCharBudget != nil {
+			if b := ExcerptCharBudget(); b > 0 {
+				budget = b
 			}
-			if len(candidates) > 0 {
-				// Dynamic budget from UI (fallback to 400)
-				budget := 400
-				if ExcerptCharBudget != nil {
-					if b := ExcerptCharBudget(); b > 0 {
-						budget = b
+		}
+		if budget < 200 {
+			budget = 200
+		}
+
+		lastRight := -1
+		for _, c := range candidates {
+			// Task 04 replaces this raw-candidate check with emitted-window overlap guards.
+			if c.left <= lastRight {
+				continue
+			}
+			lastRight = c.right
+
+			span := c.right - c.left
+			if span <= budget {
+				pad := (budget - span) / 2
+				left := max(0, c.left-pad)
+				right := min(len(cleaned), c.right+pad)
+				left, right = expandToBoundaries(cleaned, left, right, maxContext)
+				if right-left > budget {
+					center := c.left + span/2
+					left = max(left, center-budget/2)
+					right = min(right, left+budget)
+					if right-left < budget {
+						left = max(left, right-budget)
 					}
-				}
-				if budget < 200 {
-					budget = 200
 				}
 
-				selected := make([]candidate, 0, maxExcerpts)
-				lastRight := -1
-				for _, c := range candidates {
-					if c.left < lastRight {
+				ex := strings.TrimSpace(cleaned[left:right])
+				ex = strings.ReplaceAll(ex, "\n", " ")
+				ex = strings.ReplaceAll(ex, "	", " ")
+				ex = dividerRegex.ReplaceAllString(ex, " ")
+				ex = whitespaceRegex.ReplaceAllString(ex, " ")
+				if len(ex) > budget {
+					ex = ex[:budget]
+				}
+				if _, ok := seen[ex]; !ok && ex != "" {
+					seen[ex] = struct{}{}
+					excerpts = append(excerpts, excerptSpan{text: ex, left: left, right: right})
+				}
+			} else {
+				perTerm := budget / max(1, len(termRE))
+				if perTerm < 60 {
+					perTerm = 60
+				}
+				parts := make([]string, 0, len(termRE))
+				spanText := cleaned[c.left:c.right]
+				for _, re := range termRE {
+					loc := re.FindStringSubmatchIndex(spanText)
+					if loc == nil {
 						continue
 					}
-					selected = append(selected, c)
-					lastRight = c.right
-					if len(selected) >= maxExcerpts {
-						break
+					start, end := submatchRange(loc)
+					center := c.left + start + (end-start)/2
+					partLeft := max(0, center-perTerm/2)
+					partRight := min(len(cleaned), center+perTerm/2)
+					frag := strings.TrimSpace(cleaned[partLeft:partRight])
+					frag = strings.ReplaceAll(frag, "\n", " ")
+					frag = strings.ReplaceAll(frag, "	", " ")
+					frag = dividerRegex.ReplaceAllString(frag, " ")
+					frag = whitespaceRegex.ReplaceAllString(frag, " ")
+					if frag != "" {
+						parts = append(parts, frag)
 					}
 				}
-
-				for _, c := range selected {
-					span := c.right - c.left
-					left := c.left
-					right := c.right
-					if span <= budget {
-						pad := (budget - span) / 2
-						left = max(0, left-pad)
-						right = min(len(cleaned), right+pad)
-
-						for left > 0 && cleaned[left] != ' ' {
-							left--
-						}
-						for right < len(cleaned) && right > 0 && cleaned[right-1] != ' ' {
-							right++
-							if right >= len(cleaned) {
-								break
-							}
-						}
-						ex := strings.TrimSpace(cleaned[left:right])
-						ex = strings.ReplaceAll(ex, "\n", " ")
-						ex = strings.ReplaceAll(ex, "\t", " ")
-						ex = dividerRegex.ReplaceAllString(ex, " ")
-						ex = whitespaceRegex.ReplaceAllString(ex, " ")
-						if len(ex) > budget {
-							ex = ex[:budget]
-						}
-						if _, ok := seen[ex]; !ok && ex != "" {
-							seen[ex] = struct{}{}
-							excerpts = append(excerpts, excerptSpan{text: ex, left: left, right: right})
-						}
-					} else {
-						perTerm := budget / max(1, len(termRE))
-						if perTerm < 60 {
-							perTerm = 60
-						}
-						parts := make([]string, 0, len(termRE))
-						spanText := cleaned[c.left:c.right]
-						for _, re := range termRE {
-							loc := re.FindStringSubmatchIndex(spanText)
-							if loc == nil {
-								continue
-							}
-							start, end := submatchRange(loc)
-							center := c.left + start + (end-start)/2
-							partLeft := max(0, center-perTerm/2)
-							partRight := min(len(cleaned), center+perTerm/2)
-							frag := strings.TrimSpace(cleaned[partLeft:partRight])
-							frag = strings.ReplaceAll(frag, "\n", " ")
-							frag = strings.ReplaceAll(frag, "\t", " ")
-							frag = dividerRegex.ReplaceAllString(frag, " ")
-							frag = whitespaceRegex.ReplaceAllString(frag, " ")
-							if frag != "" {
-								parts = append(parts, frag)
-							}
-						}
-						ex := strings.Join(parts, " ... ")
-						if len(ex) > budget {
-							ex = ex[:budget]
-						}
-						if _, ok := seen[ex]; !ok && ex != "" {
-							seen[ex] = struct{}{}
-							excerpts = append(excerpts, excerptSpan{text: ex, left: c.left, right: c.right})
-						}
-					}
-					if len(excerpts) >= maxExcerpts {
-						break
-					}
+				ex := strings.Join(parts, " ... ")
+				if len(ex) > budget {
+					ex = ex[:budget]
+				}
+				if _, ok := seen[ex]; !ok && ex != "" {
+					seen[ex] = struct{}{}
+					excerpts = append(excerpts, excerptSpan{text: ex, left: c.left, right: c.right})
 				}
 			}
-			if len(excerpts) > 0 {
-				return excerpts
+			if len(excerpts) >= maxExcerpts {
+				break
 			}
+		}
+		if len(excerpts) > 0 {
+			return excerpts
 		}
 	}
 
