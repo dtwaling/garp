@@ -43,3 +43,4 @@ Thumbs.db
 *.log
 find-words
 bin/scopedbg
+gh-body-files/
