@@ -39,13 +39,14 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 
 One-shot find -> pinpoint -> targeted read: each result carries the file, a ranked excerpt, and the line of the earliest matched term.
 
-- Sort order: score (sum of matched term lengths), then matched-term count, then tighter span, then path. `matched_terms` lists the terms that actually hit.
-- Each excerpt: `text` (context-padded, newlines collapsed) plus 1-based `start_line` = line of the earliest matched term in that chunk. Present for text/code; omitted for extracted formats (PDF, DOCX, email).
+- Sort order: score (sum of matched term lengths), then matched-term count, then top-quality chunk count, then tighter span, then path. `matched_terms` lists the terms that actually hit.
+- Each excerpt: `text` (context-padded, newlines collapsed) plus 1-based `start_line` = line of the earliest matched term in that chunk, and per-chunk `score`/`term_count`. Present for text/code; omitted for extracted formats (PDF, DOCX, email).
+- Chunks within a file are a ranked subset, best-first: with `--max-excerpts N > 1` every quality tier can seed a chunk, so a strong cluster no longer hides the file's other clusters. Every chunk is >=90% new content (bounded overlap).
 - Act on results by reading the file at `start_line` (with margin) instead of re-searching or paging through reads.
 
 ```jsonc
 "results": [ { "file": "...", "score": 14, "term_count": 2, "matched_terms": ["a", "b"],
-  "excerpts": [ { "text": "...", "start_line": 42 } ] } ]
+  "excerpts": [ { "text": "...", "start_line": 42, "score": 14, "term_count": 2 } ] } ]
 ```
 
 Example: locate deployment base-image notes -> `garp AMI parent base --startdir <repo> --only md --distance 200 --json`. Note: extracted PDF text can normalize tokens (e.g. `RHC03-2516` -> `RHC 03-2516`); if an expected hit misses, retry with looser or split terms.

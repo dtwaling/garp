@@ -45,9 +45,17 @@ type SearchResult struct {
 	Excerpts     []string // ANSI-highlighted, for TUI display
 	RawExcerpts  []string // plain text before highlighting -- for machine-readable output (--json, --plain)
 	StartLines   []int    // 1-based start line per excerpt (parallel to RawExcerpts); 0 = unknown
-	CleanContent string
-	EmailDate    string
-	EmailSubject string
+	// Per-chunk ranked quality (parallel to RawExcerpts), best-first within the
+	// file. Zero for chunks that did not frame a ranked window.
+	ChunkScores     []int
+	ChunkTermCounts []int
+	// TopQualityChunks counts chunks whose quality equals the file's best
+	// window (score and term count). Used to rank the file list: files with
+	// more high-quality clusters sort earlier among otherwise-equal results.
+	TopQualityChunks int
+	CleanContent     string
+	EmailDate        string
+	EmailSubject     string
 }
 
 // candidateMatch retains ranked metadata between filtering and result building.
@@ -610,10 +618,22 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 		}
 
 		var excerpts []string
+		var spans []excerptSpan
+		// Per-file ranked subset: every coverage level from the query's minimum
+		// match requirement up to the full term set can seed a chunk, so a file's
+		// best cluster no longer suppresses separate lower-quality clusters.
+		// minTerms mirrors Strategy A: relaxed 3+ term queries seed from 2-term
+		// clusters up; strict (and 1-2 term) queries require the full set.
+		minTerms := 0
+		if len(se.SearchWords) >= 3 && !se.Strict {
+			minTerms = 2
+		}
 		if isCode {
-			excerpts = ExtractMeaningfulExcerptsCodePartial(cleanContent, se.SearchWords, maxExcerpts, match.termCount, se.Partial)
+			spans = extractRankedExcerptSpans(cleanContent, se.SearchWords, maxExcerpts, match.termCount, minTerms, true, se.Partial)
+			excerpts = excerptSpanTexts(spans)
 		} else {
-			excerpts = ExtractMeaningfulExcerptsPartial(cleanContent, se.SearchWords, maxExcerpts, match.termCount, se.Partial)
+			spans = extractRankedExcerptSpans(cleanContent, se.SearchWords, maxExcerpts, match.termCount, minTerms, false, se.Partial)
+			excerpts = excerptSpanTexts(spans)
 		}
 
 		// If excerpts are very short (e.g., only a single terse sentence), expand the first excerpt
@@ -683,24 +703,55 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 		// Resolve 1-based start line per excerpt by anchoring it back to the raw content.
 		// Only text/code files have stable source lines; binary/extracted formats (PDF, DOCX,
 		// email) do not, so we leave their line numbers unknown (nil/0).
+		// Chunks are emitted best-first, but anchors are a positional fact: the
+		// anchoring cursor walks document order, so we anchor spans in document
+		// order (sorted by left edge) and map the results back to emission order.
 		var startLines []int
 		if !IsBinaryFormat(filePath) {
-			startLines = computeExcerptLinesPartial(content, excerpts, se.SearchWords, se.Distance, se.Partial)
+			docOrder := make([]int, len(excerpts))
+			for i := range docOrder {
+				docOrder[i] = i
+			}
+			sort.SliceStable(docOrder, func(a, b int) bool { return spans[docOrder[a]].left < spans[docOrder[b]].left })
+			docExcerpts := make([]string, len(docOrder))
+			for i, idx := range docOrder {
+				docExcerpts[i] = excerpts[idx]
+			}
+			docLines := computeExcerptLinesPartial(content, docExcerpts, se.SearchWords, se.Distance, se.Partial)
+			startLines = make([]int, len(excerpts))
+			for i, idx := range docOrder {
+				startLines[idx] = docLines[i]
+			}
+		}
+
+		// Per-chunk ranked quality, parallel to the emitted excerpts.
+		chunkScores := make([]int, len(spans))
+		chunkTermCounts := make([]int, len(spans))
+		topQuality := 0
+		for i, sp := range spans {
+			chunkScores[i] = sp.score
+			chunkTermCounts[i] = sp.termCount
+			if sp.score == match.score && sp.termCount == match.termCount {
+				topQuality++
+			}
 		}
 
 		result := SearchResult{
-			FilePath:     filePath,
-			FileSize:     fileSize,
-			Score:        match.score,
-			TermCount:    match.termCount,
-			MatchedTerms: match.matchedTerms,
-			SpanLength:   match.spanLen,
-			Excerpts:     highlightedExcerpts,
-			RawExcerpts:  excerpts,
-			StartLines:   startLines,
-			CleanContent: boundedClean,
-			EmailDate:    emailDate,
-			EmailSubject: emailSubject,
+			FilePath:         filePath,
+			FileSize:         fileSize,
+			Score:            match.score,
+			TermCount:        match.termCount,
+			MatchedTerms:     match.matchedTerms,
+			SpanLength:       match.spanLen,
+			Excerpts:         highlightedExcerpts,
+			RawExcerpts:      excerpts,
+			StartLines:       startLines,
+			ChunkScores:      chunkScores,
+			ChunkTermCounts:  chunkTermCounts,
+			TopQualityChunks: topQuality,
+			CleanContent:     boundedClean,
+			EmailDate:        emailDate,
+			EmailSubject:     emailSubject,
 		}
 
 		results = append(results, result)
@@ -711,6 +762,10 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 		}
 		if results[i].TermCount != results[j].TermCount {
 			return results[i].TermCount > results[j].TermCount
+		}
+		// Among otherwise-equal files, more top-quality clusters rank first.
+		if results[i].TopQualityChunks != results[j].TopQualityChunks {
+			return results[i].TopQualityChunks > results[j].TopQualityChunks
 		}
 		if results[i].SpanLength != results[j].SpanLength {
 			return results[i].SpanLength < results[j].SpanLength

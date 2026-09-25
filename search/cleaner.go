@@ -114,11 +114,16 @@ func CleanContentCode(content string) string {
 }
 
 // excerptSpan is one emitted chunk: its final text plus the [left, right)
-// half-open span it occupies in the cleaned string.
+// half-open span it occupies in the cleaned string, plus the ranked-match
+// quality (score = sum of matched distinct-term lengths, termCount = their
+// count) of the window that framed it. Quality fields are zero for
+// fallback-path excerpts that do not frame a ranked window.
 type excerptSpan struct {
-	text  string
-	left  int
-	right int
+	text      string
+	left      int
+	right     int
+	score     int
+	termCount int
 }
 
 func excerptSpanTexts(spans []excerptSpan) []string {
@@ -133,23 +138,56 @@ func excerptSpanOverlap(a, b excerptSpan) int {
 	return max(0, min(a.right, b.right)-max(a.left, b.left))
 }
 
-// excerptSpanWithinOverlapTolerance checks the relevant tail of the emitted
-// union. Emitted spans are ordered, so a candidate can only intersect the last
-// two spans under the bounded-overlap invariant.
+// excerptOverlapUnion computes the exact byte overlap between a candidate
+// window and the union of already-emitted windows. Spans may be emitted in
+// ranked order (not document order), so a simple sum of pairwise overlaps
+// cannot be used: the same byte range inside an intersection of two emitted
+// windows must be counted once.
+func excerptOverlapUnion(candidate excerptSpan, emitted []excerptSpan) int {
+	if len(emitted) == 0 {
+		return 0
+	}
+	// Collect the emitted intervals, merge them, then intersect with the candidate.
+	type interval struct{ left, right int }
+	intervals := make([]interval, 0, len(emitted))
+	for _, e := range emitted {
+		if e.right > e.left {
+			intervals = append(intervals, interval{e.left, e.right})
+		}
+	}
+	sort.Slice(intervals, func(i, j int) bool {
+		if intervals[i].left != intervals[j].left {
+			return intervals[i].left < intervals[j].left
+		}
+		return intervals[i].right < intervals[j].right
+	})
+	merged := intervals[:1]
+	for _, iv := range intervals[1:] {
+		last := &merged[len(merged)-1]
+		if iv.left <= last.right {
+			if iv.right > last.right {
+				last.right = iv.right
+			}
+		} else {
+			merged = append(merged, iv)
+		}
+	}
+	overlap := 0
+	for _, iv := range merged {
+		left := max(candidate.left, iv.left)
+		right := min(candidate.right, iv.right)
+		if right > left {
+			overlap += right - left
+		}
+	}
+	return overlap
+}
+
+// excerptSpanWithinOverlapTolerance checks the candidate against the emitted
+// union: a chunk is acceptable when its overlap with prior chunks is at most
+// excerptOverlapTolerance of its own window length (>= 90% new content).
 func excerptSpanWithinOverlapTolerance(candidate excerptSpan, emitted []excerptSpan) bool {
-	last := len(emitted) - 1
-	if last < 0 {
-		return true
-	}
-	overlap := excerptSpanOverlap(candidate, emitted[last])
-	if last > 0 {
-		prior := emitted[last-1]
-		current := emitted[last]
-		overlap += excerptSpanOverlap(candidate, prior)
-		// The two near-disjoint emitted spans can share their tolerance sliver.
-		// Subtract that shared portion so this remains union arithmetic.
-		overlap -= max(0, min(candidate.right, prior.right, current.right)-max(candidate.left, prior.left, current.left))
-	}
+	overlap := excerptOverlapUnion(candidate, emitted)
 	return overlap <= int(excerptOverlapTolerance*float64(candidate.right-candidate.left))
 }
 
@@ -270,6 +308,21 @@ func extractExcerptSpans(content string, searchTerms []string, maxExcerpts int, 
 }
 
 func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, isCode bool, partial PartialMode) []excerptSpan {
+	return extractRankedExcerptSpansPartial(content, searchTerms, maxExcerpts, targetScore, 0, isCode, partial)
+}
+
+// extractRankedExcerptSpans emits per-file chunks ranked best-first. Every
+// coverage level from minTerms up to the full distinct-term count can seed a
+// chunk, so a file's best cluster no longer suppresses its other, separate
+// lower-quality clusters (the per-file result subset).
+func extractRankedExcerptSpans(content string, searchTerms []string, maxExcerpts int, targetScore int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
+	return extractRankedExcerptSpansPartial(content, searchTerms, maxExcerpts, targetScore, minTerms, isCode, partial)
+}
+
+// extractRankedExcerptSpansPartial is the shared implementation. minTerms > 0
+// enables multi-level candidate generation (per-file ranked subsets); the
+// legacy single-level behavior runs otherwise.
+func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
 	var cleaned string
 	if isCode {
 		// Minimal cleaning: preserve every code token; only normalize control chars/whitespace.
@@ -297,19 +350,30 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 	}
 
 	// Build regexes for each term using the same partial-aware matcher as filtering.
+	// termWords stays parallel to termRE for per-window scoring.
 	termRE := make([]*regexp.Regexp, 0, len(searchTerms))
+	termWords := make([]string, 0, len(searchTerms))
 	for _, t := range searchTerms {
 		tt := strings.TrimSpace(t)
 		if tt == "" {
 			continue
 		}
 		termRE = append(termRE, buildTermRegexCI(tt, partial))
+		termWords = append(termWords, tt)
 	}
 	if len(termRE) == 0 {
 		return []excerptSpan{}
 	}
 	if targetScore <= 0 || targetScore > len(termRE) {
 		targetScore = len(termRE)
+	}
+	// Coverage levels that can seed a chunk. Ranked mode (minTerms > 0) spans
+	// minTerms up to the full term set so every quality tier of cluster is
+	// eligible; the legacy single-level path pins the level to targetScore.
+	levelMin, levelMax := targetScore, targetScore
+	if minTerms > 0 {
+		levelMin = max(1, minTerms)
+		levelMax = len(termRE)
 	}
 
 	// Clamp window for scanning sentence boundaries around each match
@@ -353,34 +417,68 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 	}
 	if len(all) > 0 {
 		sort.Slice(all, func(i, j int) bool { return all[i].start < all[j].start })
-		counts := make(map[int]int, len(termRE))
-		covered := 0
-		r := 0
+
+		// Collect candidate spans at every coverage level in [levelMin, levelMax].
+		// Each candidate records the distinct-term set it covered so its own
+		// ranked quality (score, termCount) can ride with the chunk.
+		type candidate struct {
+			left      int
+			right     int
+			score     int
+			termCount int
+		}
 		candidates := make([]candidate, 0, maxExcerpts)
-		for l := 0; l < len(all); l++ {
-			for r < len(all) && covered < targetScore {
-				mm := all[r]
-				if counts[mm.idx] == 0 {
-					covered++
-				}
-				counts[mm.idx]++
-				r++
-			}
-			if covered == targetScore {
-				right := all[l].end
-				for i := l; i < r; i++ {
-					if all[i].end > right {
-						right = all[i].end
+		for level := levelMax; level >= levelMin; level-- {
+			counts := make(map[int]int, len(termRE))
+			covered := 0
+			r := 0
+			for l := 0; l < len(all); l++ {
+				for r < len(all) && covered < level {
+					mm := all[r]
+					if counts[mm.idx] == 0 {
+						covered++
 					}
+					counts[mm.idx]++
+					r++
 				}
-				candidates = append(candidates, candidate{left: all[l].start, right: right})
-			}
-			leftm := all[l]
-			counts[leftm.idx]--
-			if counts[leftm.idx] == 0 {
-				covered--
+				if covered == level {
+					right := all[l].end
+					score, termCount := 0, 0
+					for i := l; i < r; i++ {
+						if all[i].end > right {
+							right = all[i].end
+						}
+					}
+					for idx, count := range counts {
+						if count > 0 {
+							score += len(termWords[idx])
+							termCount++
+						}
+					}
+					candidates = append(candidates, candidate{left: all[l].start, right: right, score: score, termCount: termCount})
+				}
+				leftm := all[l]
+				counts[leftm.idx]--
+				if counts[leftm.idx] == 0 {
+					covered--
+				}
 			}
 		}
+
+		// Rank candidates best-first: score desc, term count desc, tighter span
+		// first, then document position (stable, deterministic).
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].score != candidates[j].score {
+				return candidates[i].score > candidates[j].score
+			}
+			if candidates[i].termCount != candidates[j].termCount {
+				return candidates[i].termCount > candidates[j].termCount
+			}
+			if candidates[i].right-candidates[i].left != candidates[j].right-candidates[j].left {
+				return candidates[i].right-candidates[i].left < candidates[j].right-candidates[j].left
+			}
+			return candidates[i].left < candidates[j].left
+		})
 
 		// Dynamic budget from UI (fallback to 400).
 		budget := 400
@@ -393,9 +491,17 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 			budget = 200
 		}
 
+		// Best-first emission with the bounded-overlap guarantee. A candidate
+		// seeds a chunk only when its left edge (a match start) lies outside
+		// every prior emitted window, and its padded window must be >= 90% new
+		// content against the emitted union (exact union arithmetic -- emission
+		// order is ranked, not document order). Rejected candidates are simply
+		// skipped; later (lower-ranked) ones stay eligible.
 		emitted := make([]excerptSpan, 0, maxExcerpts)
-		for candidateIndex := 0; candidateIndex < len(candidates); {
-			c := candidates[candidateIndex]
+		for _, c := range candidates {
+			if len(excerpts) >= maxExcerpts {
+				break
+			}
 			span := c.right - c.left
 			window := excerptSpan{left: c.left, right: c.right}
 			if span <= budget {
@@ -413,40 +519,22 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 				}
 			}
 
-			// The candidate's left edge is a match start. It seeds a novel chunk only
-			// when it is outside prior emitted windows.
+			// The candidate's left edge is a match start. It seeds a novel chunk
+			// only when it is outside every prior emitted window.
 			seedIsNew := true
-			seedRight := -1
-			for i := len(emitted) - 1; i >= 0 && i >= len(emitted)-2; i-- {
-				if c.left >= emitted[i].left && c.left < emitted[i].right {
+			for _, e := range emitted {
+				if c.left >= e.left && c.left < e.right {
 					seedIsNew = false
-					if emitted[i].right > seedRight {
-						seedRight = emitted[i].right
-					}
+					break
 				}
 			}
 			if !seedIsNew {
-				for candidateIndex < len(candidates) && candidates[candidateIndex].left < seedRight {
-					candidateIndex++
-				}
 				continue
 			}
 			if !excerptSpanWithinOverlapTolerance(window, emitted) {
-				overlapRight := emittedOverlapRight(window, emitted)
-				priorCandidateIndex := candidateIndex
-				for candidateIndex < len(candidates) && candidates[candidateIndex].left < overlapRight {
-					candidateIndex++
-				}
-				// A padded window can overlap an emitted chunk even when its seed is
-				// already beyond that chunk's right edge. In that case the rejected
-				// seed itself must be consumed so the loop always advances.
-				if candidateIndex == priorCandidateIndex {
-					candidateIndex++
-				}
 				continue
 			}
 
-			accepted := false
 			if span <= budget {
 				ex := strings.TrimSpace(cleaned[window.left:window.right])
 				ex = strings.ReplaceAll(ex, "\n", " ")
@@ -458,8 +546,8 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 				}
 				if _, ok := seen[ex]; !ok && ex != "" {
 					seen[ex] = struct{}{}
-					excerpts = append(excerpts, excerptSpan{text: ex, left: window.left, right: window.right})
-					accepted = true
+					excerpts = append(excerpts, excerptSpan{text: ex, left: window.left, right: window.right, score: c.score, termCount: c.termCount})
+					emitted = append(emitted, window)
 				}
 			} else {
 				perTerm := budget / max(1, len(termRE))
@@ -492,21 +580,9 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 				}
 				if _, ok := seen[ex]; !ok && ex != "" {
 					seen[ex] = struct{}{}
-					excerpts = append(excerpts, excerptSpan{text: ex, left: c.left, right: c.right})
-					accepted = true
+					excerpts = append(excerpts, excerptSpan{text: ex, left: c.left, right: c.right, score: c.score, termCount: c.termCount})
+					emitted = append(emitted, window)
 				}
-			}
-			if accepted {
-				emitted = append(emitted, window)
-				// Advance only past the accepted chunk's actual captured extent.
-				for candidateIndex < len(candidates) && candidates[candidateIndex].left < window.right {
-					candidateIndex++
-				}
-			} else {
-				candidateIndex++
-			}
-			if len(excerpts) >= maxExcerpts {
-				break
 			}
 		}
 		if len(excerpts) > 0 {

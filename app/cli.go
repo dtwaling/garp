@@ -333,12 +333,16 @@ func showVersion() {
 // ansiEscRe and runJSON/runPlain now read RawExcerpts (pre-highlight) directly from SearchResult,
 // so no ANSI stripping is needed. This var is intentionally removed.
 
-// jsonExcerpt is a single matched chunk with its 1-based source start line.
-// start_line is omitted when unknown (0) -- e.g. binary/extracted formats
-// (PDF, DOCX, email) which have no stable source lines.
+// jsonExcerpt is a single matched chunk with its 1-based source start line
+// and per-chunk ranked quality. start_line is omitted when unknown (0) --
+// e.g. binary/extracted formats (PDF, DOCX, email) which have no stable
+// source lines. score/term_count are omitted when the chunk did not frame
+// a ranked window (fallback paths).
 type jsonExcerpt struct {
 	Text      string `json:"text"`
 	StartLine int    `json:"start_line,omitempty"`
+	Score     int    `json:"score,omitempty"`
+	TermCount int    `json:"term_count,omitempty"`
 }
 
 // jsonResult is a single file match in --json output.
@@ -357,6 +361,24 @@ type jsonResult struct {
 func excerptStartLineAt(starts []int, i int) int {
 	if i >= 0 && i < len(starts) {
 		return starts[i]
+	}
+	return 0
+}
+
+// excerptChunkScoreAt returns the ranked score for excerpt index i from the
+// parallel chunk-quality slice on a SearchResult (0 when absent).
+func excerptChunkScoreAt(scores []int, i int) int {
+	if i >= 0 && i < len(scores) {
+		return scores[i]
+	}
+	return 0
+}
+
+// excerptChunkTermCountAt returns the matched-term count for excerpt index i
+// from the parallel chunk-quality slice on a SearchResult (0 when absent).
+func excerptChunkTermCountAt(counts []int, i int) int {
+	if i >= 0 && i < len(counts) {
+		return counts[i]
 	}
 	return 0
 }
@@ -459,7 +481,12 @@ func runJSON(args *Arguments) int {
 	for _, r := range results {
 		excerpts := make([]jsonExcerpt, len(r.RawExcerpts))
 		for i, ex := range r.RawExcerpts {
-			excerpts[i] = jsonExcerpt{Text: ex, StartLine: excerptStartLineAt(r.StartLines, i)}
+			excerpts[i] = jsonExcerpt{
+				Text:      ex,
+				StartLine: excerptStartLineAt(r.StartLines, i),
+				Score:     excerptChunkScoreAt(r.ChunkScores, i),
+				TermCount: excerptChunkTermCountAt(r.ChunkTermCounts, i),
+			}
 		}
 		out.Results = append(out.Results, jsonResult{
 			File:         r.FilePath,
@@ -538,14 +565,23 @@ func runPlain(args *Arguments) int {
 	}
 
 	// Use RawExcerpts (pre-highlight) -- no ANSI stripping needed.
+	// Excerpt headers carry per-chunk ranked quality when the chunk framed a
+	// ranked window; the old "[L<start>]" form is kept for quality-less chunks.
 	for i, r := range results {
 		fmt.Printf("MATCH %d/%d [Score: %d (%d/%d terms)]\n", i+1, len(results), r.Score, r.TermCount, len(args.SearchWords))
 		fmt.Printf("FILE: %s\n", r.FilePath)
 		fmt.Printf("SIZE: %d\n", r.FileSize)
 		for j, ex := range r.RawExcerpts {
-			if lr := formatLine(excerptStartLineAt(r.StartLines, j)); lr != "" {
-				fmt.Printf("EXCERPT %d [%s]: %s\n", j+1, lr, ex)
-			} else {
+			score := excerptChunkScoreAt(r.ChunkScores, j)
+			terms := excerptChunkTermCountAt(r.ChunkTermCounts, j)
+			switch {
+			case score > 0 && terms > 0 && formatLine(excerptStartLineAt(r.StartLines, j)) != "":
+				fmt.Printf("EXCERPT %d [%s, Score: %d (%d terms)]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), score, terms, ex)
+			case score > 0 && terms > 0:
+				fmt.Printf("EXCERPT %d [Score: %d (%d terms)]: %s\n", j+1, score, terms, ex)
+			case formatLine(excerptStartLineAt(r.StartLines, j)) != "":
+				fmt.Printf("EXCERPT %d [%s]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), ex)
+			default:
 				fmt.Printf("EXCERPT %d: %s\n", j+1, ex)
 			}
 		}

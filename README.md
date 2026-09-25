@@ -201,7 +201,9 @@ filtering unrelated results.
       "excerpts": [
         {
           "text": "...clean text snippet around matched terms...",
-          "start_line": 42
+          "start_line": 42,
+          "score": 14,
+          "term_count": 2
         }
       ]
     }
@@ -212,7 +214,18 @@ filtering unrelated results.
 Each result includes ranked-match metadata. `score` is the sum of the lengths
 of the distinct matched query terms, `term_count` is their count, and
 `matched_terms` lists them in query order. Results sort by score, then term
-count, then tighter match span, then file path.
+count, then the number of top-quality chunks (chunks matching the file's best
+window), then tighter match span, then file path.
+
+Chunks within a file form a per-file ranked subset: with `--max-excerpts N`
+every match quality tier from the query's minimum requirement up to the full
+term set can seed a chunk, emitted best-first (highest score, then most
+matched terms). A file's best cluster no longer hides its separate
+lower-quality clusters. Each `--json` excerpt carries its own `score` and
+`term_count` (omitted for chunks that did not frame a ranked window), and
+`--plain` excerpt headers include them: `EXCERPT 1 [L42, Score: 14 (3 terms)]`.
+The bounded-overlap guarantee is unchanged: every chunk is >= 90% new content
+relative to earlier chunks from the same file.
 
 When partial matching is active, the JSON query object includes
 `query.partial` with the selected mode, for example `"partial": "prefix"` or
