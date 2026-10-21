@@ -8,7 +8,7 @@ description: Use when searching a codebase or docs for terms that must appear ne
 `garp` finds files where search terms co-occur within a character window -- text, code, and binary documents (PDF, DOCX, ODT, RTF, eml/mbox/msg). Single pure-Go binary, identical behavior on Windows and Linux/macOS: run `garp` from PATH, else the repo binary (`bin/garp`; `garp.exe` on Windows). Forward slashes work in paths on every OS. Quote paths containing spaces; path wildcards are rejected.
 
 Invariants:
-- **Always pass `--json`** (preferred) **or `--plain`** in agent sessions. Without either, garp launches the interactive TUI, which blocks a PTY and errors out without one.
+- **Always pass `--json`** (preferred), **`--pathonly`** (when only matching file paths are needed), **or `--plain`** in agent sessions. Without one of these, garp launches the interactive TUI, which blocks a PTY and errors out without one.
 - Errors go to stderr: check the exit code before parsing stdout, and zero-check the top-level `matches` integer before iterating `results`.
 - Tuning flags (`--workers`, `--heavy-concurrency`, `--file-timeout-binary`) have safe defaults; leave them.
 
@@ -33,6 +33,7 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 - `--max-excerpts N`: excerpts per file (default 1, max 50), skip-ahead selected so every chunk is >=90% new content.
 - `--partial[=prefix|contains]`: boundary-aware prefix (default) or raw substring. Per-term inline glob instead: append `*` to one term (`deploy*`; quote it in shells). `--smart-forms`: match word forms (plurals, -ing, -ed, -tion).
 - `--strict`: require every term in the window (3+ term searches are ranked by default).
+- `--pathonly`: skip excerpt extraction and emit only distinct matching file paths (one per line, ranked order; empty stdout on zero matches).
 - `--not <tokens...>`: exclusions after the flag; `.ext` excludes a file type, bare words exclude whole words.
 
 ## Output shape (`--json`)

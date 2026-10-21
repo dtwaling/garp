@@ -125,6 +125,7 @@ type SearchEngine struct {
 	IncludeCode       bool
 	Strict            bool
 	Partial           PartialMode
+	PathOnly          bool
 	Registry          *ExtractorRegistry
 	Distance          int
 	Silent            bool
@@ -522,8 +523,96 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 	return matchingFiles, nil
 }
 
+// candidateBetter reports whether candidate a ranks higher than candidate b
+// for the same file path.
+func candidateBetter(a, b candidateMatch) bool {
+	if a.score != b.score {
+		return a.score > b.score
+	}
+	if a.termCount != b.termCount {
+		return a.termCount > b.termCount
+	}
+	if a.spanLen != b.spanLen {
+		if a.spanLen <= 0 {
+			return false
+		}
+		if b.spanLen <= 0 {
+			return true
+		}
+		return a.spanLen < b.spanLen
+	}
+	return false
+}
+
+// sortSearchResults sorts results deterministically by ranked match quality and file path.
+func sortSearchResults(results []SearchResult) {
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		if results[i].TermCount != results[j].TermCount {
+			return results[i].TermCount > results[j].TermCount
+		}
+		// Among otherwise-equal files, more top-quality clusters rank first.
+		if results[i].TopQualityChunks != results[j].TopQualityChunks {
+			return results[i].TopQualityChunks > results[j].TopQualityChunks
+		}
+		if results[i].SpanLength != results[j].SpanLength {
+			return results[i].SpanLength < results[j].SpanLength
+		}
+		return results[i].FilePath < results[j].FilePath
+	})
+}
+
+// buildPathOnlyResults constructs a distinct, deterministically ranked result
+// list directly from candidate matches without re-reading files or extracting excerpts.
+func (se *SearchEngine) buildPathOnlyResults(matchingFiles []candidateMatch) []SearchResult {
+	results := make([]SearchResult, 0, len(matchingFiles))
+	indexByPath := make(map[string]int, len(matchingFiles))
+
+	for _, match := range matchingFiles {
+		if match.filePath == "" {
+			continue
+		}
+		if idx, exists := indexByPath[match.filePath]; exists {
+			existing := candidateMatch{
+				filePath:     results[idx].FilePath,
+				score:        results[idx].Score,
+				termCount:    results[idx].TermCount,
+				matchedTerms: results[idx].MatchedTerms,
+				spanLen:      results[idx].SpanLength,
+			}
+			if candidateBetter(match, existing) {
+				results[idx] = SearchResult{
+					FilePath:     match.filePath,
+					Score:        match.score,
+					TermCount:    match.termCount,
+					MatchedTerms: match.matchedTerms,
+					SpanLength:   match.spanLen,
+				}
+			}
+			continue
+		}
+		indexByPath[match.filePath] = len(results)
+		results = append(results, SearchResult{
+			FilePath:     match.filePath,
+			Score:        match.score,
+			TermCount:    match.termCount,
+			MatchedTerms: match.matchedTerms,
+			SpanLength:   match.spanLen,
+		})
+	}
+
+	sortSearchResults(results)
+	return results
+}
+
 // ExtractAndBuildResults extracts content and builds search results
 func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) ([]SearchResult, error) {
+	if se.PathOnly {
+		return se.buildPathOnlyResults(matchingFiles), nil
+	}
+
 	results := make([]SearchResult, 0, len(matchingFiles))
 	cm := NewConcurrencyManager(se.HeavyConcurrency)
 
@@ -756,22 +845,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 
 		results = append(results, result)
 	}
-	sort.SliceStable(results, func(i, j int) bool {
-		if results[i].Score != results[j].Score {
-			return results[i].Score > results[j].Score
-		}
-		if results[i].TermCount != results[j].TermCount {
-			return results[i].TermCount > results[j].TermCount
-		}
-		// Among otherwise-equal files, more top-quality clusters rank first.
-		if results[i].TopQualityChunks != results[j].TopQualityChunks {
-			return results[i].TopQualityChunks > results[j].TopQualityChunks
-		}
-		if results[i].SpanLength != results[j].SpanLength {
-			return results[i].SpanLength < results[j].SpanLength
-		}
-		return results[i].FilePath < results[j].FilePath
-	})
+	sortSearchResults(results)
 	return results, nil
 }
 

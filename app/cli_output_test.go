@@ -63,6 +63,41 @@ func TestCLIOutputFormats(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("pathonly emits distinct ranked paths one per line", func(t *testing.T) {
+		pathArgs := parseArguments([]string{
+			"alpha", "beta", "gamma",
+			"--startdir", root,
+			"--only", "md",
+			"--distance", "200",
+			"--pathonly",
+		})
+		if !pathArgs.PathOnly {
+			t.Fatal("PathOnly = false with --pathonly, want true")
+		}
+		out := strings.TrimRight(string(captureCLIStdout(t, func() int { return runPathOnly(pathArgs) })), "\n")
+		got := strings.Split(out, "\n")
+		want := []string{
+			filepath.Join(root, "full.md"),
+			filepath.Join(root, "partial.md"),
+		}
+		if !slicesEqual(got, want) {
+			t.Errorf("pathonly output = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("pathonly emits empty stdout on zero matches", func(t *testing.T) {
+		missArgs := parseArguments([]string{
+			"nonexistent_term_xyz",
+			"--startdir", root,
+			"--only", "md",
+			"--pathonly",
+		})
+		out := string(captureCLIStdout(t, func() int { return runPathOnly(missArgs) }))
+		if out != "" {
+			t.Errorf("pathonly output on zero matches = %q, want empty string", out)
+		}
+	})
 }
 
 func captureCLIStdout(t *testing.T, run func() int) []byte {

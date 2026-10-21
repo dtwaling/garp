@@ -52,6 +52,7 @@ garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,d
 
 # Machine-readable output for scripts and MCP/agent callers
 garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/' --code --json
+garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/' --code --pathonly
 ```
 
 ## Key features
@@ -65,8 +66,9 @@ garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,d
 - One- and two-term searches remain strict AND; `--strict` enforces strict AND
   for searches with three or more terms
 - Directory-scoped search: `--startdir` sets the root, `--pathscope` prunes the walk
-- Machine-readable output: `--json` (structured envelope) and `--plain` (line-oriented)
-  designed for scripting and MCP tool callers
+- Machine-readable output: `--json` (structured envelope), `--plain` (line-oriented),
+  and `--pathonly` (distinct matching file paths, one per line) designed for scripting
+  and MCP tool callers
 - Smart content cleaning: strips HTML/CSS/JS, email headers, control chars
 - Binary document support: .eml, .mbox, .pdf, .doc/.docx/.odt, .rtf, .msg
 - Code file search with `--code`
@@ -145,6 +147,7 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `--partial[=MODE]` | off | Enable partial word matching. Bare `--partial` defaults to `prefix`; modes: `prefix`, `contains`, `off` |
 | `--not <excl...>` | (none) | Tokens after this flag are exclusions. Dot-prefixed = extension exclude (`.pdf`); others = word exclude |
 | `--strict` | off | Require every search term in the proximity window, including searches with three or more terms |
+| `--pathonly` | off | Skip TUI; emit only distinct matching file paths (one per line, ranked order) to stdout |
 | `--json` | off | Skip TUI; emit structured JSON to stdout. Preferred for MCP/agent callers |
 | `--plain` | off | Skip TUI; emit plain line-oriented text to stdout. Useful for shell scripts |
 | `--max-excerpts N` | 1 | Maximum excerpts per matching file (maximum 50) |

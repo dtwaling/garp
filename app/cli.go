@@ -21,7 +21,7 @@ import (
 	"garp/search"
 )
 
-var version = "0.9.1"
+var version = "0.9.2"
 
 // Arguments for CLI flags (used to seed TUI)
 type Arguments struct {
@@ -56,6 +56,9 @@ type Arguments struct {
 	// JSONOutput: when true, skip the TUI and emit a JSON document to stdout.
 	// Preferred over --plain for agent/MCP callers -- unambiguous structure, no parse fragility.
 	JSONOutput bool
+
+	// PathOnly: when true, skip the TUI and emit only distinct matching file paths (one per line) to stdout.
+	PathOnly bool
 }
 
 // parseArguments parses command line args
@@ -178,6 +181,8 @@ func parseArguments(args []string) *Arguments {
 			result.PlainOutput = true
 		case "--json":
 			result.JSONOutput = true
+		case "--pathonly":
+			result.PathOnly = true
 		case "--help", "-h":
 			showUsage()
 			os.Exit(0)
@@ -275,7 +280,7 @@ func showUsage() {
 
 	// Usage
 	fmt.Println(subHeaderStyle.Render("USAGE"))
-	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
+	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--pathonly] [--plain] [--json] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
 	fmt.Println()
 
 	// Flags
@@ -303,6 +308,7 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("                         Trailing slash optional: 'audio2midi/' and 'audio2midi' both work."))
 	fmt.Println(infoStyle.Render("                         Do not include file extensions (use --not / --only for that)."))
 	fmt.Println(infoStyle.Render("                         Example: --pathscope='audio2midi/,docs/,tests/*'"))
+	fmt.Println(infoStyle.Render("  --pathonly             Skip the interactive TUI; emit only distinct matching file paths (one per line)."))
 	fmt.Println(infoStyle.Render("  --plain                Skip the interactive TUI; emit plain line-oriented output to stdout."))
 	fmt.Println(infoStyle.Render("                         Useful for scripting and MCP tool callers that need machine-readable results."))
 	fmt.Println(infoStyle.Render("  --json                 Skip the interactive TUI; emit a JSON document to stdout."))
@@ -421,8 +427,6 @@ func nativePathScope(pathScope []string) []string {
 	return native
 }
 
-// runJSON executes the search without the TUI and writes a JSON document to stdout.
-// Errors go to stderr as plain text; the exit code is non-zero on failure.
 // buildFileTypes returns the ripgrep-style -g globs for a search: a single
 // --only type when given, otherwise the document (and optionally code) set.
 func buildFileTypes(includeCode bool, onlyType string) []string {
@@ -432,7 +436,9 @@ func buildFileTypes(includeCode bool, onlyType string) []string {
 	return config.BuildRipgrepFileTypes(includeCode)
 }
 
-func runJSON(args *Arguments) int {
+// newSilentSearchEngine configures a silent SearchEngine for non-TUI CLI modes
+// (--json, --plain, --pathonly).
+func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
 	se := search.NewSearchEngineWithWorkers(
 		args.SearchWords,
@@ -446,6 +452,7 @@ func runJSON(args *Arguments) int {
 	se.Silent = true
 	se.Strict = args.Strict
 	se.Partial = args.Partial
+	se.PathOnly = args.PathOnly
 	if args.Distance > 0 {
 		se.Distance = args.Distance
 	}
@@ -456,6 +463,13 @@ func runJSON(args *Arguments) int {
 		se.PathScope = args.PathScope
 	}
 	se.MaxExcerpts = args.MaxExcerpts
+	return se
+}
+
+// runJSON executes the search without the TUI and writes a JSON document to stdout.
+// Errors go to stderr as plain text; the exit code is non-zero on failure.
+func runJSON(args *Arguments) int {
+	se := newSilentSearchEngine(args)
 
 	results, err := se.Execute()
 	if err != nil {
@@ -526,29 +540,7 @@ func runJSON(args *Arguments) int {
 // Zero matches produces a single "NO RESULTS" line.
 // Errors go to stderr with no ANSI color.
 func runPlain(args *Arguments) int {
-	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
-	se := search.NewSearchEngineWithWorkers(
-		args.SearchWords,
-		args.ExcludeWords,
-		fileTypes,
-		args.IncludeCode,
-		args.HeavyConcurrency,
-		args.FileTimeoutBinary,
-		args.FilterWorkers,
-	)
-	se.Silent = true
-	se.Strict = args.Strict
-	se.Partial = args.Partial
-	if args.Distance > 0 {
-		se.Distance = args.Distance
-	}
-	if args.StartDir != "" {
-		se.StartDir = args.StartDir
-	}
-	if len(args.PathScope) > 0 {
-		se.PathScope = args.PathScope
-	}
-	se.MaxExcerpts = args.MaxExcerpts
+	se := newSilentSearchEngine(args)
 
 	results, err := se.Execute()
 	if err != nil {
@@ -590,6 +582,34 @@ func runPlain(args *Arguments) int {
 	return 0
 }
 
+// runPathOnly executes the search without the TUI and writes distinct matching
+// file paths (one per line, ranked order) to stdout. Zero matches produces
+// empty stdout with exit code 0 (matching grep -l / rg --files-with-matches).
+// Errors go to stderr with no ANSI color.
+func runPathOnly(args *Arguments) int {
+	se := newSilentSearchEngine(args)
+	se.PathOnly = true
+
+	results, err := se.Execute()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
+		return 1
+	}
+
+	seen := make(map[string]struct{}, len(results))
+	for _, r := range results {
+		if r.FilePath == "" {
+			continue
+		}
+		if _, exists := seen[r.FilePath]; exists {
+			continue
+		}
+		seen[r.FilePath] = struct{}{}
+		fmt.Println(r.FilePath)
+	}
+	return 0
+}
+
 // Run parses CLI arguments and starts the TUI. Returns a process exit code.
 func Run() int {
 	// Parse args
@@ -614,6 +634,12 @@ func Run() int {
 	// Hook for matching layer: advertise smart-forms via environment (consumed by matching)
 	if args.SmartForms {
 		_ = os.Setenv("GARP_SMART_FORMS", "1")
+	}
+
+	// Path-only output mode: emit distinct matching file paths (one per line) and exit.
+	// Checked before --json and --plain so --pathonly always returns only paths.
+	if args.PathOnly {
+		return runPathOnly(args)
 	}
 
 	// JSON output mode: preferred for agent/MCP callers. Checked before --plain so that
