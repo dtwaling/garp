@@ -39,7 +39,7 @@ func TestCheckTextContainsAllWordsPartial(t *testing.T) {
 
 func TestPartialStreamingPrefilters(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "candidate.eml")
-	if err := os.WriteFile(path, []byte("_deployment service"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(".deployment service"), 0o600); err != nil {
 		t.Fatalf("write candidate: %v", err)
 	}
 
@@ -62,6 +62,20 @@ func TestPartialStreamingPrefilters(t *testing.T) {
 				t.Fatalf("BinaryStreamingPrefilterDecidedPartial() = %v, want %v", found, tt.want)
 			}
 		})
+	}
+
+	underscorePath := filepath.Join(t.TempDir(), "underscore.eml")
+	if err := os.WriteFile(underscorePath, []byte("_deployment service"), 0o600); err != nil {
+		t.Fatalf("write underscore candidate: %v", err)
+	}
+	found, decided := search.BinaryStreamingPrefilterDecidedPartial(
+		underscorePath,
+		[]string{"deploy", "service"},
+		0,
+		search.PartialModePrefix,
+	)
+	if !decided || !found {
+		t.Fatalf("plain prefix underscore fixture = found:%v decided:%v, want true/true", found, decided)
 	}
 }
 

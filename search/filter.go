@@ -2,7 +2,6 @@ package search
 
 import (
 	"archive/zip"
-	"fmt"
 	"io"
 	"os"
 	"path"
@@ -149,7 +148,7 @@ func buildTermRegexLower(word string, mode PartialMode) *regexp.Regexp {
 		// never matches; safe fallback
 		return getWordRegex(`a\A`)
 	}
-	return buildTermRegex(base, mode, false)
+	return compileTermMatcher(base, mode, false).compatibilityRegex()
 }
 
 func buildTermRegexCI(word string, mode PartialMode) *regexp.Regexp {
@@ -158,54 +157,20 @@ func buildTermRegexCI(word string, mode PartialMode) *regexp.Regexp {
 		// never matches; safe fallback
 		return getWordRegex(`a\A`)
 	}
-	return buildTermRegex(base, mode, true)
+	return compileTermMatcher(base, mode, true).compatibilityRegex()
 }
 
-// FindTermIndexCI returns the exact matched token range using the requested
-// partial-match mode. Prefix patterns consume their left boundary, so prefer
-// the token capture group when present.
+// FindTermIndexCI returns the exact matched byte range without delimiters.
 func FindTermIndexCI(text, term string, mode PartialMode) []int {
-	idx := buildTermRegexCI(term, mode).FindStringSubmatchIndex(text)
-	if len(idx) >= 4 && idx[2] >= 0 {
-		return []int{idx[2], idx[3]}
-	}
-	if len(idx) >= 2 {
-		return []int{idx[0], idx[1]}
+	found, ok := compileTermMatcher(term, mode, true).find(text, 0)
+	if ok {
+		return []int{found.start, found.end}
 	}
 	return nil
 }
 
 func buildTermRegex(base string, mode PartialMode, caseInsensitive bool) *regexp.Regexp {
-	isGlob := strings.HasSuffix(base, "*") && len(strings.TrimSuffix(base, "*")) > 1
-	if isGlob {
-		base = strings.TrimSuffix(base, "*")
-		if mode != PartialModeContains {
-			mode = PartialModePrefix
-		}
-	} else if len(base) <= 2 {
-		mode = PartialModeOff
-	}
-
-	prefix := ""
-	if caseInsensitive {
-		prefix = "(?i)"
-	}
-
-	switch mode {
-	case PartialModePrefix:
-		pat := fmt.Sprintf(`%s(?:^|[^a-zA-Z0-9_]|_)(%s\w*)`, prefix, regexp.QuoteMeta(base))
-		return getWordRegex(pat)
-	case PartialModeContains:
-		pat := fmt.Sprintf(`%s(%s)`, prefix, regexp.QuoteMeta(base))
-		return getWordRegex(pat)
-	}
-
-	suffix := `(?:es|s)?`
-	if smartFormsEnabled() {
-		suffix = `(?:es|s|ed|ing|al|tion|ation)?`
-	}
-	pat := fmt.Sprintf(`%s\b(?:%s%s)\b`, prefix, regexp.QuoteMeta(base), suffix)
-	return getWordRegex(pat)
+	return compileTermMatcher(base, mode, caseInsensitive).compatibilityRegex()
 }
 
 // buildWordRegexLower preserves the legacy whole-word matcher API.
