@@ -206,7 +206,7 @@ func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int) (
 	if !se.Silent {
 		fmt.Printf("Finding files with '%s'...\n", query.terms[0])
 	}
-	candidateFiles, err := FindFilesWithFirstWordProgressPartialWithOptions(query.terms, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
+	candidateFiles, err := findFilesWithFirstWordProgressQueryWithOptions(query, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
 		if se.OnProgress != nil {
 			se.OnProgress("discovery", processed, total, path)
 		}

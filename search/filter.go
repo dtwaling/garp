@@ -653,8 +653,16 @@ func FindFilesWithFirstWordPartial(word string, fileTypes []string, walkRoot str
 
 // FindFilesWithFirstWordPartialWithOptions finds candidates using the shared walk policy.
 func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
-	// Precompute lowercased search word for fast ASCII whole-word scan
-	wLower := strings.ToLower(word)
+	return findFilesWithFirstWordMatcherWithOptions(
+		compileTermMatcher(word, partial, true),
+		fileTypes,
+		walkRoot,
+		pathScope,
+		options,
+	)
+}
+
+func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []string, walkRoot string, pathScope []string, options WalkOptions) ([]string, error) {
 	matches := make([]string, 0, 128)
 	err := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
 		if IsBinaryFormat(path) {
@@ -666,10 +674,7 @@ func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, w
 		// Stream up to maxBytes looking for the first word
 		const chunkSize = 64 * 1024
 		maxBytes := options.TextMaxBytes()
-		overlap := 32
-		if l := len(wLower) - 1; l > overlap {
-			overlap = l
-		}
+		overlap := discoveryMatcherOverlap(matcher)
 
 		f, openErr := os.Open(path)
 		_ = adviseSequential(f)
@@ -680,8 +685,7 @@ func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, w
 		// Early path for small files: read whole file at once, avoid chunk loop
 		if st, stErr := f.Stat(); stErr == nil && st.Size() <= chunkSize {
 			data, _ := io.ReadAll(io.LimitReader(f, maxBytes))
-			found := asciiIndexPartialCI(data, []byte(wLower), partial)
-			if found >= 0 {
+			if discoveryMatchIndex(data, matcher, 0) >= 0 {
 				matches = append(matches, path)
 			}
 			_ = adviseDontNeed(f)
@@ -704,7 +708,8 @@ func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, w
 			n, rErr := f.Read(buf[:toRead])
 			if n > 0 {
 				combined := append(prev, buf[:n]...)
-				if asciiIndexPartialCI(combined, []byte(wLower), partial) >= 0 {
+				from := discoveryChunkMatchStart(total, len(prev))
+				if discoveryMatchIndex(combined, matcher, from) >= 0 {
 					found = true
 				}
 				if n >= overlap {
@@ -742,6 +747,149 @@ func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, w
 	return matches, nil
 }
 
+func discoveryMatcherOverlap(matcher termMatcher) int {
+	overlap := matcher.detectionBytes + 1
+	if overlap < 32 {
+		return 32
+	}
+	return overlap
+}
+
+func discoveryChunkMatchStart(bytesRead int64, retained int) int {
+	if retained > 0 && bytesRead > int64(retained) {
+		return 1
+	}
+	return 0
+}
+
+func discoveryMatchIndex(buf []byte, matcher termMatcher, from int) int {
+	if from < 0 {
+		from = 0
+	}
+	if from > len(buf) {
+		return -1
+	}
+	if canUseASCIIPlainTermFastPath(buf, matcher) {
+		return asciiPlainTermIndexCI(buf, matcher, from)
+	}
+
+	found, ok := matcher.find(string(buf), from)
+	if !ok {
+		return -1
+	}
+	return found.start
+}
+
+func canUseASCIIPlainTermFastPath(buf []byte, matcher termMatcher) bool {
+	return !matcher.validWildcard &&
+		!strings.ContainsAny(matcher.term, "*?") &&
+		isASCIIString(matcher.term) &&
+		(!matcher.caseInsensitive || !containsUnicodeASCIIFoldVariant(buf))
+}
+
+func isASCIIString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+func containsUnicodeASCIIFoldVariant(buf []byte) bool {
+	for i := 0; i < len(buf); i++ {
+		switch buf[i] {
+		case 0xc5:
+			if i+1 < len(buf) && buf[i+1] == 0xbf { // U+017F, long s
+				return true
+			}
+		case 0xe2:
+			if i+2 < len(buf) && buf[i+1] == 0x84 && buf[i+2] == 0xaa { // U+212A, Kelvin sign
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func asciiPlainTermIndexCI(buf []byte, matcher termMatcher, from int) int {
+	term := matcher.term
+	if term == "" || len(buf)-from < len(term) {
+		return -1
+	}
+
+	limit := len(buf) - len(term)
+	for start := from; start <= limit; start++ {
+		if matcher.leadingBound && start > 0 && isWordByte(buf[start-1]) &&
+			(matcher.strictBoundary || matcher.mode != PartialModePrefix || buf[start-1] != '_') {
+			continue
+		}
+		if !asciiLiteralEqualFold(buf[start:start+len(term)], term, matcher.caseInsensitive) {
+			continue
+		}
+
+		end := start + len(term)
+		if matcher.mode == PartialModeContains || matcher.mode == PartialModePrefix {
+			return start
+		}
+		if asciiPlainTermHasAcceptedEnd(buf, end, matcher) {
+			return start
+		}
+	}
+	return -1
+}
+
+func asciiLiteralEqualFold(got []byte, want string, caseInsensitive bool) bool {
+	for i, b := range got {
+		expected := want[i]
+		if caseInsensitive {
+			b = asciiLower(b)
+			expected = asciiLower(expected)
+		}
+		if b != expected {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiLower(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
+}
+
+func asciiPlainTermHasAcceptedEnd(buf []byte, end int, matcher termMatcher) bool {
+	if !isWordByte(matcher.term[len(matcher.term)-1]) {
+		return end == len(buf) || !isWordByte(buf[end])
+	}
+	if end == len(buf) || !isWordByte(buf[end]) {
+		return true
+	}
+
+	if asciiSuffixEndsAtBoundary(buf, end, "es", matcher.caseInsensitive) ||
+		asciiSuffixEndsAtBoundary(buf, end, "s", matcher.caseInsensitive) {
+		return true
+	}
+	if !matcher.smartForms {
+		return false
+	}
+	for _, suffix := range [...]string{"ed", "ing", "al", "tion", "ation"} {
+		if asciiSuffixEndsAtBoundary(buf, end, suffix, matcher.caseInsensitive) {
+			return true
+		}
+	}
+	return false
+}
+
+func asciiSuffixEndsAtBoundary(buf []byte, start int, suffix string, caseInsensitive bool) bool {
+	end := start + len(suffix)
+	return end <= len(buf) &&
+		asciiLiteralEqualFold(buf[start:end], suffix, caseInsensitive) &&
+		(end == len(buf) || !isWordByte(buf[end]))
+}
+
 // heavyBinaryPrefilterTerms keeps the discovery anchor while selecting the most
 // specific secondary term for bounded heavy-binary prefiltering.
 func heavyBinaryPrefilterTerms(words []string) []string {
@@ -774,13 +922,29 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 // FindFilesWithFirstWordProgressPartialWithOptions emits discovery progress
 // using the shared walk policy.
 func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
+	return findFilesWithFirstWordProgressQueryWithOptions(
+		compileQuery(words, partial),
+		fileTypes,
+		workers,
+		onProgress,
+		walkRoot,
+		pathScope,
+		partial,
+		options,
+	)
+}
+
+func findFilesWithFirstWordProgressQueryWithOptions(query compiledQuery, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
 	// Emit initial progress with unknown total
 	if onProgress != nil {
 		onProgress(0, 0, "")
 	}
+	if len(query.matchers) == 0 {
+		return nil, nil
+	}
 
-	primaryLower := strings.ToLower(words[0])
-	termsToCheck := heavyBinaryPrefilterTerms(words)
+	primaryMatcher := query.matchers[0]
+	termsToCheck := heavyBinaryPrefilterTerms(query.terms)
 
 	// Results and synchronization
 	matches := make([]string, 0, 128)
@@ -805,10 +969,7 @@ func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes 
 			defer wg.Done()
 			const chunkSize = 64 * 1024
 			maxBytes := options.TextMaxBytes()
-			overlap := 32
-			if l := len(primaryLower) - 1; l > overlap {
-				overlap = l
-			}
+			overlap := discoveryMatcherOverlap(primaryMatcher)
 
 			for p := range paths {
 				maybePaceForMemory()
@@ -825,8 +986,7 @@ func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes 
 					_ = adviseDontNeed(f)
 					_ = f.Close()
 
-					found := asciiIndexPartialCI(data, []byte(primaryLower), partial)
-					if found >= 0 {
+					if discoveryMatchIndex(data, primaryMatcher, 0) >= 0 {
 						mu.Lock()
 						matches = append(matches, p)
 						mu.Unlock()
@@ -850,7 +1010,8 @@ func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes 
 					n, rErr := f.Read(buf[:toRead])
 					if n > 0 {
 						combined := append(prev, buf[:n]...)
-						if asciiIndexPartialCI(combined, []byte(primaryLower), partial) >= 0 {
+						from := discoveryChunkMatchStart(readTotal, len(prev))
+						if discoveryMatchIndex(combined, primaryMatcher, from) >= 0 {
 							found = true
 						}
 						if n >= overlap {
@@ -1654,95 +1815,7 @@ func asciiIndexWholeWordCI(buf []byte, wordLower []byte) bool {
 	return asciiIndexPartialCI(buf, wordLower, PartialModeOff) >= 0
 }
 
-// asciiIndexPartialCI returns the first ASCII case-insensitive match for wordLower.
+// asciiIndexPartialCI returns the first case-insensitive match for wordLower.
 func asciiIndexPartialCI(buf []byte, wordLower []byte, mode PartialMode) int {
-	if len(wordLower) == 0 {
-		return -1
-	}
-	if len(wordLower) >= 3 && wordLower[len(wordLower)-1] == '*' {
-		wordLower = wordLower[:len(wordLower)-1]
-		if mode == PartialModeOff {
-			mode = PartialModePrefix
-		}
-	}
-	if len(wordLower) == 0 || len(buf) < len(wordLower) {
-		return -1
-	}
-
-	isWordChar := func(b byte) bool {
-		switch {
-		case b >= 'A' && b <= 'Z':
-			return true
-		case b >= 'a' && b <= 'z':
-			return true
-		case b >= '0' && b <= '9':
-			return true
-		default:
-			return b == '_'
-		}
-	}
-	toLower := func(b byte) byte {
-		if b >= 'A' && b <= 'Z' {
-			return b | 0x20
-		}
-		return b
-	}
-
-	wl := len(wordLower)
-	limit := len(buf) - wl
-	for i := 0; i <= limit; i++ {
-		if mode != PartialModeContains && i > 0 && isWordChar(buf[i-1]) && (mode == PartialModeOff || buf[i-1] != '_') {
-			continue
-		}
-
-		j := 0
-		for ; j < wl; j++ {
-			if toLower(buf[i+j]) != wordLower[j] {
-				break
-			}
-		}
-		if j != wl {
-			continue
-		}
-		if mode == PartialModeContains || mode == PartialModePrefix {
-			return i
-		}
-
-		end := i + wl
-		if end >= len(buf) || !isWordChar(buf[end]) {
-			return i
-		}
-		if smartFormsEnabled() {
-			for _, suffix := range [][]byte{[]byte("es"), []byte("s"), []byte("ed"), []byte("ing"), []byte("al"), []byte("tion"), []byte("ation")} {
-				suffixEnd := end + len(suffix)
-				if suffixEnd > len(buf) {
-					continue
-				}
-				matchesSuffix := true
-				for j, b := range suffix {
-					if toLower(buf[end+j]) != b {
-						matchesSuffix = false
-						break
-					}
-				}
-				if matchesSuffix && (suffixEnd >= len(buf) || !isWordChar(buf[suffixEnd])) {
-					return i
-				}
-			}
-		} else {
-			if end < len(buf) && toLower(buf[end]) == 's' {
-				endS := end + 1
-				if endS >= len(buf) || !isWordChar(buf[endS]) {
-					return i
-				}
-			}
-			if end+1 < len(buf) && toLower(buf[end]) == 'e' && toLower(buf[end+1]) == 's' {
-				endES := end + 2
-				if endES >= len(buf) || !isWordChar(buf[endES]) {
-					return i
-				}
-			}
-		}
-	}
-	return -1
+	return discoveryMatchIndex(buf, compileTermMatcher(string(wordLower), mode, true), 0)
 }
