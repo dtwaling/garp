@@ -115,6 +115,47 @@ func TestPathScopeExemptionExactRetainsGeneralAndChildRules(t *testing.T) {
 	}
 }
 
+func TestPathScopeExemptionRetainsRulesThatMatchChildName(t *testing.T) {
+	tests := []struct {
+		name      string
+		ignore    string
+		child     string
+		candidate string
+	}{
+		{
+			name:      "basename glob",
+			ignore:    "*.bak\n",
+			child:     "app.bak",
+			candidate: "app.bak/temp.bak",
+		},
+		{
+			name:      "match all",
+			ignore:    "*\n",
+			child:     "app",
+			candidate: "app/visible.md",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), tt.ignore)
+			writeWalkFixture(t, root, tt.candidate, "anchor")
+
+			got := collectCandidates(
+				t,
+				root,
+				[]string{"-g", "*.md", "-g", "*.bak"},
+				[]string{tt.child + "/"},
+				WalkOptions{},
+			)
+			if len(got) != 0 {
+				t.Fatalf("candidates = %v, want inherited ignore rule retained", got)
+			}
+		})
+	}
+}
+
 func TestPathScopeExemptionWildcardFirstSegment(t *testing.T) {
 	root := t.TempDir()
 	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "TeamOne/\nTeamTwo/\nOther/\n")

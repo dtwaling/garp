@@ -91,7 +91,7 @@ func walkCandidates(
 					case nestedRepository:
 						childChain = initialIgnoreChain(physicalPath)
 					case depth == 0 && pathScopeExemptsDirectChild(entry.Name(), normScope):
-						childChain = chain.withoutDirectoryExcludes(physicalPath).withLocalFiles(physicalPath)
+						childChain = chain.withoutDirectoryOnlyExcludes(physicalPath).withLocalFiles(physicalPath)
 					default:
 						if ignoredByRules(chain.rules, physicalPath, true) {
 							continue

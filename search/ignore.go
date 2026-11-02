@@ -95,17 +95,26 @@ func (chain ignoreChain) withLocalFiles(directory string) ignoreChain {
 	return ignoreChain{rules: rules, nextPrecedence: precedence}
 }
 
-func (chain ignoreChain) withoutDirectoryExcludes(candidate string) ignoreChain {
+func (chain ignoreChain) withoutDirectoryOnlyExcludes(candidate string) ignoreChain {
 	if !ignoredByRules(chain.rules, candidate, true) {
 		return chain
 	}
 
-	rules := make([]ignoreRule, 0, len(chain.rules))
-	for _, rule := range chain.rules {
-		if !rule.negated && rule.matches(candidate, true) {
+	var rules []ignoreRule
+	for i, rule := range chain.rules {
+		if rule.directoryOnly && !rule.negated && rule.matches(candidate, true) {
+			if rules == nil {
+				rules = make([]ignoreRule, 0, len(chain.rules)-1)
+				rules = append(rules, chain.rules[:i]...)
+			}
 			continue
 		}
-		rules = append(rules, rule)
+		if rules != nil {
+			rules = append(rules, rule)
+		}
+	}
+	if rules == nil {
+		return chain
 	}
 	return ignoreChain{rules: rules, nextPrecedence: chain.nextPrecedence}
 }
