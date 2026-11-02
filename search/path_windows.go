@@ -20,7 +20,7 @@ func resolveWalkRoot(root string) (logicalRoot, physicalRoot string, err error) 
 	}
 	logicalRoot = filepath.Clean(logicalRoot)
 
-	name, err := windows.UTF16PtrFromString(logicalRoot)
+	name, err := windows.UTF16PtrFromString(extendedLengthWindowsPath(logicalRoot))
 	if err != nil {
 		return "", "", fmt.Errorf("resolve walk root %q: %w", root, err)
 	}

@@ -107,6 +107,33 @@ func TestExtendedLengthWindowsPath(t *testing.T) {
 	}
 }
 
+func TestResolveWalkRootBeyondMAXPATH(t *testing.T) {
+	root := t.TempDir()
+	longRoot := root
+	for len(longRoot) <= 300 {
+		longRoot = filepath.Join(longRoot, strings.Repeat("segment", 5))
+		if err := os.Mkdir(longRoot, 0o755); err != nil {
+			t.Fatalf("create long walk root: %v", err)
+		}
+	}
+	if len(longRoot) <= 260 {
+		t.Fatalf("fixture path length = %d, want beyond MAX_PATH", len(longRoot))
+	}
+
+	logicalRoot, physicalRoot, err := resolveWalkRoot(longRoot)
+	if err != nil {
+		t.Fatalf("resolveWalkRoot() error = %v", err)
+	}
+	wantLogical, err := filepath.Abs(longRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logicalRoot != filepath.Clean(wantLogical) {
+		t.Errorf("logical root = %q, want %q", logicalRoot, filepath.Clean(wantLogical))
+	}
+	requireSameFile(t, physicalRoot, longRoot)
+}
+
 func TestCandidateWalkDiscoversRegularFileBeyondMAXPATH(t *testing.T) {
 	root := t.TempDir()
 	deep := root
