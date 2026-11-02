@@ -46,9 +46,13 @@ func walkCandidates(
 
 	matcher := newFileTypeMatcher(fileTypes)
 	normScope := normalizePathScopePatterns(pathScope, logicalRoot)
+	rootChain := ignoreChain{}
+	if !options.NoIgnore {
+		rootChain = initialIgnoreChain(physicalRoot)
+	}
 
-	var walkDirectory func(logicalDir, physicalDir string, depth int) error
-	walkDirectory = func(logicalDir, physicalDir string, depth int) error {
+	var walkDirectory func(logicalDir, physicalDir string, depth int, chain ignoreChain) error
+	walkDirectory = func(logicalDir, physicalDir string, depth int, chain ignoreChain) error {
 		entries, readErr := os.ReadDir(physicalDir)
 		if readErr != nil {
 			if depth == 0 {
@@ -69,19 +73,38 @@ func walkCandidates(
 			}
 
 			if entry.IsDir() {
+				nestedRepository := !options.NoIgnore && hasRepositoryBoundary(physicalPath)
 				if config.ShouldSkipDirectory(entry.Name()) {
 					continue
+				}
+
+				childChain := chain
+				if !options.NoIgnore {
+					switch {
+					case nestedRepository:
+						childChain = initialIgnoreChain(physicalPath)
+					case depth == 0 && pathScopeExemptsDirectChild(entry.Name(), normScope):
+						childChain = chain.withoutDirectoryExcludes(physicalPath).withLocalFiles(physicalPath)
+					default:
+						if ignoredByRules(chain.rules, physicalPath, true) {
+							continue
+						}
+						childChain = chain.withLocalFiles(physicalPath)
+					}
 				}
 				if len(normScope) > 0 && !dirCouldMatchPathScope(logicalPath, logicalRoot, normScope) {
 					continue
 				}
-				if err := walkDirectory(logicalPath, physicalPath, depth+1); err != nil {
+				if err := walkDirectory(logicalPath, physicalPath, depth+1, childChain); err != nil {
 					return err
 				}
 				continue
 			}
 
 			if entry.Type() != 0 {
+				continue
+			}
+			if !options.NoIgnore && ignoredByRules(chain.rules, physicalPath, false) {
 				continue
 			}
 			if !matcher.allows(logicalPath) {
@@ -110,5 +133,5 @@ func walkCandidates(
 		return nil
 	}
 
-	return walkDirectory(logicalRoot, physicalRoot, 0)
+	return walkDirectory(logicalRoot, physicalRoot, 0, rootChain)
 }

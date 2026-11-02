@@ -26,8 +26,19 @@ type ignoreRule struct {
 	matcher          *regexp.Regexp
 }
 
+// ignoreChain is immutable traversal state. Child chains share inherited rules
+// until local rules require a copied backing slice.
+type ignoreChain struct {
+	rules          []ignoreRule
+	nextPrecedence int
+}
+
 // initialIgnoreRules builds the ignore chain inherited by walkRoot.
 func initialIgnoreRules(walkRoot string) []ignoreRule {
+	return initialIgnoreChain(walkRoot).rules
+}
+
+func initialIgnoreChain(walkRoot string) ignoreChain {
 	walkRoot = filepath.Clean(walkRoot)
 	repositoryRoot, inRepository := findRepositoryRoot(walkRoot)
 	chainRoot := walkRoot
@@ -55,7 +66,64 @@ func initialIgnoreRules(walkRoot string) []ignoreRule {
 		rules = appendIgnoreFile(rules, filepath.Join(directory, ".ignore"), directory, precedence)
 		precedence++
 	}
-	return rules
+	return ignoreChain{rules: rules, nextPrecedence: precedence}
+}
+
+func (chain ignoreChain) withLocalFiles(directory string) ignoreChain {
+	precedence := chain.nextPrecedence
+	gitignoreRules := readIgnoreFile(filepath.Join(directory, ".gitignore"), directory, precedence)
+	precedence++
+	ignoreRules := readIgnoreFile(filepath.Join(directory, ".ignore"), directory, precedence)
+	precedence++
+
+	added := len(gitignoreRules) + len(ignoreRules)
+	if added == 0 {
+		return ignoreChain{rules: chain.rules, nextPrecedence: precedence}
+	}
+
+	rules := make([]ignoreRule, len(chain.rules), len(chain.rules)+added)
+	copy(rules, chain.rules)
+	rules = append(rules, gitignoreRules...)
+	rules = append(rules, ignoreRules...)
+	return ignoreChain{rules: rules, nextPrecedence: precedence}
+}
+
+func (chain ignoreChain) withoutDirectoryExcludes(candidate string) ignoreChain {
+	if !ignoredByRules(chain.rules, candidate, true) {
+		return chain
+	}
+
+	rules := make([]ignoreRule, 0, len(chain.rules))
+	for _, rule := range chain.rules {
+		if !rule.negated && rule.matches(candidate, true) {
+			continue
+		}
+		rules = append(rules, rule)
+	}
+	return ignoreChain{rules: rules, nextPrecedence: chain.nextPrecedence}
+}
+
+func hasRepositoryBoundary(directory string) bool {
+	info, err := os.Stat(filepath.Join(directory, ".git"))
+	return err == nil && (info.IsDir() || info.Mode().IsRegular())
+}
+
+func pathScopeExemptsDirectChild(name string, normScope []string) bool {
+	for _, pattern := range normScope {
+		if pattern == "" {
+			continue
+		}
+		hasSlash := strings.Contains(pattern, "/")
+		parts := splitPathScopeParts(pattern)
+		if len(parts) == 0 || parts[0] == "**" || (!hasSlash && strings.Contains(parts[0], ".")) {
+			continue
+		}
+		first, child := normalizePathScopeMatchPair(parts[0], name)
+		if matched, err := path.Match(first, child); err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 func findRepositoryRoot(start string) (string, bool) {
@@ -150,11 +218,15 @@ func pathFromAncestor(ancestor, descendant string) []string {
 }
 
 func appendIgnoreFile(rules []ignoreRule, filename, sourceDir string, precedence int) []ignoreRule {
+	return append(rules, readIgnoreFile(filename, sourceDir, precedence)...)
+}
+
+func readIgnoreFile(filename, sourceDir string, precedence int) []ignoreRule {
 	contents, err := os.ReadFile(filename)
 	if err != nil {
-		return rules
+		return nil
 	}
-	return append(rules, parseIgnoreRules(string(contents), sourceDir, precedence)...)
+	return parseIgnoreRules(string(contents), sourceDir, precedence)
 }
 
 func sameFilePath(left, right string) bool {
