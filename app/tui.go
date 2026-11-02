@@ -105,6 +105,8 @@ type model struct {
 	filterWorkers     int
 	startDir          string   // --startdir: root directory for file walks
 	pathScope         []string // --pathscope: restrict walks to matching paths
+	noIgnore          bool
+	maxFileSize       int64
 
 	// UI state
 	confirmSelected string // "yes" or "no"
@@ -621,13 +623,8 @@ func (m model) View() string {
 	return strings.Join(parts, "\n")
 }
 
-// Background search command (now exposed on model)
-func (m model) runSearch() tea.Cmd {
-	// Prepare engine and wire progress callback
-	fileTypes := config.BuildRipgrepFileTypes(m.includeCode)
-	if m.onlyType != "" {
-		fileTypes = config.OnlyTypeGlobs(m.onlyType)
-	}
+func (m model) newSearchEngine() *search.SearchEngine {
+	fileTypes := buildFileTypes(m.includeCode, m.onlyType)
 	se := search.NewSearchEngineWithWorkers(
 		m.searchWords,
 		m.excludeWords,
@@ -640,6 +637,8 @@ func (m model) runSearch() tea.Cmd {
 	se.Silent = true
 	se.Strict = m.strict
 	se.Partial = m.partial
+	se.NoIgnore = m.noIgnore
+	se.MaxFileSize = m.maxFileSize
 	// Override default proximity window if provided
 	if m.distance > 0 {
 		se.Distance = m.distance
@@ -651,6 +650,23 @@ func (m model) runSearch() tea.Cmd {
 	if len(m.pathScope) > 0 {
 		se.PathScope = m.pathScope
 	}
+	return se
+}
+
+func (m model) preflightFileCount() (int, error) {
+	fileTypes := buildFileTypes(m.includeCode, m.onlyType)
+	return search.GetDocumentFileCountWithOptions(
+		fileTypes,
+		m.startDir,
+		m.pathScope,
+		search.WalkOptions{NoIgnore: m.noIgnore, MaxFileSize: m.maxFileSize},
+	)
+}
+
+// Background search command (now exposed on model)
+func (m model) runSearch() tea.Cmd {
+	// Prepare engine and wire progress callback
+	se := m.newSearchEngine()
 	// Stream progress from the engine to the TUI header
 	se.OnProgress = func(stage string, processed, total int, path string) {
 		ps, sk, tr := se.GetPDFStatsDetailed()
@@ -719,7 +735,7 @@ func (m model) runSearch() tea.Cmd {
 		}
 		return innerWidth * contentHeight
 	}
-	total, _ := search.GetDocumentFileCount(fileTypes, "", nil)
+	total, _ := m.preflightFileCount()
 
 	// Emit initial progress and then run the search
 	return tea.Batch(
