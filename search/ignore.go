@@ -95,14 +95,14 @@ func (chain ignoreChain) withLocalFiles(directory string) ignoreChain {
 	return ignoreChain{rules: rules, nextPrecedence: precedence}
 }
 
-func (chain ignoreChain) withoutDirectoryOnlyExcludes(candidate string) ignoreChain {
+func (chain ignoreChain) withoutPathScopeContainerExcludes(candidate string) ignoreChain {
 	if !ignoredByRules(chain.rules, candidate, true) {
 		return chain
 	}
 
 	var rules []ignoreRule
 	for i, rule := range chain.rules {
-		if rule.directoryOnly && !rule.negated && rule.matches(candidate, true) {
+		if rule.isPathScopeContainerExclusion(candidate) {
 			if rules == nil {
 				rules = make([]ignoreRule, 0, len(chain.rules)-1)
 				rules = append(rules, chain.rules[:i]...)
@@ -117,6 +117,30 @@ func (chain ignoreChain) withoutDirectoryOnlyExcludes(candidate string) ignoreCh
 		return chain
 	}
 	return ignoreChain{rules: rules, nextPrecedence: chain.nextPrecedence}
+}
+
+func (rule ignoreRule) isPathScopeContainerExclusion(candidate string) bool {
+	return !rule.negated &&
+		(rule.directoryOnly || !hasUnescapedIgnoreWildcard(rule.pattern)) &&
+		rule.matches(candidate, true)
+}
+
+func hasUnescapedIgnoreWildcard(pattern string) bool {
+	escaped := false
+	for _, character := range pattern {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if character == '\\' {
+			escaped = true
+			continue
+		}
+		if character == '*' || character == '?' || character == '[' {
+			return true
+		}
+	}
+	return false
 }
 
 func hasRepositoryBoundary(directory string) bool {

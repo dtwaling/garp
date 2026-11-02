@@ -221,6 +221,24 @@ func TestIgnorePatternWildcards(t *testing.T) {
 	}
 }
 
+func TestHasUnescapedIgnoreWildcard(t *testing.T) {
+	tests := map[string]bool{
+		"RepoA":       false,
+		"/RepoA":      false,
+		`RepoA\*`:     false,
+		`RepoA\?`:     false,
+		`RepoA\[abc]`: false,
+		"RepoA*":      true,
+		"RepoA?":      true,
+		"RepoA[12]":   true,
+	}
+	for pattern, want := range tests {
+		if got := hasUnescapedIgnoreWildcard(pattern); got != want {
+			t.Errorf("hasUnescapedIgnoreWildcard(%q) = %v, want %v", pattern, got, want)
+		}
+	}
+}
+
 func TestIgnorePatternEscapesInsideClasses(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -95,23 +95,38 @@ func TestNestedRepoGitfileResetsAndLoadsOwnExclude(t *testing.T) {
 	}
 }
 
-func TestPathScopeExemptionExactRetainsGeneralAndChildRules(t *testing.T) {
-	root := t.TempDir()
-	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "RepoA/\nRepoB/\n*.bak\n")
-	writeIgnoreFixture(t, filepath.Join(root, "RepoA", ".gitignore"), "child.md\n")
-	for _, relative := range []string{
-		"RepoA/main.md",
-		"RepoA/RepoA/nested.md",
-		"RepoA/temp.bak",
-		"RepoA/child.md",
-		"RepoB/main.md",
+func TestPathScopeExemptionSuppressesContainerRules(t *testing.T) {
+	for name, containerRules := range map[string]string{
+		"directory only":     "RepoA/\nRepoB/\n",
+		"literal basename":   "RepoA\nRepoB\n",
+		"anchored literal":   "/RepoA\n/RepoB\n",
+		"wildcard directory": "RepoA*/\nRepoB*/\n",
 	} {
-		writeWalkFixture(t, root, relative, "anchor")
-	}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), containerRules+"*.bak\n")
+			writeIgnoreFixture(t, filepath.Join(root, "RepoA", ".gitignore"), "child.md\n")
+			for _, relative := range []string{
+				"RepoA/main.md",
+				"RepoA/RepoA/nested.md",
+				"RepoA/temp.bak",
+				"RepoA/child.md",
+				"RepoB/main.md",
+			} {
+				writeWalkFixture(t, root, relative, "anchor")
+			}
 
-	got := collectCandidates(t, root, []string{"-g", "*.md", "-g", "*.bak"}, []string{"RepoA/"}, WalkOptions{})
-	if !reflect.DeepEqual(got, []string{"RepoA/RepoA/nested.md", "RepoA/main.md"}) {
-		t.Fatalf("candidates = %v, want exempt child with general and child rules retained", got)
+			got := collectCandidates(
+				t,
+				root,
+				[]string{"-g", "*.md", "-g", "*.bak"},
+				[]string{"RepoA/"},
+				WalkOptions{},
+			)
+			if !reflect.DeepEqual(got, []string{"RepoA/RepoA/nested.md", "RepoA/main.md"}) {
+				t.Fatalf("candidates = %v, want exempt child with general and child rules retained", got)
+			}
+		})
 	}
 }
 
