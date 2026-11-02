@@ -1,7 +1,9 @@
 package search
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -11,7 +13,12 @@ import (
 	"strings"
 )
 
-var errMalformedIgnorePattern = errors.New("malformed ignore pattern")
+const maxIgnoreMetadataBytes int64 = 1 << 20
+
+var (
+	errMalformedIgnorePattern = errors.New("malformed ignore pattern")
+	utf8BOM                   = []byte{0xef, 0xbb, 0xbf}
+)
 
 // ignoreRule is one compiled line from an ignore source.
 type ignoreRule struct {
@@ -152,8 +159,8 @@ func resolveRepositoryGitDirs(repositoryRoot string) (commonDir, worktreeDir str
 	if info.IsDir() {
 		worktreeDir = gitEntry
 	} else if info.Mode().IsRegular() {
-		contents, readErr := os.ReadFile(gitEntry)
-		if readErr != nil {
+		contents, ok := readIgnoreMetadataFile(gitEntry)
+		if !ok {
 			return "", ""
 		}
 		pointer, ok := parsePathPointer(string(contents), "gitdir:")
@@ -166,8 +173,8 @@ func resolveRepositoryGitDirs(repositoryRoot string) (commonDir, worktreeDir str
 		return "", ""
 	}
 
-	contents, err := os.ReadFile(filepath.Join(worktreeDir, "commondir"))
-	if err != nil {
+	contents, ok := readIgnoreMetadataFile(filepath.Join(worktreeDir, "commondir"))
+	if !ok {
 		return "", worktreeDir
 	}
 	pointer := strings.TrimSpace(string(contents))
@@ -222,11 +229,37 @@ func appendIgnoreFile(rules []ignoreRule, filename, sourceDir string, precedence
 }
 
 func readIgnoreFile(filename, sourceDir string, precedence int) []ignoreRule {
-	contents, err := os.ReadFile(filename)
-	if err != nil {
+	contents, ok := readIgnoreMetadataFile(filename)
+	if !ok {
 		return nil
 	}
+	contents = bytes.TrimPrefix(contents, utf8BOM)
 	return parseIgnoreRules(string(contents), sourceDir, precedence)
+}
+
+func readIgnoreMetadataFile(filename string) ([]byte, bool) {
+	before, err := os.Lstat(filename)
+	if err != nil || !before.Mode().IsRegular() || before.Size() > maxIgnoreMetadataBytes {
+		return nil, false
+	}
+
+	file, err := openIgnoreMetadataFile(filename)
+	if err != nil {
+		return nil, false
+	}
+	defer file.Close()
+
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || opened.Size() > maxIgnoreMetadataBytes ||
+		!os.SameFile(before, opened) {
+		return nil, false
+	}
+
+	contents, err := io.ReadAll(io.LimitReader(file, maxIgnoreMetadataBytes+1))
+	if err != nil || int64(len(contents)) > maxIgnoreMetadataBytes {
+		return nil, false
+	}
+	return contents, true
 }
 
 func sameFilePath(left, right string) bool {
