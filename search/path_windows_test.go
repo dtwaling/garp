@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -86,5 +88,49 @@ func TestRootLinkNormalizesWindowsFinalPathPrefix(t *testing.T) {
 		if got := normalizeWindowsFinalPath(input); got != want {
 			t.Errorf("normalizeWindowsFinalPath(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestExtendedLengthWindowsPath(t *testing.T) {
+	tests := map[string]string{
+		`C:\repo\file.md`:              `\\?\C:\repo\file.md`,
+		`\\server\share\file.md`:       `\\?\UNC\server\share\file.md`,
+		`\\?\C:\already-extended`:      `\\?\C:\already-extended`,
+		`\\?\UNC\server\share\file.md`: `\\?\UNC\server\share\file.md`,
+		`\\.\PhysicalDrive0`:           `\\.\PhysicalDrive0`,
+		`relative\file.md`:             `relative\file.md`,
+	}
+	for input, want := range tests {
+		if got := extendedLengthWindowsPath(input); got != want {
+			t.Errorf("extendedLengthWindowsPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestCandidateWalkDiscoversRegularFileBeyondMAXPATH(t *testing.T) {
+	root := t.TempDir()
+	deep := root
+	for len(filepath.Join(deep, "document.md")) <= 300 {
+		deep = filepath.Join(deep, strings.Repeat("segment", 5))
+		if err := os.Mkdir(deep, 0o755); err != nil {
+			t.Fatalf("create long-path directory: %v", err)
+		}
+	}
+	filename := filepath.Join(deep, "document.md")
+	if err := os.WriteFile(filename, []byte("anchor"), 0o644); err != nil {
+		t.Fatalf("write long-path file: %v", err)
+	}
+	if len(filename) <= 260 {
+		t.Fatalf("fixture path length = %d, want beyond MAX_PATH", len(filename))
+	}
+
+	relative, err := filepath.Rel(root, filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectCandidates(t, root, []string{"-g", "*.md"}, nil, WalkOptions{})
+	want := []string{filepath.ToSlash(relative)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
 	}
 }

@@ -75,6 +75,26 @@ func normalizeWindowsFinalPath(path string) string {
 	return strings.TrimPrefix(path, extended)
 }
 
+// extendedLengthWindowsPath adds the Win32 extended-length prefix to absolute
+// drive and UNC paths. Existing extended or device paths remain unchanged.
+func extendedLengthWindowsPath(path string) string {
+	const (
+		extendedPrefix = `\\?\`
+		devicePrefix   = `\\.\`
+		uncPrefix      = `\\`
+	)
+	if strings.HasPrefix(path, extendedPrefix) || strings.HasPrefix(path, devicePrefix) {
+		return path
+	}
+	if strings.HasPrefix(path, uncPrefix) {
+		return extendedPrefix + `UNC\` + strings.TrimPrefix(path, uncPrefix)
+	}
+	if filepath.IsAbs(path) && filepath.VolumeName(path) != "" {
+		return extendedPrefix + path
+	}
+	return path
+}
+
 func validateWalkRoot(root string) error {
 	info, err := os.Stat(root)
 	if err != nil {
@@ -91,7 +111,7 @@ func validateWalkRoot(root string) error {
 
 // isDescendantLink reports whether path is a reparse point that a walk must skip.
 func isDescendantLink(path string) (bool, error) {
-	name, err := windows.UTF16PtrFromString(path)
+	name, err := windows.UTF16PtrFromString(extendedLengthWindowsPath(path))
 	if err != nil {
 		return false, err
 	}

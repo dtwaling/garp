@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -658,39 +657,13 @@ func (m *fileTypeMatcher) allows(path string) bool {
 // pathScope, if non-empty, restricts results to files whose relative path matches at least
 // one simple glob pattern (e.g., "*/backend/*", "tests/*").
 func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []string) (int, error) {
-	if walkRoot == "" {
-		walkRoot = "."
-	}
-	matcher := newFileTypeMatcher(fileTypes)
+	return GetDocumentFileCountWithOptions(fileTypes, walkRoot, pathScope, WalkOptions{})
+}
 
-	absRoot, err := filepath.Abs(walkRoot)
-	if err != nil {
-		return 0, err
-	}
-	normScope := normalizePathScopePatterns(pathScope, absRoot)
-
+// GetDocumentFileCountWithOptions counts candidates using the shared walk policy.
+func GetDocumentFileCountWithOptions(fileTypes []string, walkRoot string, pathScope []string, options WalkOptions) (int, error) {
 	count := 0
-	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// Ignore permission errors; keep walking
-			return nil
-		}
-		if d.IsDir() {
-			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
-				return filepath.SkipDir
-			}
-			// Prune entire subtree if no pathScope pattern can match anything under it.
-			if len(normScope) > 0 && !dirCouldMatchPathScope(path, absRoot, normScope) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !matcher.allows(path) {
-			return nil
-		}
-		if !matchesPathScope(path, absRoot, normScope) {
-			return nil
-		}
+	err := walkCandidates(fileTypes, walkRoot, pathScope, options, func(_ string, _ os.FileInfo) error {
 		count++
 		return nil
 	})
@@ -710,16 +683,11 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 
 // FindFilesWithFirstWordPartial finds candidates using the requested Stage 1 match mode.
 func FindFilesWithFirstWordPartial(word string, fileTypes []string, walkRoot string, pathScope []string, partial PartialMode) ([]string, error) {
-	if walkRoot == "" {
-		walkRoot = "."
-	}
-	absRoot, err := filepath.Abs(walkRoot)
-	if err != nil {
-		return nil, err
-	}
-	matcher := newFileTypeMatcher(fileTypes)
-	normScope := normalizePathScopePatterns(pathScope, absRoot)
+	return FindFilesWithFirstWordPartialWithOptions(word, fileTypes, walkRoot, pathScope, partial, WalkOptions{})
+}
 
+// FindFilesWithFirstWordPartialWithOptions finds candidates using the shared walk policy.
+func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
 	// Precompute lowercased search word for fast ASCII whole-word scan
 	wLower := strings.ToLower(word)
 	heavy := map[string]bool{
@@ -731,31 +699,7 @@ func FindFilesWithFirstWordPartial(word string, fileTypes []string, walkRoot str
 		".mbox": true,
 	}
 	matches := make([]string, 0, 128)
-	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// Ignore permission errors; keep walking
-			return nil
-		}
-		if d.IsDir() {
-			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
-				return filepath.SkipDir
-			}
-			// Prune entire subtree if no pathScope pattern can match anything under it.
-			if len(normScope) > 0 && !dirCouldMatchPathScope(path, absRoot, normScope) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Filter by type (extension or special name) if provided
-		if !matcher.allows(path) {
-			return nil
-		}
-
-		// Filter by pathScope if provided
-		if !matchesPathScope(path, absRoot, normScope) {
-			return nil
-		}
+	err := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
 		if heavy[strings.ToLower(filepath.Ext(path))] {
 			// include heavy binary types as candidates; full check later
 			matches = append(matches, path)
@@ -867,16 +811,12 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 
 // FindFilesWithFirstWordProgressPartial emits discovery progress using partial matching.
 func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string, partial PartialMode) ([]string, error) {
-	if walkRoot == "" {
-		walkRoot = "."
-	}
-	absRoot, err := filepath.Abs(walkRoot)
-	if err != nil {
-		return nil, err
-	}
-	matcher := newFileTypeMatcher(fileTypes)
-	normScope := normalizePathScopePatterns(pathScope, absRoot)
+	return FindFilesWithFirstWordProgressPartialWithOptions(words, fileTypes, workers, onProgress, walkRoot, pathScope, partial, WalkOptions{})
+}
 
+// FindFilesWithFirstWordProgressPartialWithOptions emits discovery progress
+// using the shared walk policy.
+func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
 	// Emit initial progress with unknown total
 	if onProgress != nil {
 		onProgress(0, 0, "")
@@ -998,31 +938,8 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 	processed := 0
 
 	// Walk and stream paths to workers
-	var walkErr error
-	walkErr = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
-				return filepath.SkipDir
-			}
-			// Prune entire subtree if no pathScope pattern can match anything under it.
-			if len(normScope) > 0 && !dirCouldMatchPathScope(path, absRoot, normScope) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if !matcher.allows(path) {
-			return nil
-		}
+	walkErr := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
 		ext := strings.ToLower(filepath.Ext(path))
-
-		// Filter by pathScope if provided
-		if !matchesPathScope(path, absRoot, normScope) {
-			return nil
-		}
 
 		processed++
 		if onProgress != nil {
@@ -1072,6 +989,7 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 	if len(matches) == 0 {
 		return nil, nil
 	}
+	sort.Strings(matches)
 	return matches, nil
 }
 
