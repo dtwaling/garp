@@ -265,7 +265,10 @@ func pathRelativeToIgnoreSource(candidate, sourceDir string, windowsPaths, caseI
 		return "", true
 	}
 
-	prefix := sourceDir + "/"
+	prefix := sourceDir
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
 	if len(candidate) < len(prefix) {
 		return "", false
 	}

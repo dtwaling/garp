@@ -10,7 +10,7 @@ import (
 const maxFileSizeBytes uint64 = 100 * 1024 * 1024
 
 // ParseMaxFileSize parses a positive byte size with an optional binary unit.
-// Supported suffixes are B, K/KB/KiB, and M/MB/MiB.
+// Supported suffixes are B, K/KB/KiB, M/MB/MiB, and G/GB/GiB.
 func ParseMaxFileSize(raw string) (int64, error) {
 	digitEnd := 0
 	for digitEnd < len(raw) && raw[digitEnd] >= '0' && raw[digitEnd] <= '9' {
@@ -36,6 +36,8 @@ func ParseMaxFileSize(raw string) (int64, error) {
 		multiplier = 1024
 	case "M", "MB", "MIB":
 		multiplier = 1024 * 1024
+	case "G", "GB", "GIB":
+		multiplier = 1024 * 1024 * 1024
 	default:
 		return 0, fmt.Errorf("--max-filesize: unknown unit in %q", raw)
 	}

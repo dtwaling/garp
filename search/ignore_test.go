@@ -144,6 +144,19 @@ func TestIgnorePatternAnchoringAndDirectoryOnly(t *testing.T) {
 	}
 }
 
+func TestIgnoreRuleFromPOSIXFilesystemRoot(t *testing.T) {
+	rules := parseIgnoreRulesForOS("tmp/*.log\n", "/", 0, "linux")
+	if len(rules) != 1 {
+		t.Fatalf("parsed %d rules, want 1", len(rules))
+	}
+	if !rules[0].matches("/tmp/app.log", false) {
+		t.Error("rule sourced from POSIX filesystem root did not match a root-relative candidate")
+	}
+	if rules[0].matches("/var/tmp/app.log", false) {
+		t.Error("anchored root rule matched outside its root-relative path")
+	}
+}
+
 func TestIgnorePatternWildcards(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -59,12 +59,27 @@ func TestParseMaxFileSizeRejectsInvalidValues(t *testing.T) {
 }
 
 func TestParseMaxFileSizeRejectsGigabyteUnit(t *testing.T) {
-	_, err := search.ParseMaxFileSize("1GiB")
+	for _, input := range []string{"1G", "1GB", "1GiB"} {
+		t.Run(input, func(t *testing.T) {
+			_, err := search.ParseMaxFileSize(input)
+			if err == nil {
+				t.Fatalf("ParseMaxFileSize(%q) error = nil, want over-cap rejection", input)
+			}
+			if !strings.Contains(err.Error(), "exceeds the 100M maximum") {
+				t.Errorf("ParseMaxFileSize(%q) error = %q, want over-cap error", input, err)
+			}
+			if strings.Contains(err.Error(), "unknown unit") {
+				t.Errorf("ParseMaxFileSize(%q) treated a supported unit as unknown: %v", input, err)
+			}
+		})
+	}
+
+	_, err := search.ParseMaxFileSize("1Gi")
 	if err == nil {
-		t.Fatal("ParseMaxFileSize(\"1GiB\") error = nil, want unknown-unit rejection")
+		t.Fatal("ParseMaxFileSize(\"1Gi\") error = nil, want unknown-unit rejection")
 	}
 	if !strings.Contains(err.Error(), "unknown unit") {
-		t.Errorf("ParseMaxFileSize(\"1GiB\") error = %q, want unknown-unit error", err)
+		t.Errorf("ParseMaxFileSize(\"1Gi\") error = %q, want unknown-unit error", err)
 	}
 }
 
