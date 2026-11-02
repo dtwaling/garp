@@ -22,6 +22,8 @@ vendor/
 go.work
 
 # IDE files
+.agents/
+.cursor/
 .vscode/
 .idea/
 *.swp
