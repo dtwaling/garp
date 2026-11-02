@@ -358,7 +358,14 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 						}
 						return false
 					}
-					match.score, match.termCount, match.matchedTerms, match.spanLen, hasAllWords = CheckTextContainsRankedWordsPartial(CleanContent(extractedText), query.terms, se.Distance, se.Strict, se.Partial)
+					analysis, ok := analyzeRankedText(CleanContent(extractedText), query, se.Distance, se.Strict)
+					if ok {
+						match.score = analysis.Score
+						match.termCount = analysis.TermCount
+						match.matchedTerms = analysis.MatchedTerms
+						match.spanLen = analysis.SpanLength
+					}
+					hasAllWords = ok
 				} else {
 					if !se.Silent {
 						fmt.Printf("Warning: No extractor for %s\n", ext)
@@ -367,7 +374,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 				}
 			} else {
 				// Text file: stream+distance
-				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsQuery(filePath, query, se.Distance, se.Strict, se.Silent, se.Partial, maxBytes)
+				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsQuery(filePath, query, se.Distance, se.Strict, se.Silent, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
@@ -379,7 +386,6 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 			}
 		} else {
 			// Single-word presence check
-			word := query.terms[0]
 			if IsBinaryFormat(filePath) {
 				ext := filepath.Ext(filePath)
 				// Run bounded prefilter for binary types before extraction.
@@ -426,7 +432,14 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 						}
 						return false
 					}
-					match.score, match.termCount, match.matchedTerms, match.spanLen, hasAllWords = CheckTextContainsRankedWordsPartial(CleanContent(extractedText), []string{word}, se.Distance, se.Strict, se.Partial)
+					analysis, ok := analyzeRankedText(CleanContent(extractedText), query, se.Distance, se.Strict)
+					if ok {
+						match.score = analysis.Score
+						match.termCount = analysis.TermCount
+						match.matchedTerms = analysis.MatchedTerms
+						match.spanLen = analysis.SpanLength
+					}
+					hasAllWords = ok
 				} else {
 					if !se.Silent {
 						fmt.Printf("Warning: No extractor for %s\n", ext)
@@ -434,7 +447,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 					return false
 				}
 			} else {
-				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsQuery(filePath, query, se.Distance, se.Strict, se.Silent, se.Partial, maxBytes)
+				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsQuery(filePath, query, se.Distance, se.Strict, se.Silent, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)

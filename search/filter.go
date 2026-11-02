@@ -209,126 +209,11 @@ func CheckTextContainsRankedWordsPartial(text string, words []string, distance i
 	if len(words) == 0 {
 		return 0, 0, nil, 0, true
 	}
-
-	type queryTerm struct {
-		word string
-	}
-	type match struct {
-		start     int
-		end       int
-		termIndex int
-	}
-
-	// A repeated query term is one distinct term for both matching and scoring.
-	terms := make([]queryTerm, 0, len(words))
-	termIndexes := make(map[string]int, len(words))
-	for _, word := range words {
-		trimmed := strings.TrimSpace(word)
-		key := strings.ToLower(trimmed)
-		if _, exists := termIndexes[key]; exists {
-			continue
-		}
-		termIndexes[key] = len(terms)
-		terms = append(terms, queryTerm{word: trimmed})
-	}
-	if len(terms) == 0 {
-		return 0, 0, nil, 0, false
-	}
-
-	contentStr := strings.ToLower(text)
-	matches := make([]match, 0)
-	for i, term := range terms {
-		indexes := buildTermRegexLower(term.word, partial).FindAllStringSubmatchIndex(contentStr, -1)
-		for _, idx := range indexes {
-			start, end := idx[0], idx[1]
-			if len(idx) >= 4 && idx[2] >= 0 {
-				start, end = idx[2], idx[3]
-			}
-			matches = append(matches, match{start: start, end: end, termIndex: i})
-		}
-	}
-	if len(matches) == 0 {
-		return 0, 0, nil, 0, false
-	}
-
-	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].start != matches[j].start {
-			return matches[i].start < matches[j].start
-		}
-		if matches[i].end != matches[j].end {
-			return matches[i].end < matches[j].end
-		}
-		return matches[i].termIndex < matches[j].termIndex
-	})
-
-	requiredCount := len(terms)
-	minimumCount := requiredCount
-	if !strict && requiredCount >= 3 {
-		minimumCount = 2
-	}
-
-	counts := make([]int, requiredCount)
-	covered := 0
-	left := 0
-	bestSpan := 0
-	for right := 0; right < len(matches); right++ {
-		termIndex := matches[right].termIndex
-		if counts[termIndex] == 0 {
-			covered++
-		}
-		counts[termIndex]++
-
-		// Preserve the legacy distance rule: match start positions must fit in
-		// the requested window. SpanLength below additionally includes the
-		// final matched term's end for ranking ties.
-		for left <= right && matches[right].start-matches[left].start > distance {
-			leftTermIndex := matches[left].termIndex
-			counts[leftTermIndex]--
-			if counts[leftTermIndex] == 0 {
-				covered--
-			}
-			left++
-		}
-
-		// A duplicate at the left cannot improve the term set, so drop it to
-		// retain the tightest window for the current set of distinct terms.
-		for left < right && counts[matches[left].termIndex] > 1 {
-			counts[matches[left].termIndex]--
-			left++
-		}
-
-		valid := covered >= minimumCount && counts[0] > 0
-		if strict {
-			valid = covered == requiredCount
-		}
-		if !valid {
-			continue
-		}
-
-		windowScore := 0
-		windowTerms := make([]string, 0, covered)
-		for i, count := range counts {
-			if count > 0 {
-				windowScore += len(terms[i].word)
-				windowTerms = append(windowTerms, terms[i].word)
-			}
-		}
-		windowSpan := matches[right].end - matches[left].start
-		if !ok || windowScore > score ||
-			(windowScore == score && covered > termCount) ||
-			(windowScore == score && covered == termCount && windowSpan < bestSpan) {
-			score = windowScore
-			termCount = covered
-			matchedTerms = windowTerms
-			bestSpan = windowSpan
-			ok = true
-		}
-	}
-
+	analysis, ok := analyzeRankedText(text, compileQuery(words, partial), distance, strict)
 	if !ok {
 		return 0, 0, nil, 0, false
 	}
-	return score, termCount, matchedTerms, bestSpan, true
+	return analysis.Score, analysis.TermCount, analysis.MatchedTerms, analysis.SpanLength, true
 }
 
 // CheckTextContainsExcludeWords checks if extracted text contains any exclude words
@@ -1570,10 +1455,10 @@ func CheckFileContainsRankedWordsPartial(filePath string, words []string, distan
 }
 
 func checkFileContainsRankedWordsPartial(filePath string, words []string, distance int, strict bool, silent bool, partial PartialMode, maxBytes int64) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
-	return checkFileContainsRankedWordsQuery(filePath, compileQuery(words, partial), distance, strict, silent, partial, maxBytes)
+	return checkFileContainsRankedWordsQuery(filePath, compileQuery(words, partial), distance, strict, silent, maxBytes)
 }
 
-func checkFileContainsRankedWordsQuery(filePath string, query compiledQuery, distance int, strict bool, silent bool, partial PartialMode, maxBytes int64) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
+func checkFileContainsRankedWordsQuery(filePath string, query compiledQuery, distance int, strict bool, silent bool, maxBytes int64) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
 	found, decided := streamContainsRankedWordsDecidedQuery(filePath, query, strict, maxBytes)
 	if decided && !found {
 		return 0, 0, nil, 0, false, nil
@@ -1587,8 +1472,11 @@ func checkFileContainsRankedWordsQuery(filePath string, query compiledQuery, dis
 	if config.IsCodeFile(filePath) {
 		cleaned = CleanContentCode(content)
 	}
-	score, termCount, matchedTerms, spanLen, ok = CheckTextContainsRankedWordsPartial(cleaned, query.terms, distance, strict, partial)
-	return score, termCount, matchedTerms, spanLen, ok, nil
+	analysis, ok := analyzeRankedText(cleaned, query, distance, strict)
+	if !ok {
+		return 0, 0, nil, 0, false, nil
+	}
+	return analysis.Score, analysis.TermCount, analysis.MatchedTerms, analysis.SpanLength, true, nil
 }
 
 // CheckFileContainsExcludeWords checks if a file contains any exclude words
