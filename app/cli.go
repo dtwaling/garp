@@ -49,6 +49,13 @@ type Arguments struct {
 	PathScope    []string
 	PathScopeErr error // non-nil if validation failed
 
+	// NoIgnore disables repository ignore-file evaluation.
+	NoIgnore bool
+
+	// MaxFileSize is zero unless --max-filesize was explicitly provided.
+	MaxFileSize    int64
+	MaxFileSizeErr error // non-nil if validation failed
+
 	// PlainOutput: when true, skip the TUI and emit clean line-oriented text to stdout.
 	// Designed for programmatic callers (MCP tools, scripts) that need machine-readable output.
 	PlainOutput bool
@@ -83,6 +90,7 @@ func parseArguments(args []string) *Arguments {
 	expectOnly := false
 	expectStartDir := false
 	expectPathScope := false
+	expectMaxFileSize := false
 	heavyProvided := false
 
 	for _, a := range args {
@@ -150,6 +158,13 @@ func parseArguments(args []string) *Arguments {
 			expectPathScope = false
 			continue
 		}
+		if expectMaxFileSize {
+			size, err := search.ParseMaxFileSize(a)
+			result.MaxFileSize = size
+			result.MaxFileSizeErr = err
+			expectMaxFileSize = false
+			continue
+		}
 		switch a {
 		case "--code":
 			result.IncludeCode = true
@@ -173,6 +188,10 @@ func parseArguments(args []string) *Arguments {
 			expectStartDir = true
 		case "--pathscope":
 			expectPathScope = true
+		case "--no-ignore":
+			result.NoIgnore = true
+		case "--max-filesize":
+			expectMaxFileSize = true
 		case "--smart-forms":
 			result.SmartForms = true
 		case "--partial":
@@ -207,6 +226,10 @@ func parseArguments(args []string) *Arguments {
 				result.SearchWords = append(result.SearchWords, a)
 			}
 		}
+	}
+	if expectMaxFileSize {
+		result.MaxFileSize = 0
+		result.MaxFileSizeErr = fmt.Errorf("--max-filesize: missing value")
 	}
 
 	// Auto-derive HeavyConcurrency when not explicitly provided: base on workers and available RAM

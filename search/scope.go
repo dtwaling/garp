@@ -3,8 +3,52 @@ package search
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
+
+const maxFileSizeBytes uint64 = 100 * 1024 * 1024
+
+// ParseMaxFileSize parses a positive byte size with an optional binary unit.
+// Supported suffixes are B, K/KB/KiB, and M/MB/MiB.
+func ParseMaxFileSize(raw string) (int64, error) {
+	digitEnd := 0
+	for digitEnd < len(raw) && raw[digitEnd] >= '0' && raw[digitEnd] <= '9' {
+		digitEnd++
+	}
+	if digitEnd == 0 {
+		return 0, fmt.Errorf("--max-filesize: %q is not a positive integer size", raw)
+	}
+
+	value, err := strconv.ParseUint(raw[:digitEnd], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("--max-filesize: invalid value %q: %w", raw, err)
+	}
+	if value == 0 {
+		return 0, fmt.Errorf("--max-filesize: value must be greater than zero")
+	}
+
+	var multiplier uint64
+	switch strings.ToUpper(raw[digitEnd:]) {
+	case "", "B":
+		multiplier = 1
+	case "K", "KB", "KIB":
+		multiplier = 1024
+	case "M", "MB", "MIB":
+		multiplier = 1024 * 1024
+	default:
+		return 0, fmt.Errorf("--max-filesize: unknown unit in %q", raw)
+	}
+
+	if value > ^uint64(0)/multiplier {
+		return 0, fmt.Errorf("--max-filesize: value %q overflows bytes", raw)
+	}
+	bytes := value * multiplier
+	if bytes > maxFileSizeBytes {
+		return 0, fmt.Errorf("--max-filesize: value %q exceeds the 100M maximum", raw)
+	}
+	return int64(bytes), nil
+}
 
 // wildcardAndInjectionChars are characters rejected in --startdir to prevent
 // shell/command injection and unintended glob expansion.
