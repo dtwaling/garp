@@ -25,19 +25,22 @@ var version = "0.9.2"
 
 // Arguments for CLI flags (used to seed TUI)
 type Arguments struct {
-	SearchWords       []string
-	ExcludeWords      []string
-	IncludeCode       bool
-	Strict            bool
-	SmartForms        bool
-	Distance          int
-	HeavyConcurrency  int
-	FilterWorkers     int
-	FileTimeoutBinary int
-	MaxExcerpts       int
-	OnlyType          string
-	Partial           search.PartialMode
-	PartialErr        error // non-nil if --partial validation failed
+	SearchWords        []string
+	ExcludeWords       []string
+	IncludeCode        bool
+	Strict             bool
+	SmartForms         bool
+	Distance           int
+	HeavyConcurrency   int
+	FilterWorkers      int
+	FileTimeoutBinary  int
+	MaxExcerpts        int
+	MaxResults         int
+	MaxResultsProvided bool
+	MaxResultsErr      error // non-nil if --max-results validation failed
+	OnlyType           string
+	Partial            search.PartialMode
+	PartialErr         error // non-nil if --partial validation failed
 
 	// StartDir: base directory for file walks (--startdir flag).
 	// Empty string means use the current working directory.
@@ -87,6 +90,7 @@ func parseArguments(args []string) *Arguments {
 	expectTimeout := false
 	expectWorkers := false
 	expectMaxExcerpts := false
+	expectMaxResults := false
 	expectOnly := false
 	expectStartDir := false
 	expectPathScope := false
@@ -131,6 +135,20 @@ func parseArguments(args []string) *Arguments {
 				result.MaxExcerpts = n
 			}
 			expectMaxExcerpts = false
+			continue
+		}
+		if expectMaxResults {
+			result.MaxResultsErr = nil
+			n, err := strconv.Atoi(a)
+			switch {
+			case err != nil:
+				result.MaxResultsErr = fmt.Errorf("--max-results: invalid integer %q", a)
+			case n < 0:
+				result.MaxResultsErr = fmt.Errorf("--max-results: value must be non-negative")
+			default:
+				result.MaxResults = n
+			}
+			expectMaxResults = false
 			continue
 		}
 		if expectOnly {
@@ -182,6 +200,9 @@ func parseArguments(args []string) *Arguments {
 			expectWorkers = true
 		case "--max-excerpts":
 			expectMaxExcerpts = true
+		case "--max-results":
+			result.MaxResultsProvided = true
+			expectMaxResults = true
 		case "--only":
 			expectOnly = true
 		case "--startdir":
@@ -230,6 +251,9 @@ func parseArguments(args []string) *Arguments {
 	if expectMaxFileSize {
 		result.MaxFileSize = 0
 		result.MaxFileSizeErr = fmt.Errorf("--max-filesize: missing value")
+	}
+	if expectMaxResults {
+		result.MaxResultsErr = fmt.Errorf("--max-results: missing value")
 	}
 	if expectStartDir {
 		result.StartDirErr = fmt.Errorf("--startdir: missing value")
@@ -290,6 +314,19 @@ func parseArguments(args []string) *Arguments {
 	return result
 }
 
+func resolveMaxResults(args *Arguments) int {
+	if args.MaxResultsProvided {
+		return args.MaxResults
+	}
+	if args.PathOnly {
+		return 0
+	}
+	if args.JSONOutput || args.PlainOutput {
+		return 50
+	}
+	return 0
+}
+
 // showUsage (styled)
 func showUsage() {
 	fmt.Println()
@@ -307,7 +344,7 @@ func showUsage() {
 
 	// Usage
 	fmt.Println(subHeaderStyle.Render("USAGE"))
-	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--startdir PATH] [--pathscope PATTERNS] [--no-ignore] [--max-filesize SIZE] [--pathonly] [--plain] [--json] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
+	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--max-results N]\n[--startdir PATH] [--pathscope PATTERNS] [--no-ignore] [--max-filesize SIZE]\n[--pathonly] [--plain] [--json] [--heavy-concurrency N] [--workers N]\n[--file-timeout-binary N] <word1> <word2> ...\n[--not <exclude1> <exclude2> ...]", 100)))
 	fmt.Println()
 
 	// Flags
@@ -319,6 +356,8 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("                          Tip: append * to a term (e.g. deploy*) for per-term prefix."))
 	fmt.Println(infoStyle.Render("  --distance N            Proximity window in characters (default 5000)"))
 	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum excerpts per file; >=90% new content (up to 10% overlap; default 1, max 50)"))
+	fmt.Println(infoStyle.Render("  --max-results N         Maximum matching files; 0 = unlimited."))
+	fmt.Println(infoStyle.Render("                          Defaults: --json 50, --plain 50, --pathonly 0, TUI 0."))
 	fmt.Println(infoStyle.Render("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted)"))
 	fmt.Println(infoStyle.Render("  --workers N             Stage 2 text filter workers (default 2)"))
 	fmt.Println(infoStyle.Render("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000)"))
@@ -508,6 +547,7 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 		se.PathScope = args.PathScope
 	}
 	se.MaxExcerpts = args.MaxExcerpts
+	se.MaxResults = resolveMaxResults(args)
 	return se
 }
 
@@ -688,6 +728,10 @@ func Run() int {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.StartDirErr.Error()))
 		return 1
 	}
+	if args.MaxResultsErr != nil {
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.MaxResultsErr.Error()))
+		return 1
+	}
 	if args.MaxFileSizeErr != nil {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.MaxFileSizeErr.Error()))
 		return 1
@@ -769,6 +813,8 @@ func Run() int {
 		heavyConcurrency:  args.HeavyConcurrency,
 		fileTimeoutBinary: args.FileTimeoutBinary,
 		filterWorkers:     args.FilterWorkers,
+		maxResults:        resolveMaxResults(args),
+		maxExcerpts:       args.MaxExcerpts,
 		startDir:          args.StartDir,
 		pathScope:         args.PathScope,
 		noIgnore:          args.NoIgnore,

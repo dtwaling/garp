@@ -68,3 +68,22 @@ func TestTUIPartialExcerptDoesNotAugmentPresentTerm(t *testing.T) {
 		t.Errorf("TUI augmented excerpt despite partial term already being present:\n%s", view)
 	}
 }
+
+func TestTUIPropagatesMaxResultsAndExcerpts(t *testing.T) {
+	m := model{
+		searchWords:       []string{"needle"},
+		heavyConcurrency:  1,
+		fileTimeoutBinary: 1000,
+		filterWorkers:     1,
+		maxResults:        17,
+		maxExcerpts:       4,
+	}
+
+	engine := m.newSearchEngine()
+	if engine.MaxResults != 17 {
+		t.Errorf("MaxResults = %d, want 17", engine.MaxResults)
+	}
+	if engine.MaxExcerpts != 4 {
+		t.Errorf("MaxExcerpts = %d, want 4", engine.MaxExcerpts)
+	}
+}
