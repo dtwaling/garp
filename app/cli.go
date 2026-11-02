@@ -49,6 +49,13 @@ type Arguments struct {
 	PathScope    []string
 	PathScopeErr error // non-nil if validation failed
 
+	// NoIgnore disables repository ignore-file evaluation.
+	NoIgnore bool
+
+	// MaxFileSize is zero unless --max-filesize was explicitly provided.
+	MaxFileSize    int64
+	MaxFileSizeErr error // non-nil if validation failed
+
 	// PlainOutput: when true, skip the TUI and emit clean line-oriented text to stdout.
 	// Designed for programmatic callers (MCP tools, scripts) that need machine-readable output.
 	PlainOutput bool
@@ -83,6 +90,7 @@ func parseArguments(args []string) *Arguments {
 	expectOnly := false
 	expectStartDir := false
 	expectPathScope := false
+	expectMaxFileSize := false
 	heavyProvided := false
 
 	for _, a := range args {
@@ -150,6 +158,13 @@ func parseArguments(args []string) *Arguments {
 			expectPathScope = false
 			continue
 		}
+		if expectMaxFileSize {
+			size, err := search.ParseMaxFileSize(a)
+			result.MaxFileSize = size
+			result.MaxFileSizeErr = err
+			expectMaxFileSize = false
+			continue
+		}
 		switch a {
 		case "--code":
 			result.IncludeCode = true
@@ -173,6 +188,10 @@ func parseArguments(args []string) *Arguments {
 			expectStartDir = true
 		case "--pathscope":
 			expectPathScope = true
+		case "--no-ignore":
+			result.NoIgnore = true
+		case "--max-filesize":
+			expectMaxFileSize = true
 		case "--smart-forms":
 			result.SmartForms = true
 		case "--partial":
@@ -207,6 +226,13 @@ func parseArguments(args []string) *Arguments {
 				result.SearchWords = append(result.SearchWords, a)
 			}
 		}
+	}
+	if expectMaxFileSize {
+		result.MaxFileSize = 0
+		result.MaxFileSizeErr = fmt.Errorf("--max-filesize: missing value")
+	}
+	if expectStartDir {
+		result.StartDirErr = fmt.Errorf("--startdir: missing value")
 	}
 
 	// Auto-derive HeavyConcurrency when not explicitly provided: base on workers and available RAM
@@ -280,7 +306,7 @@ func showUsage() {
 
 	// Usage
 	fmt.Println(subHeaderStyle.Render("USAGE"))
-	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--pathonly] [--plain] [--json] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
+	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--startdir PATH] [--pathscope PATTERNS] [--no-ignore] [--max-filesize SIZE] [--pathonly] [--plain] [--json] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
 	fmt.Println()
 
 	// Flags
@@ -308,6 +334,8 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("                         Trailing slash optional: 'audio2midi/' and 'audio2midi' both work."))
 	fmt.Println(infoStyle.Render("                         Do not include file extensions (use --not / --only for that)."))
 	fmt.Println(infoStyle.Render("                         Example: --pathscope='audio2midi/,docs/,tests/*'"))
+	fmt.Println(infoStyle.Render("  --no-ignore            Do not apply repository ignore files (.gitignore, .ignore, or exclude)."))
+	fmt.Println(infoStyle.Render("  --max-filesize SIZE    Maximum file size (B, K/KB/KiB, M/MB/MiB; maximum 100M)."))
 	fmt.Println(infoStyle.Render("  --pathonly             Skip the interactive TUI; emit only distinct matching file paths (one per line)."))
 	fmt.Println(infoStyle.Render("  --plain                Skip the interactive TUI; emit plain line-oriented output to stdout."))
 	fmt.Println(infoStyle.Render("                         Useful for scripting and MCP tool callers that need machine-readable results."))
@@ -406,14 +434,16 @@ type jsonOutput struct {
 
 // jsonQuery echoes the search parameters back to the caller so the response is self-describing.
 type jsonQuery struct {
-	Terms     []string `json:"terms"`
-	Strict    bool     `json:"strict,omitempty"`
-	Excludes  []string `json:"excludes,omitempty"`
-	Partial   string   `json:"partial,omitempty"`
-	StartDir  string   `json:"start_dir,omitempty"`
-	PathScope []string `json:"path_scope,omitempty"`
-	OnlyType  string   `json:"only_type,omitempty"`
-	Code      bool     `json:"include_code"`
+	Terms       []string `json:"terms"`
+	Strict      bool     `json:"strict,omitempty"`
+	Excludes    []string `json:"excludes,omitempty"`
+	Partial     string   `json:"partial,omitempty"`
+	StartDir    string   `json:"start_dir,omitempty"`
+	PathScope   []string `json:"path_scope,omitempty"`
+	OnlyType    string   `json:"only_type,omitempty"`
+	Code        bool     `json:"include_code"`
+	NoIgnore    bool     `json:"no_ignore,omitempty"`
+	MaxFileSize int64    `json:"max_filesize,omitempty"`
 }
 
 func nativePathScope(pathScope []string) []string {
@@ -436,6 +466,18 @@ func buildFileTypes(includeCode bool, onlyType string) []string {
 	return config.BuildRipgrepFileTypes(includeCode)
 }
 
+func walkOptions(args *Arguments) search.WalkOptions {
+	return search.WalkOptions{
+		NoIgnore:    args.NoIgnore,
+		MaxFileSize: args.MaxFileSize,
+	}
+}
+
+func preflightFileCount(args *Arguments) (int, error) {
+	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
+	return search.GetDocumentFileCountWithOptions(fileTypes, args.StartDir, args.PathScope, walkOptions(args))
+}
+
 // newSilentSearchEngine configures a silent SearchEngine for non-TUI CLI modes
 // (--json, --plain, --pathonly).
 func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
@@ -453,6 +495,8 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 	se.Strict = args.Strict
 	se.Partial = args.Partial
 	se.PathOnly = args.PathOnly
+	se.NoIgnore = args.NoIgnore
+	se.MaxFileSize = args.MaxFileSize
 	if args.Distance > 0 {
 		se.Distance = args.Distance
 	}
@@ -479,14 +523,16 @@ func runJSON(args *Arguments) int {
 
 	out := jsonOutput{
 		Query: jsonQuery{
-			Terms:     args.SearchWords,
-			Strict:    args.Strict,
-			Excludes:  args.ExcludeWords,
-			Partial:   string(args.Partial),
-			StartDir:  args.StartDir,
-			PathScope: nativePathScope(args.PathScope),
-			OnlyType:  args.OnlyType,
-			Code:      args.IncludeCode,
+			Terms:       args.SearchWords,
+			Strict:      args.Strict,
+			Excludes:    args.ExcludeWords,
+			Partial:     string(args.Partial),
+			StartDir:    args.StartDir,
+			PathScope:   nativePathScope(args.PathScope),
+			OnlyType:    args.OnlyType,
+			Code:        args.IncludeCode,
+			NoIgnore:    args.NoIgnore,
+			MaxFileSize: args.MaxFileSize,
 		},
 		Matches: len(results),
 		Results: make([]jsonResult, 0, len(results)),
@@ -610,6 +656,24 @@ func runPathOnly(args *Arguments) int {
 	return 0
 }
 
+func validateSearchRoot(startDir string) error {
+	root := startDir
+	if root == "" {
+		root = "."
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("invalid search root %q: %w", root, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("invalid search root %q: not a directory", root)
+	}
+	if _, err := os.ReadDir(root); err != nil {
+		return fmt.Errorf("invalid search root %q: read directory: %w", root, err)
+	}
+	return nil
+}
+
 // Run parses CLI arguments and starts the TUI. Returns a process exit code.
 func Run() int {
 	// Parse args
@@ -623,12 +687,20 @@ func Run() int {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.StartDirErr.Error()))
 		return 1
 	}
+	if args.MaxFileSizeErr != nil {
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.MaxFileSizeErr.Error()))
+		return 1
+	}
 	if args.PathScopeErr != nil {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.PathScopeErr.Error()))
 		return 1
 	}
 	if args.PartialErr != nil {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.PartialErr.Error()))
+		return 1
+	}
+	if err := validateSearchRoot(args.StartDir); err != nil {
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+err.Error()))
 		return 1
 	}
 	// Hook for matching layer: advertise smart-forms via environment (consumed by matching)
@@ -657,8 +729,7 @@ func Run() int {
 	// Preflight: automatic safe mode for single-word scans over huge file counts
 	// Reduce internal parallelism to protect system memory/page cache without requiring flags.
 	if len(args.SearchWords) == 1 {
-		fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
-		if total, err := search.GetDocumentFileCount(fileTypes, "", nil); err == nil {
+		if total, err := preflightFileCount(args); err == nil {
 			// Threshold tuned for very large trees to avoid cache blowouts on single-term scans
 			const hugeSingleWordThreshold = 200000
 			if total >= hugeSingleWordThreshold {
@@ -699,6 +770,8 @@ func Run() int {
 		filterWorkers:     args.FilterWorkers,
 		startDir:          args.StartDir,
 		pathScope:         args.PathScope,
+		noIgnore:          args.NoIgnore,
+		maxFileSize:       args.MaxFileSize,
 		confirmSelected:   "yes",
 		memUsageText:      "",
 		progressText:      "",

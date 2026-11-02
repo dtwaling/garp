@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -116,6 +117,130 @@ func TestParseArguments_BothFlags_WorkTogether(t *testing.T) {
 	}
 	if len(args.SearchWords) != 2 {
 		t.Errorf("expected 2 search words, got %v", args.SearchWords)
+	}
+}
+
+func TestNoIgnoreAndMaxFileSizePropagateToSearchEngines(t *testing.T) {
+	root := t.TempDir()
+	scopedDir := filepath.Join(root, "scoped")
+	otherDir := filepath.Join(root, "other")
+	for _, dir := range []string{scopedDir, otherDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %q: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored.md\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(scopedDir, "keep.md"), []byte("assembly"), 0o644); err != nil {
+		t.Fatalf("write keep.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(scopedDir, "ignored.md"), []byte("assembly"), 0o644); err != nil {
+		t.Fatalf("write ignored.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(scopedDir, "oversize.md"), []byte(strings.Repeat("a", 2048)), 0o644); err != nil {
+		t.Fatalf("write oversize.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(otherDir, "out.md"), []byte("assembly"), 0o644); err != nil {
+		t.Fatalf("write out.md: %v", err)
+	}
+
+	args := parseArguments([]string{
+		"assembly",
+		"--startdir", root,
+		"--pathscope", "scoped/",
+		"--only", "md",
+		"--no-ignore",
+		"--max-filesize", "1KiB",
+	})
+	if args.MaxFileSizeErr != nil {
+		t.Fatalf("MaxFileSizeErr = %v, want nil", args.MaxFileSizeErr)
+	}
+
+	silent := newSilentSearchEngine(args)
+	if !silent.NoIgnore || silent.MaxFileSize != 1024 || silent.StartDir != root || len(silent.PathScope) != 1 {
+		t.Errorf("silent engine options = NoIgnore %v, MaxFileSize %d, StartDir %q, PathScope %v", silent.NoIgnore, silent.MaxFileSize, silent.StartDir, silent.PathScope)
+	}
+
+	m := model{
+		searchWords:       args.SearchWords,
+		excludeWords:      args.ExcludeWords,
+		includeCode:       args.IncludeCode,
+		onlyType:          args.OnlyType,
+		heavyConcurrency:  args.HeavyConcurrency,
+		fileTimeoutBinary: args.FileTimeoutBinary,
+		filterWorkers:     args.FilterWorkers,
+		startDir:          args.StartDir,
+		pathScope:         args.PathScope,
+		noIgnore:          args.NoIgnore,
+		maxFileSize:       args.MaxFileSize,
+	}
+	tui := m.newSearchEngine()
+	if !tui.NoIgnore || tui.MaxFileSize != 1024 || tui.StartDir != root || len(tui.PathScope) != 1 {
+		t.Errorf("TUI engine options = NoIgnore %v, MaxFileSize %d, StartDir %q, PathScope %v", tui.NoIgnore, tui.MaxFileSize, tui.StartDir, tui.PathScope)
+	}
+
+	opts := walkOptions(args)
+	if !opts.NoIgnore || opts.MaxFileSize != 1024 {
+		t.Errorf("walkOptions = %+v, want NoIgnore=true MaxFileSize=1024", opts)
+	}
+
+	cliCount, err := preflightFileCount(args)
+	if err != nil {
+		t.Fatalf("preflightFileCount() error = %v", err)
+	}
+	tuiCount, err := m.preflightFileCount()
+	if err != nil {
+		t.Fatalf("m.preflightFileCount() error = %v", err)
+	}
+	results, err := silent.Execute()
+	if err != nil {
+		t.Fatalf("silent.Execute() error = %v", err)
+	}
+	if cliCount != 2 || tuiCount != 2 || len(results) != 2 {
+		t.Errorf("no-ignore preflight/TUI/results = %d/%d/%d, want 2/2/2", cliCount, tuiCount, len(results))
+	}
+
+	defaultIgnoreArgs := parseArguments([]string{
+		"assembly",
+		"--startdir", root,
+		"--pathscope", "scoped/",
+		"--only", "md",
+		"--max-filesize", "1KiB",
+	})
+	m.noIgnore = false
+	defaultCLICount, err := preflightFileCount(defaultIgnoreArgs)
+	if err != nil {
+		t.Fatalf("default preflightFileCount() error = %v", err)
+	}
+	defaultTUICount, err := m.preflightFileCount()
+	if err != nil {
+		t.Fatalf("default m.preflightFileCount() error = %v", err)
+	}
+	defaultResults, err := newSilentSearchEngine(defaultIgnoreArgs).Execute()
+	if err != nil {
+		t.Fatalf("default silent.Execute() error = %v", err)
+	}
+	if defaultCLICount != 1 || defaultTUICount != 1 || len(defaultResults) != 1 {
+		t.Errorf("default-ignore preflight/TUI/results = %d/%d/%d, want 1/1/1", defaultCLICount, defaultTUICount, len(defaultResults))
+	}
+}
+
+func TestShowUsageDocumentsIgnoreAndFileSizeFlags(t *testing.T) {
+	out := string(captureCLIStdout(t, func() int {
+		showUsage()
+		return 0
+	}))
+	for _, want := range []string{
+		"[--startdir PATH]",
+		"[--no-ignore]",
+		"[--max-filesize SIZE]",
+		"--no-ignore            Do not apply repository ignore files",
+		"--max-filesize SIZE    Maximum file size",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("usage missing %q:\n%s", want, out)
+		}
 	}
 }
 

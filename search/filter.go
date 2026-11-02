@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -658,39 +657,13 @@ func (m *fileTypeMatcher) allows(path string) bool {
 // pathScope, if non-empty, restricts results to files whose relative path matches at least
 // one simple glob pattern (e.g., "*/backend/*", "tests/*").
 func GetDocumentFileCount(fileTypes []string, walkRoot string, pathScope []string) (int, error) {
-	if walkRoot == "" {
-		walkRoot = "."
-	}
-	matcher := newFileTypeMatcher(fileTypes)
+	return GetDocumentFileCountWithOptions(fileTypes, walkRoot, pathScope, WalkOptions{})
+}
 
-	absRoot, err := filepath.Abs(walkRoot)
-	if err != nil {
-		return 0, err
-	}
-	normScope := normalizePathScopePatterns(pathScope, absRoot)
-
+// GetDocumentFileCountWithOptions counts candidates using the shared walk policy.
+func GetDocumentFileCountWithOptions(fileTypes []string, walkRoot string, pathScope []string, options WalkOptions) (int, error) {
 	count := 0
-	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// Ignore permission errors; keep walking
-			return nil
-		}
-		if d.IsDir() {
-			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
-				return filepath.SkipDir
-			}
-			// Prune entire subtree if no pathScope pattern can match anything under it.
-			if len(normScope) > 0 && !dirCouldMatchPathScope(path, absRoot, normScope) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !matcher.allows(path) {
-			return nil
-		}
-		if !matchesPathScope(path, absRoot, normScope) {
-			return nil
-		}
+	err := walkCandidates(fileTypes, walkRoot, pathScope, options, func(_ string, _ os.FileInfo) error {
 		count++
 		return nil
 	})
@@ -710,53 +683,16 @@ func FindFilesWithFirstWord(word string, fileTypes []string, walkRoot string, pa
 
 // FindFilesWithFirstWordPartial finds candidates using the requested Stage 1 match mode.
 func FindFilesWithFirstWordPartial(word string, fileTypes []string, walkRoot string, pathScope []string, partial PartialMode) ([]string, error) {
-	if walkRoot == "" {
-		walkRoot = "."
-	}
-	absRoot, err := filepath.Abs(walkRoot)
-	if err != nil {
-		return nil, err
-	}
-	matcher := newFileTypeMatcher(fileTypes)
-	normScope := normalizePathScopePatterns(pathScope, absRoot)
+	return FindFilesWithFirstWordPartialWithOptions(word, fileTypes, walkRoot, pathScope, partial, WalkOptions{})
+}
 
+// FindFilesWithFirstWordPartialWithOptions finds candidates using the shared walk policy.
+func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
 	// Precompute lowercased search word for fast ASCII whole-word scan
 	wLower := strings.ToLower(word)
-	heavy := map[string]bool{
-		".pdf":  true,
-		".docx": true,
-		".odt":  true,
-		".msg":  true,
-		".eml":  true,
-		".mbox": true,
-	}
 	matches := make([]string, 0, 128)
-	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// Ignore permission errors; keep walking
-			return nil
-		}
-		if d.IsDir() {
-			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
-				return filepath.SkipDir
-			}
-			// Prune entire subtree if no pathScope pattern can match anything under it.
-			if len(normScope) > 0 && !dirCouldMatchPathScope(path, absRoot, normScope) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Filter by type (extension or special name) if provided
-		if !matcher.allows(path) {
-			return nil
-		}
-
-		// Filter by pathScope if provided
-		if !matchesPathScope(path, absRoot, normScope) {
-			return nil
-		}
-		if heavy[strings.ToLower(filepath.Ext(path))] {
+	err := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
+		if IsBinaryFormat(path) {
 			// include heavy binary types as candidates; full check later
 			matches = append(matches, path)
 			return nil
@@ -764,7 +700,7 @@ func FindFilesWithFirstWordPartial(word string, fileTypes []string, walkRoot str
 
 		// Stream up to maxBytes looking for the first word
 		const chunkSize = 64 * 1024
-		const maxBytes = 5 * 1024 * 1024
+		maxBytes := options.TextMaxBytes()
 		overlap := 32
 		if l := len(wLower) - 1; l > overlap {
 			overlap = l
@@ -778,7 +714,7 @@ func FindFilesWithFirstWordPartial(word string, fileTypes []string, walkRoot str
 
 		// Early path for small files: read whole file at once, avoid chunk loop
 		if st, stErr := f.Stat(); stErr == nil && st.Size() <= chunkSize {
-			data, _ := io.ReadAll(f)
+			data, _ := io.ReadAll(io.LimitReader(f, maxBytes))
 			found := asciiIndexPartialCI(data, []byte(wLower), partial)
 			if found >= 0 {
 				matches = append(matches, path)
@@ -867,16 +803,12 @@ func FindFilesWithFirstWordProgress(words []string, fileTypes []string, workers 
 
 // FindFilesWithFirstWordProgressPartial emits discovery progress using partial matching.
 func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string, partial PartialMode) ([]string, error) {
-	if walkRoot == "" {
-		walkRoot = "."
-	}
-	absRoot, err := filepath.Abs(walkRoot)
-	if err != nil {
-		return nil, err
-	}
-	matcher := newFileTypeMatcher(fileTypes)
-	normScope := normalizePathScopePatterns(pathScope, absRoot)
+	return FindFilesWithFirstWordProgressPartialWithOptions(words, fileTypes, workers, onProgress, walkRoot, pathScope, partial, WalkOptions{})
+}
 
+// FindFilesWithFirstWordProgressPartialWithOptions emits discovery progress
+// using the shared walk policy.
+func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
 	// Emit initial progress with unknown total
 	if onProgress != nil {
 		onProgress(0, 0, "")
@@ -884,14 +816,6 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 
 	primaryLower := strings.ToLower(words[0])
 	termsToCheck := heavyBinaryPrefilterTerms(words)
-	heavy := map[string]bool{
-		".pdf":  true,
-		".docx": true,
-		".odt":  true,
-		".msg":  true,
-		".eml":  true,
-		".mbox": true,
-	}
 
 	// Results and synchronization
 	matches := make([]string, 0, 128)
@@ -915,7 +839,7 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 		go func() {
 			defer wg.Done()
 			const chunkSize = 64 * 1024
-			const maxBytes = 5 * 1024 * 1024
+			maxBytes := options.TextMaxBytes()
 			overlap := 32
 			if l := len(primaryLower) - 1; l > overlap {
 				overlap = l
@@ -932,7 +856,7 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 
 				// Early path for small files: read whole file at once, avoid chunk loop
 				if st, stErr := f.Stat(); stErr == nil && st.Size() <= chunkSize {
-					data, _ := io.ReadAll(f)
+					data, _ := io.ReadAll(io.LimitReader(f, maxBytes))
 					_ = adviseDontNeed(f)
 					_ = f.Close()
 
@@ -986,7 +910,7 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 				_ = adviseDontNeed(f)
 				_ = f.Close()
 
-				if found || (!found && readTotal >= maxBytes) {
+				if found {
 					mu.Lock()
 					matches = append(matches, p)
 					mu.Unlock()
@@ -998,31 +922,8 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 	processed := 0
 
 	// Walk and stream paths to workers
-	var walkErr error
-	walkErr = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if d.Name() != "." && config.ShouldSkipDirectory(d.Name()) {
-				return filepath.SkipDir
-			}
-			// Prune entire subtree if no pathScope pattern can match anything under it.
-			if len(normScope) > 0 && !dirCouldMatchPathScope(path, absRoot, normScope) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if !matcher.allows(path) {
-			return nil
-		}
+	walkErr := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
 		ext := strings.ToLower(filepath.Ext(path))
-
-		// Filter by pathScope if provided
-		if !matchesPathScope(path, absRoot, normScope) {
-			return nil
-		}
 
 		processed++
 		if onProgress != nil {
@@ -1030,7 +931,7 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 		}
 
 		// Heavy files: conservative prefilter for non-PDF; include unless decisively absent
-		if heavy[ext] {
+		if IsBinaryFormat(path) {
 			if ext == ".pdf" {
 				// PDFs are handled later under strict guardrails; include as candidate
 				mu.Lock()
@@ -1072,6 +973,7 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 	if len(matches) == 0 {
 		return nil, nil
 	}
+	sort.Strings(matches)
 	return matches, nil
 }
 
@@ -1083,8 +985,17 @@ func StreamContainsAllWordsDecided(filePath string, words []string) (found bool,
 // StreamContainsAllWordsDecidedPartial streams a file and checks each term
 // using the requested partial-match mode.
 func StreamContainsAllWordsDecidedPartial(filePath string, words []string, partial PartialMode) (found bool, decided bool) {
+	return streamContainsAllWordsDecidedPartial(filePath, words, partial, defaultTextMaxBytes)
+}
+
+// streamContainsAllWordsDecidedPartial treats maxBytes as the complete
+// searchable text prefix. Reaching the limit is therefore a conclusive miss.
+func streamContainsAllWordsDecidedPartial(filePath string, words []string, partial PartialMode, maxBytes int64) (found bool, decided bool) {
 	if len(words) == 0 {
 		return true, true
+	}
+	if maxBytes <= 0 {
+		maxBytes = defaultTextMaxBytes
 	}
 	f, err := os.Open(filePath)
 	_ = adviseSequential(f)
@@ -1109,22 +1020,6 @@ func StreamContainsAllWordsDecidedPartial(filePath string, words []string, parti
 	const chunkSize = 64 * 1024
 	const overlap = 128
 
-	// Align with GetFileContent limits
-	stat, statErr := f.Stat()
-	var maxBytes int64
-	if statErr == nil {
-		switch {
-		case stat.Size() > 50*1024*1024:
-			maxBytes = 10 * 1024 * 1024
-		case stat.Size() > 10*1024*1024:
-			maxBytes = 5 * 1024 * 1024
-		default:
-			maxBytes = stat.Size()
-		}
-	} else {
-		maxBytes = 10 * 1024 * 1024
-	}
-
 	foundFlags := make([]bool, len(res))
 	remaining := len(res)
 
@@ -1134,9 +1029,8 @@ func StreamContainsAllWordsDecidedPartial(filePath string, words []string, parti
 	for {
 		maybePaceForMemory()
 		if total >= maxBytes {
-			// Budget reached; we couldn't decide conclusively
 			_ = adviseDontNeed(f)
-			return false, false
+			return false, true
 		}
 		toRead := chunkSize
 		if rem := maxBytes - total; rem < int64(toRead) {
@@ -1195,8 +1089,17 @@ func StreamContainsRankedWordsDecided(filePath string, words []string, strict bo
 // StreamContainsRankedWordsDecidedPartial streams a text file using the
 // requested partial-match mode before the distance check.
 func StreamContainsRankedWordsDecidedPartial(filePath string, words []string, strict bool, partial PartialMode) (found bool, decided bool) {
+	return streamContainsRankedWordsDecidedPartial(filePath, words, strict, partial, defaultTextMaxBytes)
+}
+
+// streamContainsRankedWordsDecidedPartial treats maxBytes as the complete
+// searchable text prefix. Reaching the limit is therefore a conclusive miss.
+func streamContainsRankedWordsDecidedPartial(filePath string, words []string, strict bool, partial PartialMode, maxBytes int64) (found bool, decided bool) {
 	if len(words) <= 1 {
-		return StreamContainsAllWordsDecidedPartial(filePath, words, partial)
+		return streamContainsAllWordsDecidedPartial(filePath, words, partial, maxBytes)
+	}
+	if maxBytes <= 0 {
+		maxBytes = defaultTextMaxBytes
 	}
 
 	f, err := os.Open(filePath)
@@ -1215,7 +1118,7 @@ func StreamContainsRankedWordsDecidedPartial(filePath string, words []string, st
 		res = append(res, buildTermRegexCI(word, partial))
 	}
 	if len(res) <= 1 {
-		return StreamContainsAllWordsDecidedPartial(filePath, words, partial)
+		return streamContainsAllWordsDecidedPartial(filePath, words, partial, maxBytes)
 	}
 
 	const chunkSize = 64 * 1024
@@ -1227,7 +1130,15 @@ func StreamContainsRankedWordsDecidedPartial(filePath string, words []string, st
 	buf := make([]byte, chunkSize)
 	for {
 		maybePaceForMemory()
-		n, readErr := f.Read(buf)
+		if total >= maxBytes {
+			_ = adviseDontNeed(f)
+			return false, true
+		}
+		toRead := chunkSize
+		if rem := maxBytes - total; rem < int64(toRead) {
+			toRead = int(rem)
+		}
+		n, readErr := f.Read(buf[:toRead])
 		if n > 0 {
 			combined := append(prev, buf[:n]...)
 			for i, re := range res {
@@ -1616,13 +1527,17 @@ func CheckFileContainsAllWords(filePath string, words []string, distance int, si
 // CheckFileContainsAllWordsPartial checks streamed and extracted text using
 // the requested partial-match mode.
 func CheckFileContainsAllWordsPartial(filePath string, words []string, distance int, silent bool, partial PartialMode) (bool, error) {
+	return checkFileContainsAllWordsPartial(filePath, words, distance, silent, partial, defaultTextMaxBytes)
+}
+
+func checkFileContainsAllWordsPartial(filePath string, words []string, distance int, silent bool, partial PartialMode, maxBytes int64) (bool, error) {
 	// Fast prefilter: require presence of all words before full distance check
-	found, decided := StreamContainsAllWordsDecidedPartial(filePath, words, partial)
+	found, decided := streamContainsAllWordsDecidedPartial(filePath, words, partial, maxBytes)
 	if decided && !found {
 		return false, nil
 	}
 
-	content, _, err := GetFileContent(filePath)
+	content, err := readTextForStage2(filePath, maxBytes)
 	if err != nil {
 		return false, err
 	}
@@ -1645,12 +1560,16 @@ func CheckFileContainsRankedWords(filePath string, words []string, distance int,
 // CheckFileContainsRankedWordsPartial checks a text file using the requested
 // partial-match mode after a streaming candidate prefilter.
 func CheckFileContainsRankedWordsPartial(filePath string, words []string, distance int, strict bool, silent bool, partial PartialMode) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
-	found, decided := StreamContainsRankedWordsDecidedPartial(filePath, words, strict, partial)
+	return checkFileContainsRankedWordsPartial(filePath, words, distance, strict, silent, partial, defaultTextMaxBytes)
+}
+
+func checkFileContainsRankedWordsPartial(filePath string, words []string, distance int, strict bool, silent bool, partial PartialMode, maxBytes int64) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
+	found, decided := streamContainsRankedWordsDecidedPartial(filePath, words, strict, partial, maxBytes)
 	if decided && !found {
 		return 0, 0, nil, 0, false, nil
 	}
 
-	content, _, err := GetFileContent(filePath)
+	content, err := readTextForStage2(filePath, maxBytes)
 	if err != nil {
 		return 0, 0, nil, 0, false, err
 	}
@@ -1664,39 +1583,19 @@ func CheckFileContainsRankedWordsPartial(filePath string, words []string, distan
 
 // CheckFileContainsExcludeWords checks if a file contains any exclude words
 func CheckFileContainsExcludeWords(filePath string, excludeWords []string) (bool, error) {
+	return checkFileContainsExcludeWords(filePath, excludeWords, defaultTextMaxBytes)
+}
+
+func checkFileContainsExcludeWords(filePath string, excludeWords []string, maxBytes int64) (bool, error) {
 	if len(excludeWords) == 0 {
 		return false, nil
 	}
 
-	file, err := os.Open(filePath)
-	_ = adviseSequential(file)
+	content, err := readTextForStage2(filePath, maxBytes)
 	if err != nil {
 		return false, err
 	}
-	defer file.Close()
-
-	// Get file size for large file handling
-	stat, err := file.Stat()
-	if err != nil {
-		return false, err
-	}
-
-	var reader io.Reader = file
-
-	// Limit read size for large files
-	if stat.Size() > 50*1024*1024 { // 50MB
-		reader = io.LimitReader(file, 10*1024*1024) // Read first 10MB
-	} else if stat.Size() > 10*1024*1024 { // 10MB
-		reader = io.LimitReader(file, 5*1024*1024) // Read first 5MB
-	}
-
-	// Read content
-	content, err := io.ReadAll(reader)
-	if err != nil {
-		return false, err
-	}
-
-	contentStr := strings.ToLower(string(content))
+	contentStr := strings.ToLower(content)
 
 	// Check each exclude word
 	for _, word := range excludeWords {
@@ -1706,6 +1605,51 @@ func CheckFileContainsExcludeWords(filePath string, excludeWords []string) (bool
 	}
 
 	return false, nil
+}
+
+func readTextForStage2(filePath string, maxBytes int64) (string, error) {
+	if maxBytes <= 0 {
+		maxBytes = defaultTextMaxBytes
+	}
+	file, err := os.Open(filePath)
+	_ = adviseSequential(file)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(io.LimitReader(file, maxBytes))
+	_ = adviseDontNeed(file)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+// readTextPrefix reads only the active searchable prefix while reporting the
+// file size observed before the read.
+func readTextPrefix(filePath string, maxBytes int64) (string, int64, error) {
+	if maxBytes <= 0 {
+		maxBytes = defaultTextMaxBytes
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+	_ = adviseSequential(file)
+
+	stat, err := file.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	content, err := io.ReadAll(io.LimitReader(file, maxBytes))
+	_ = adviseDontNeed(file)
+	if err != nil {
+		return "", 0, err
+	}
+	return string(content), stat.Size(), nil
 }
 
 // GetFileContent reads and returns file content with size limits

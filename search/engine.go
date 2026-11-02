@@ -133,6 +133,8 @@ type SearchEngine struct {
 	FilterWorkers     int
 	FileTimeoutBinary time.Duration
 	MaxExcerpts       int
+	NoIgnore          bool
+	MaxFileSize       int64
 
 	// StartDir, if non-empty, sets the root directory for file walks.
 	// When empty, the walk uses the current working directory.
@@ -176,6 +178,13 @@ func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, inc
 	}
 }
 
+func (se *SearchEngine) walkOptions() WalkOptions {
+	return WalkOptions{
+		NoIgnore:    se.NoIgnore,
+		MaxFileSize: se.MaxFileSize,
+	}
+}
+
 // NewSearchEngineWithWorkers creates a new search engine instance with an explicit filter worker count
 func NewSearchEngineWithWorkers(searchWords, excludeWords []string, fileTypes []string, includeCode bool, heavyConcurrency int, fileTimeoutBinary int, filterWorkers int) *SearchEngine {
 	se := NewSearchEngine(searchWords, excludeWords, fileTypes, includeCode, heavyConcurrency, fileTimeoutBinary)
@@ -190,11 +199,11 @@ func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error)
 	if !se.Silent {
 		fmt.Printf("Finding files with '%s'...\n", se.SearchWords[0])
 	}
-	candidateFiles, err := FindFilesWithFirstWordProgressPartial(se.SearchWords, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
+	candidateFiles, err := FindFilesWithFirstWordProgressPartialWithOptions(se.SearchWords, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
 		if se.OnProgress != nil {
 			se.OnProgress("discovery", processed, total, path)
 		}
-	}, se.StartDir, se.PathScope, se.Partial)
+	}, se.StartDir, se.PathScope, se.Partial, se.walkOptions())
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to find files with first word: %w", err)
 	}
@@ -216,6 +225,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 	if !se.Silent {
 		fmt.Println("Filtering for files containing ALL words...")
 	}
+	maxBytes := se.walkOptions().TextMaxBytes()
 
 	// Separate excludes into extensions and words
 	var extExcludes []string
@@ -266,7 +276,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 
 		// The ranked prefilter preserves Strategy A candidates in relaxed mode.
 		if !IsBinaryFormat(filePath) && len(se.SearchWords) >= 2 {
-			found, decided := StreamContainsRankedWordsDecidedPartial(filePath, se.SearchWords, se.Strict, se.Partial)
+			found, decided := streamContainsRankedWordsDecidedPartial(filePath, se.SearchWords, se.Strict, se.Partial, maxBytes)
 			if decided && !found {
 				return false
 			}
@@ -343,7 +353,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				}
 			} else {
 				// Text file: stream+distance
-				score, termCount, matchedTerms, spanLen, ok, err := CheckFileContainsRankedWordsPartial(filePath, se.SearchWords, se.Distance, se.Strict, se.Silent, se.Partial)
+				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsPartial(filePath, se.SearchWords, se.Distance, se.Strict, se.Silent, se.Partial, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
@@ -410,7 +420,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 					return false
 				}
 			} else {
-				score, termCount, matchedTerms, spanLen, ok, err := CheckFileContainsRankedWordsPartial(filePath, []string{word}, se.Distance, se.Strict, se.Silent, se.Partial)
+				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsPartial(filePath, []string{word}, se.Distance, se.Strict, se.Silent, se.Partial, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
@@ -465,7 +475,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				return false
 			}
 		} else if len(wordExcludes) > 0 {
-			ok2, err := CheckFileContainsExcludeWords(filePath, wordExcludes)
+			ok2, err := checkFileContainsExcludeWords(filePath, wordExcludes, maxBytes)
 			if err != nil {
 				if !se.Silent {
 					fmt.Printf("Warning: Error checking exclude words in %s: %v\n", filePath, err)
@@ -666,7 +676,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 				continue
 			}
 		} else {
-			content, fileSize, err = GetFileContent(filePath)
+			content, fileSize, err = readTextPrefix(filePath, se.walkOptions().TextMaxBytes())
 			if err != nil {
 				if !se.Silent {
 					fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)

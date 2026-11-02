@@ -100,6 +100,73 @@ func TestCLIOutputFormats(t *testing.T) {
 	})
 }
 
+func TestJSONTraversalOptionsOmissionAndPresence(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "fixture.md"), []byte("alpha"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		extraArgs []string
+		want      map[string]string
+		omitted   []string
+	}{
+		{
+			name:    "omitted by default",
+			omitted: []string{"no_ignore", "max_filesize"},
+		},
+		{
+			name:      "no_ignore only",
+			extraArgs: []string{"--no-ignore"},
+			want: map[string]string{
+				"no_ignore": "true",
+			},
+			omitted: []string{"max_filesize"},
+		},
+		{
+			name:      "max_filesize only including explicit 5M",
+			extraArgs: []string{"--max-filesize", "5M"},
+			want: map[string]string{
+				"max_filesize": "5242880",
+			},
+			omitted: []string{"no_ignore"},
+		},
+		{
+			name:      "present when explicitly set",
+			extraArgs: []string{"--no-ignore", "--max-filesize", "1MiB"},
+			want: map[string]string{
+				"no_ignore":    "true",
+				"max_filesize": "1048576",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			argv := []string{"alpha", "--startdir", root, "--only", "md", "--json"}
+			argv = append(argv, tt.extraArgs...)
+			args := parseArguments(argv)
+			out := captureCLIStdout(t, func() int { return runJSON(args) })
+			var envelope struct {
+				Query map[string]json.RawMessage `json:"query"`
+			}
+			if err := json.Unmarshal(out, &envelope); err != nil {
+				t.Fatalf("decode JSON output: %v", err)
+			}
+			for _, key := range tt.omitted {
+				if _, exists := envelope.Query[key]; exists {
+					t.Errorf("query unexpectedly contains %q: %s", key, out)
+				}
+			}
+			for key, want := range tt.want {
+				if got := string(envelope.Query[key]); got != want {
+					t.Errorf("query %s = %s, want %s", key, got, want)
+				}
+			}
+		})
+	}
+}
+
 func captureCLIStdout(t *testing.T, run func() int) []byte {
 	t.Helper()
 	reader, writer, err := os.Pipe()

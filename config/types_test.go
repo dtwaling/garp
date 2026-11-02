@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -28,18 +29,82 @@ func TestIsCodeFileDelphi(t *testing.T) {
 	}
 }
 
-func TestBuildRipgrepFileTypesCarriesNewCodeGlobs(t *testing.T) {
-	got := strings.Join(BuildRipgrepFileTypes(true), " ")
-	for _, glob := range []string{"*.pas", "*.dpr", "*.dpk", "*.inc", "*.dfm", "*.fmx", "*.dproj", "*.groupproj", "*.phtml"} {
-		if !strings.Contains(got, glob) {
-			t.Errorf("BuildRipgrepFileTypes(true) missing glob %q", glob)
+func TestBuildRipgrepFileTypesCarriesCodeRegistryGlobs(t *testing.T) {
+	got := globSet(BuildRipgrepFileTypes(true))
+	want := make(map[string]bool, len(CodeTypes)+len(CodeFilenames))
+	for _, ext := range CodeTypes {
+		glob := "*." + ext
+		want[glob] = true
+		if !got[glob] {
+			t.Errorf("BuildRipgrepFileTypes(true) missing CodeTypes glob %q", glob)
+		}
+	}
+	for _, name := range CodeFilenames {
+		want[name] = true
+		if !got[name] {
+			t.Errorf("BuildRipgrepFileTypes(true) missing CodeFilenames glob %q", name)
 		}
 	}
 	// Without --code, code globs must NOT appear.
-	docsOnly := strings.Join(BuildRipgrepFileTypes(false), " ")
-	if strings.Contains(docsOnly, "*.pas") {
-		t.Errorf("BuildRipgrepFileTypes(false) should not include *.pas")
+	docsOnly := globSet(BuildRipgrepFileTypes(false))
+	for glob := range got {
+		if !docsOnly[glob] && !want[glob] {
+			t.Errorf("BuildRipgrepFileTypes(true) has unregistered code glob %q", glob)
+		}
 	}
+}
+
+func TestCodeRegistryIncludesOnlySafeEnvironmentTemplates(t *testing.T) {
+	codeGlobs := globSet(BuildRipgrepFileTypes(true))
+	for _, name := range []string{".env.example", ".env.sample", ".env.template"} {
+		if !codeGlobs[name] {
+			t.Errorf("BuildRipgrepFileTypes(true) missing safe environment template %q", name)
+		}
+		if !IsCodeFile(name) {
+			t.Errorf("IsCodeFile(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{".env", ".env.local", ".env.development", ".env.production"} {
+		if matchesAnyGlob(codeGlobs, name) {
+			t.Errorf("BuildRipgrepFileTypes(true) matches secret environment file %q", name)
+		}
+		if IsCodeFile(name) {
+			t.Errorf("IsCodeFile(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestGetFileTypeDescriptionCarriesCodeRegistry(t *testing.T) {
+	got := GetFileTypeDescription(true)
+	for _, ext := range CodeTypes {
+		if !strings.Contains(got, ext) {
+			t.Errorf("GetFileTypeDescription(true) missing CodeTypes entry %q", ext)
+		}
+	}
+	for _, name := range CodeFilenames {
+		if !strings.Contains(got, name) {
+			t.Errorf("GetFileTypeDescription(true) missing CodeFilenames entry %q", name)
+		}
+	}
+}
+
+func globSet(args []string) map[string]bool {
+	globs := make(map[string]bool)
+	for i := 0; i+1 < len(args); i += 2 {
+		if args[i] == "-g" {
+			globs[args[i+1]] = true
+		}
+	}
+	return globs
+}
+
+func matchesAnyGlob(globs map[string]bool, name string) bool {
+	for glob := range globs {
+		if matched, err := filepath.Match(strings.ToLower(glob), strings.ToLower(name)); err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIsCodeFileDockerfile(t *testing.T) {
