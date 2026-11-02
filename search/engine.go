@@ -36,22 +36,23 @@ func capForBinaryPrefilter(ext string) int64 {
 
 // SearchResult represents a file that matches all search criteria
 type SearchResult struct {
-	FilePath     string
-	FileSize     int64
-	Score        int      // Sum of distinct matched term lengths in the best window.
-	TermCount    int      // Number of distinct query terms in the best window.
-	MatchedTerms []string // Distinct query terms from the best window.
-	SpanLength   int      // Character span of the best window.
-	Excerpts     []string // ANSI-highlighted, for TUI display
-	RawExcerpts  []string // plain text before highlighting -- for machine-readable output (--json, --plain)
-	StartLines   []int    // 1-based start line per excerpt (parallel to RawExcerpts); 0 = unknown
+	FilePath        string
+	FileSize        int64
+	Score           int      // Sum of distinct matched term lengths in the best window.
+	TermCount       int      // Number of distinct query terms in the best window.
+	PathMatchCount  int      `json:"-"`
+	BoundaryQuality int      `json:"-"`
+	MatchedTerms    []string // Distinct query terms from the best window.
+	SpanLength      int      // Character span of the best window.
+	Excerpts        []string // ANSI-highlighted, for TUI display
+	RawExcerpts     []string // plain text before highlighting -- for machine-readable output (--json, --plain)
+	StartLines      []int    // 1-based start line per excerpt (parallel to RawExcerpts); 0 = unknown
 	// Per-chunk ranked quality (parallel to RawExcerpts), best-first within the
 	// file. Zero for chunks that did not frame a ranked window.
 	ChunkScores     []int
 	ChunkTermCounts []int
-	// TopQualityChunks counts chunks whose quality equals the file's best
-	// window (score and term count). Used to rank the file list: files with
-	// more high-quality clusters sort earlier among otherwise-equal results.
+	// TopQualityChunks is the Stage 2 count of non-overlapping best-quality
+	// windows. Emitted excerpt limits do not affect it.
 	TopQualityChunks int
 	CleanContent     string
 	EmailDate        string
@@ -572,87 +573,128 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 	return matchingFiles, nil
 }
 
-// candidateBetter reports whether candidate a ranks higher than candidate b
-// for the same file path.
-func candidateBetter(a, b candidateMatch) bool {
+type rankingKey struct {
+	filePath         string
+	score            int
+	termCount        int
+	pathMatchCount   int
+	boundaryQuality  int
+	spanLen          int
+	topQualityChunks int
+}
+
+func normalizedRankingPath(path string) string {
+	return strings.ReplaceAll(filepath.ToSlash(path), `\`, "/")
+}
+
+// rankingBetter is the single file-order comparator used before and after
+// Stage 3.
+func rankingBetter(a, b rankingKey) bool {
 	if a.score != b.score {
 		return a.score > b.score
 	}
 	if a.termCount != b.termCount {
 		return a.termCount > b.termCount
 	}
+	if a.pathMatchCount != b.pathMatchCount {
+		return a.pathMatchCount > b.pathMatchCount
+	}
+	if a.boundaryQuality != b.boundaryQuality {
+		return a.boundaryQuality > b.boundaryQuality
+	}
 	if a.spanLen != b.spanLen {
-		if a.spanLen <= 0 {
-			return false
-		}
-		if b.spanLen <= 0 {
-			return true
-		}
 		return a.spanLen < b.spanLen
 	}
-	return false
+	if a.topQualityChunks != b.topQualityChunks {
+		return a.topQualityChunks > b.topQualityChunks
+	}
+
+	aPath := normalizedRankingPath(a.filePath)
+	bPath := normalizedRankingPath(b.filePath)
+	aFolded := strings.ToLower(aPath)
+	bFolded := strings.ToLower(bPath)
+	if aFolded != bFolded {
+		return aFolded < bFolded
+	}
+	if aPath != bPath {
+		return aPath < bPath
+	}
+	return a.filePath < b.filePath
+}
+
+func candidateRankingKey(match candidateMatch) rankingKey {
+	return rankingKey{
+		filePath:         match.filePath,
+		score:            match.score,
+		termCount:        match.termCount,
+		pathMatchCount:   match.pathMatchCount,
+		boundaryQuality:  match.boundaryQuality,
+		spanLen:          match.spanLen,
+		topQualityChunks: match.topQualityChunks,
+	}
+}
+
+func resultRankingKey(result SearchResult) rankingKey {
+	return rankingKey{
+		filePath:         result.FilePath,
+		score:            result.Score,
+		termCount:        result.TermCount,
+		pathMatchCount:   result.PathMatchCount,
+		boundaryQuality:  result.BoundaryQuality,
+		spanLen:          result.SpanLength,
+		topQualityChunks: result.TopQualityChunks,
+	}
+}
+
+func candidateBetter(a, b candidateMatch) bool {
+	return rankingBetter(candidateRankingKey(a), candidateRankingKey(b))
+}
+
+func sortAndDedupeCandidates(matches []candidateMatch) []candidateMatch {
+	bestByPath := make(map[string]candidateMatch, len(matches))
+	for _, match := range matches {
+		if match.filePath == "" {
+			continue
+		}
+		if current, exists := bestByPath[match.filePath]; !exists || candidateBetter(match, current) {
+			bestByPath[match.filePath] = match
+		}
+	}
+
+	ranked := make([]candidateMatch, 0, len(bestByPath))
+	for _, match := range bestByPath {
+		ranked = append(ranked, match)
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		return candidateBetter(ranked[i], ranked[j])
+	})
+	return ranked
 }
 
 // sortSearchResults sorts results deterministically by ranked match quality and file path.
 func sortSearchResults(results []SearchResult) {
-	sort.SliceStable(results, func(i, j int) bool {
-		if results[i].Score != results[j].Score {
-			return results[i].Score > results[j].Score
-		}
-		if results[i].TermCount != results[j].TermCount {
-			return results[i].TermCount > results[j].TermCount
-		}
-		// Among otherwise-equal files, more top-quality clusters rank first.
-		if results[i].TopQualityChunks != results[j].TopQualityChunks {
-			return results[i].TopQualityChunks > results[j].TopQualityChunks
-		}
-		if results[i].SpanLength != results[j].SpanLength {
-			return results[i].SpanLength < results[j].SpanLength
-		}
-		return results[i].FilePath < results[j].FilePath
+	sort.Slice(results, func(i, j int) bool {
+		return rankingBetter(resultRankingKey(results[i]), resultRankingKey(results[j]))
 	})
 }
 
 // buildPathOnlyResults constructs a distinct, deterministically ranked result
 // list directly from candidate matches without re-reading files or extracting excerpts.
 func (se *SearchEngine) buildPathOnlyResults(matchingFiles []candidateMatch) []SearchResult {
-	results := make([]SearchResult, 0, len(matchingFiles))
-	indexByPath := make(map[string]int, len(matchingFiles))
-
-	for _, match := range matchingFiles {
-		if match.filePath == "" {
-			continue
-		}
-		if idx, exists := indexByPath[match.filePath]; exists {
-			existing := candidateMatch{
-				filePath:     results[idx].FilePath,
-				score:        results[idx].Score,
-				termCount:    results[idx].TermCount,
-				matchedTerms: results[idx].MatchedTerms,
-				spanLen:      results[idx].SpanLength,
-			}
-			if candidateBetter(match, existing) {
-				results[idx] = SearchResult{
-					FilePath:     match.filePath,
-					Score:        match.score,
-					TermCount:    match.termCount,
-					MatchedTerms: match.matchedTerms,
-					SpanLength:   match.spanLen,
-				}
-			}
-			continue
-		}
-		indexByPath[match.filePath] = len(results)
+	ranked := sortAndDedupeCandidates(matchingFiles)
+	results := make([]SearchResult, 0, len(ranked))
+	for _, match := range ranked {
 		results = append(results, SearchResult{
-			FilePath:     match.filePath,
-			Score:        match.score,
-			TermCount:    match.termCount,
-			MatchedTerms: match.matchedTerms,
-			SpanLength:   match.spanLen,
+			FilePath:         match.filePath,
+			Score:            match.score,
+			TermCount:        match.termCount,
+			PathMatchCount:   match.pathMatchCount,
+			BoundaryQuality:  match.boundaryQuality,
+			MatchedTerms:     match.matchedTerms,
+			SpanLength:       match.spanLen,
+			TopQualityChunks: match.topQualityChunks,
 		})
 	}
-
-	sortSearchResults(results)
 	return results
 }
 
@@ -662,6 +704,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 }
 
 func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFiles []candidateMatch) ([]SearchResult, error) {
+	matchingFiles = sortAndDedupeCandidates(matchingFiles)
 	if se.PathOnly {
 		return se.buildPathOnlyResults(matchingFiles), nil
 	}
@@ -822,13 +865,9 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 		// Per-chunk ranked quality, parallel to the emitted excerpts.
 		chunkScores := make([]int, len(spans))
 		chunkTermCounts := make([]int, len(spans))
-		topQuality := 0
 		for i, sp := range spans {
 			chunkScores[i] = sp.score
 			chunkTermCounts[i] = sp.termCount
-			if sp.score == match.score && sp.termCount == match.termCount {
-				topQuality++
-			}
 		}
 
 		result := SearchResult{
@@ -836,6 +875,8 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 			FileSize:         fileSize,
 			Score:            match.score,
 			TermCount:        match.termCount,
+			PathMatchCount:   match.pathMatchCount,
+			BoundaryQuality:  match.boundaryQuality,
 			MatchedTerms:     match.matchedTerms,
 			SpanLength:       match.spanLen,
 			Excerpts:         highlightedExcerpts,
@@ -843,7 +884,7 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 			StartLines:       startLines,
 			ChunkScores:      chunkScores,
 			ChunkTermCounts:  chunkTermCounts,
-			TopQualityChunks: topQuality,
+			TopQualityChunks: match.topQualityChunks,
 			CleanContent:     boundedClean,
 			EmailDate:        emailDate,
 			EmailSubject:     emailSubject,

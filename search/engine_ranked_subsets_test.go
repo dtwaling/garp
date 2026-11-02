@@ -86,6 +86,43 @@ func TestEnginePerFileSubsetsRetainLowerQualityClusters(t *testing.T) {
 	}
 }
 
+func TestEnginePerFileSubsetsExcerptLimitDoesNotChangeFileRank(t *testing.T) {
+	SetExcerptContextLimit(100)
+	t.Cleanup(func() { SetExcerptContextLimit(0) })
+
+	root := buildPerFileSubsetFixture(t)
+	var orders [][]string
+	for _, maxExcerpts := range []int{1, 3} {
+		engine := NewSearchEngineWithWorkers([]string{"alpha", "beta", "gamma"}, nil, []string{"-g", "*.txt"}, false, 1, 1000, 1)
+		engine.StartDir = root
+		engine.Distance = 100
+		engine.MaxExcerpts = maxExcerpts
+		engine.Silent = true
+
+		results, err := engine.Execute()
+		if err != nil {
+			t.Fatalf("Execute() with MaxExcerpts=%d error: %v", maxExcerpts, err)
+		}
+		order := make([]string, len(results))
+		for i, result := range results {
+			order[i] = filepath.Base(result.FilePath)
+		}
+		orders = append(orders, order)
+
+		all := skipAheadResultByFile(t, results, "all.txt")
+		if all.TopQualityChunks != 2 {
+			t.Fatalf("MaxExcerpts=%d TopQualityChunks = %d, want Stage 2 count 2", maxExcerpts, all.TopQualityChunks)
+		}
+		if len(all.RawExcerpts) > maxExcerpts {
+			t.Fatalf("MaxExcerpts=%d emitted %d excerpts", maxExcerpts, len(all.RawExcerpts))
+		}
+	}
+
+	if strings.Join(orders[0], "\x00") != strings.Join(orders[1], "\x00") {
+		t.Fatalf("file order changed with excerpt limit: %v vs %v", orders[0], orders[1])
+	}
+}
+
 func TestEnginePerFileSubsetsChunkOrderingWithinFile(t *testing.T) {
 	SetExcerptContextLimit(100)
 	t.Cleanup(func() { SetExcerptContextLimit(0) })
