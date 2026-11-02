@@ -1,6 +1,29 @@
 package search
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func writeIgnoreFixture(t *testing.T, name, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ignorePatterns(rules []ignoreRule) []string {
+	patterns := make([]string, len(rules))
+	for i := range rules {
+		patterns[i] = rules[i].pattern
+	}
+	return patterns
+}
 
 func TestIgnoreRuleParsing(t *testing.T) {
 	const input = "first\r\n\r\n# comment\r\nsecond   \r\nliteral\\ \r\n\\#hash\r\n\\!bang\r\n"
@@ -246,5 +269,179 @@ func TestIgnorePatternPlatformCaseRules(t *testing.T) {
 				t.Errorf("matches(%q) on %s = %t, want %t", tt.value, tt.goos, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRepoRootNearestAncestorAndIgnoreOrder(t *testing.T) {
+	root := t.TempDir()
+	outer := filepath.Join(root, "outer")
+	repository := filepath.Join(outer, "nested")
+	walkRoot := filepath.Join(repository, "src", "service")
+
+	writeIgnoreFixture(t, filepath.Join(outer, ".git", "info", "exclude"), "outer-exclude\n")
+	writeIgnoreFixture(t, filepath.Join(repository, ".git", "info", "exclude"), "repo-exclude\n")
+	writeIgnoreFixture(t, filepath.Join(repository, ".gitignore"), "root-gitignore\n")
+	writeIgnoreFixture(t, filepath.Join(repository, ".ignore"), "root-ignore\n")
+	writeIgnoreFixture(t, filepath.Join(repository, "src", ".gitignore"), "src-gitignore\n")
+	writeIgnoreFixture(t, filepath.Join(walkRoot, ".ignore"), "walk-ignore\n")
+
+	found, ok := findRepositoryRoot(walkRoot)
+	if !ok || found != repository {
+		t.Fatalf("findRepositoryRoot() = (%q, %t), want (%q, true)", found, ok, repository)
+	}
+
+	rules := initialIgnoreRules(walkRoot)
+	want := []string{
+		"repo-exclude",
+		"root-gitignore",
+		"root-ignore",
+		"src-gitignore",
+		"walk-ignore",
+	}
+	if got := ignorePatterns(rules); !reflect.DeepEqual(got, want) {
+		t.Fatalf("initialIgnoreRules() patterns = %q, want %q", got, want)
+	}
+	for i := 1; i < len(rules); i++ {
+		if rules[i].sourcePrecedence <= rules[i-1].sourcePrecedence {
+			t.Fatalf("precedence did not increase at rule %d: %#v", i, rules)
+		}
+	}
+}
+
+func TestRepoRootOutsideRepositoryStartsAtWalkRoot(t *testing.T) {
+	root := t.TempDir()
+	walkRoot := filepath.Join(root, "parent", "walk")
+	writeIgnoreFixture(t, filepath.Join(root, "parent", ".gitignore"), "parent-rule\n")
+	writeIgnoreFixture(t, filepath.Join(walkRoot, ".gitignore"), "walk-rule\n")
+
+	if found, ok := findRepositoryRoot(walkRoot); ok {
+		t.Fatalf("findRepositoryRoot() unexpectedly found %q", found)
+	}
+	if got := ignorePatterns(initialIgnoreRules(walkRoot)); !reflect.DeepEqual(got, []string{"walk-rule"}) {
+		t.Fatalf("initialIgnoreRules() patterns = %q, want only walk-root rules", got)
+	}
+}
+
+func TestGitDirRelativeAndAbsolutePointers(t *testing.T) {
+	tests := []struct {
+		name    string
+		pointer func(repository, gitDir string) string
+	}{
+		{
+			name: "relative",
+			pointer: func(repository, gitDir string) string {
+				value, err := filepath.Rel(repository, gitDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return value
+			},
+		},
+		{
+			name: "absolute",
+			pointer: func(_, gitDir string) string {
+				return gitDir
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			repository := filepath.Join(root, "repository")
+			gitDir := filepath.Join(root, "gitdirs", tt.name)
+			writeIgnoreFixture(t, filepath.Join(gitDir, "info", "exclude"), tt.name+"-exclude\n")
+			writeIgnoreFixture(t, filepath.Join(repository, ".git"), "gitdir: "+tt.pointer(repository, gitDir)+"\r\n")
+
+			common, worktree := resolveRepositoryGitDirs(repository)
+			if common != "" || worktree != gitDir {
+				t.Fatalf("resolveRepositoryGitDirs() = (%q, %q), want (%q, %q)", common, worktree, "", gitDir)
+			}
+			if got := ignorePatterns(initialIgnoreRules(repository)); !reflect.DeepEqual(got, []string{tt.name + "-exclude"}) {
+				t.Fatalf("initialIgnoreRules() patterns = %q", got)
+			}
+		})
+	}
+}
+
+func TestCommonDirExcludePrecedence(t *testing.T) {
+	root := t.TempDir()
+	repository := filepath.Join(root, "repository")
+	commonDir := filepath.Join(root, "main.git")
+	worktreeDir := filepath.Join(commonDir, "worktrees", "repository")
+	writeIgnoreFixture(t, filepath.Join(repository, ".git"), "gitdir: "+worktreeDir+"\n")
+	writeIgnoreFixture(t, filepath.Join(worktreeDir, "commondir"), "../..\n")
+	writeIgnoreFixture(t, filepath.Join(commonDir, "info", "exclude"), "shared\ncommon-only\n")
+	writeIgnoreFixture(t, filepath.Join(worktreeDir, "info", "exclude"), "!shared\nworktree-only\n")
+	writeIgnoreFixture(t, filepath.Join(repository, ".gitignore"), "!worktree-only\nroot-only\n")
+	writeIgnoreFixture(t, filepath.Join(repository, ".ignore"), "!root-only\nlocal-only\n")
+
+	common, worktree := resolveRepositoryGitDirs(repository)
+	if common != commonDir || worktree != worktreeDir {
+		t.Fatalf("resolveRepositoryGitDirs() = (%q, %q), want (%q, %q)", common, worktree, commonDir, worktreeDir)
+	}
+
+	rules := initialIgnoreRules(repository)
+	want := []string{"shared", "common-only", "!shared", "worktree-only", "!worktree-only", "root-only", "!root-only", "local-only"}
+	if got := ignorePatterns(rules); !reflect.DeepEqual(got, want) {
+		t.Fatalf("initialIgnoreRules() patterns = %q, want %q", got, want)
+	}
+
+	checks := map[string]bool{
+		"shared":        false,
+		"common-only":   true,
+		"worktree-only": false,
+		"root-only":     false,
+		"local-only":    true,
+	}
+	for name, wantIgnored := range checks {
+		candidate := filepath.Join(repository, name)
+		if got := ignoredByRules(rules, candidate, false); got != wantIgnored {
+			t.Errorf("ignoredByRules(%q) = %t, want %t", name, got, wantIgnored)
+		}
+	}
+}
+
+func TestGitDirMissingAndMalformedPointersAreEmpty(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+	}{
+		{name: "missing target", contents: "gitdir: ../missing\n"},
+		{name: "malformed", contents: "not-a-gitdir\n"},
+		{name: "empty", contents: "gitdir: \n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := filepath.Join(t.TempDir(), "repository")
+			writeIgnoreFixture(t, filepath.Join(repository, ".git"), tt.contents)
+			writeIgnoreFixture(t, filepath.Join(repository, ".gitignore"), "local-rule\n")
+
+			if common, worktree := resolveRepositoryGitDirs(repository); common != "" || worktree != "" {
+				t.Fatalf("resolveRepositoryGitDirs() = (%q, %q), want empty", common, worktree)
+			}
+			if got := ignorePatterns(initialIgnoreRules(repository)); !reflect.DeepEqual(got, []string{"local-rule"}) {
+				t.Fatalf("initialIgnoreRules() patterns = %q, want local rule", got)
+			}
+		})
+	}
+}
+
+func TestCommonDirAbsentAndUnreadableIgnoreSourcesAreEmpty(t *testing.T) {
+	root := t.TempDir()
+	repository := filepath.Join(root, "repository")
+	worktreeDir := filepath.Join(root, "worktree.git")
+	writeIgnoreFixture(t, filepath.Join(repository, ".git"), "gitdir: "+worktreeDir+"\n")
+	writeIgnoreFixture(t, filepath.Join(worktreeDir, "info", "exclude"), "worktree-rule\n")
+	writeIgnoreFixture(t, filepath.Join(repository, ".gitignore"), "valid-before\nbad[\nvalid-after\n")
+	if err := os.MkdirAll(filepath.Join(repository, ".ignore"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rules := initialIgnoreRules(repository)
+	want := []string{"worktree-rule", "valid-before", "valid-after"}
+	if got := ignorePatterns(rules); !reflect.DeepEqual(got, want) {
+		t.Fatalf("initialIgnoreRules() patterns = %q, want %q", got, want)
 	}
 }

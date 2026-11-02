@@ -2,7 +2,9 @@ package search
 
 import (
 	"errors"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -22,6 +24,144 @@ type ignoreRule struct {
 	caseInsensitive  bool
 	windowsPaths     bool
 	matcher          *regexp.Regexp
+}
+
+// initialIgnoreRules builds the ignore chain inherited by walkRoot.
+func initialIgnoreRules(walkRoot string) []ignoreRule {
+	walkRoot = filepath.Clean(walkRoot)
+	repositoryRoot, inRepository := findRepositoryRoot(walkRoot)
+	chainRoot := walkRoot
+	if inRepository {
+		chainRoot = repositoryRoot
+	}
+
+	rules := make([]ignoreRule, 0)
+	precedence := 0
+	if inRepository {
+		commonDir, worktreeDir := resolveRepositoryGitDirs(repositoryRoot)
+		if commonDir != "" && !sameFilePath(commonDir, worktreeDir) {
+			rules = appendIgnoreFile(rules, filepath.Join(commonDir, "info", "exclude"), repositoryRoot, precedence)
+			precedence++
+		}
+		if worktreeDir != "" {
+			rules = appendIgnoreFile(rules, filepath.Join(worktreeDir, "info", "exclude"), repositoryRoot, precedence)
+			precedence++
+		}
+	}
+
+	for _, directory := range pathFromAncestor(chainRoot, walkRoot) {
+		rules = appendIgnoreFile(rules, filepath.Join(directory, ".gitignore"), directory, precedence)
+		precedence++
+		rules = appendIgnoreFile(rules, filepath.Join(directory, ".ignore"), directory, precedence)
+		precedence++
+	}
+	return rules
+}
+
+func findRepositoryRoot(start string) (string, bool) {
+	current := filepath.Clean(start)
+	for {
+		info, err := os.Stat(filepath.Join(current, ".git"))
+		if err == nil && (info.IsDir() || info.Mode().IsRegular()) {
+			return current, true
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false
+		}
+		current = parent
+	}
+}
+
+func resolveRepositoryGitDirs(repositoryRoot string) (commonDir, worktreeDir string) {
+	gitEntry := filepath.Join(repositoryRoot, ".git")
+	info, err := os.Stat(gitEntry)
+	if err != nil {
+		return "", ""
+	}
+
+	if info.IsDir() {
+		worktreeDir = gitEntry
+	} else if info.Mode().IsRegular() {
+		contents, readErr := os.ReadFile(gitEntry)
+		if readErr != nil {
+			return "", ""
+		}
+		pointer, ok := parsePathPointer(string(contents), "gitdir:")
+		if !ok {
+			return "", ""
+		}
+		worktreeDir = resolveDirectoryPointer(repositoryRoot, pointer)
+	}
+	if worktreeDir == "" {
+		return "", ""
+	}
+
+	contents, err := os.ReadFile(filepath.Join(worktreeDir, "commondir"))
+	if err != nil {
+		return "", worktreeDir
+	}
+	pointer := strings.TrimSpace(string(contents))
+	if pointer == "" {
+		return "", worktreeDir
+	}
+	commonDir = resolveDirectoryPointer(worktreeDir, pointer)
+	return commonDir, worktreeDir
+}
+
+func parsePathPointer(contents, prefix string) (string, bool) {
+	line := strings.TrimSuffix(strings.SplitN(contents, "\n", 2)[0], "\r")
+	if !strings.HasPrefix(line, prefix) {
+		return "", false
+	}
+	pointer := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+	return pointer, pointer != ""
+}
+
+func resolveDirectoryPointer(base, pointer string) string {
+	if !filepath.IsAbs(pointer) {
+		pointer = filepath.Join(base, pointer)
+	}
+	pointer = filepath.Clean(pointer)
+	info, err := os.Stat(pointer)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	return pointer
+}
+
+func pathFromAncestor(ancestor, descendant string) []string {
+	relative, err := filepath.Rel(ancestor, descendant)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil
+	}
+
+	directories := []string{ancestor}
+	if relative == "." {
+		return directories
+	}
+	current := ancestor
+	for _, segment := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, segment)
+		directories = append(directories, current)
+	}
+	return directories
+}
+
+func appendIgnoreFile(rules []ignoreRule, filename, sourceDir string, precedence int) []ignoreRule {
+	contents, err := os.ReadFile(filename)
+	if err != nil {
+		return rules
+	}
+	return append(rules, parseIgnoreRules(string(contents), sourceDir, precedence)...)
+}
+
+func sameFilePath(left, right string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
 }
 
 func parseIgnoreRules(contents, sourceDir string, sourcePrecedence int) []ignoreRule {
