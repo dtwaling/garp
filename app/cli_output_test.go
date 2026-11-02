@@ -297,6 +297,262 @@ func TestOutputMetadataUsesAdjustedStage3Matches(t *testing.T) {
 	}
 }
 
+func TestOutputModeOrderingParity(t *testing.T) {
+	root, want := buildOutputOrderingParityFixture(t)
+
+	pathArgs := outputOrderingParityArgs(root, "--pathonly")
+	if got := resolveMaxResults(pathArgs); got != 0 {
+		t.Fatalf("default path-only MaxResults = %d, want unlimited", got)
+	}
+	pathOnly := outputPathsFromPathOnly(t, pathArgs)
+
+	plainArgs := outputOrderingParityArgs(root, "--plain", "--max-results", "0")
+	plainOutput := string(captureCLIStdout(t, func() int { return runPlain(plainArgs) }))
+	plain := outputPathsFromPlainOutput(plainOutput)
+	if got := excerptCountForPlainFile(plainOutput, want[1]); got != 1 {
+		t.Fatalf("default plain excerpts for multi-chunk file = %d, want 1", got)
+	}
+
+	jsonArgs := outputOrderingParityArgs(root, "--json", "--max-results", "0", "--max-excerpts", "10")
+	jsonOutput := outputJSONFromCLI(t, jsonArgs)
+	jsonPaths := jsonResultPaths(jsonOutput.Results)
+	if len(jsonOutput.Results) != len(want) {
+		t.Fatalf("JSON result count = %d, want %d", len(jsonOutput.Results), len(want))
+	}
+	if got := len(jsonOutput.Results[1].Excerpts); got < 2 {
+		t.Fatalf("JSON excerpts for multi-chunk file = %d, want at least 2", got)
+	}
+
+	tuiArgs := outputOrderingParityArgs(root, "--max-excerpts", "10")
+	tuiModel := newTUIModel(tuiArgs)
+	tuiEngine := tuiModel.newSearchEngine()
+	if tuiEngine.MaxResults != 0 {
+		t.Fatalf("default TUI MaxResults = %d, want unlimited", tuiEngine.MaxResults)
+	}
+	if tuiEngine.MaxExcerpts != 10 {
+		t.Fatalf("TUI engine MaxExcerpts = %d, want 10", tuiEngine.MaxExcerpts)
+	}
+	tuiResults, err := tuiEngine.Execute()
+	if err != nil {
+		t.Fatalf("TUI engine Execute() error: %v", err)
+	}
+	if len(tuiResults) != len(want) {
+		t.Fatalf("TUI result count = %d, want %d", len(tuiResults), len(want))
+	}
+	tuiPaths := searchResultPaths(tuiResults)
+	if tuiResults[0].Score != tuiResults[1].Score || tuiResults[0].TermCount != tuiResults[1].TermCount {
+		t.Errorf("path-relevance pair differs on higher tiers: %+v / %+v", tuiResults[0], tuiResults[1])
+	}
+	if tuiResults[0].PathMatchCount <= tuiResults[1].PathMatchCount {
+		t.Errorf("fixture does not exercise path relevance: %d <= %d", tuiResults[0].PathMatchCount, tuiResults[1].PathMatchCount)
+	}
+	if tuiResults[1].Score != tuiResults[2].Score ||
+		tuiResults[1].TermCount != tuiResults[2].TermCount ||
+		tuiResults[1].PathMatchCount != tuiResults[2].PathMatchCount ||
+		tuiResults[1].BoundaryQuality != tuiResults[2].BoundaryQuality ||
+		tuiResults[1].SpanLength != tuiResults[2].SpanLength {
+		t.Errorf("top-quality pair differs on higher tiers: %+v / %+v", tuiResults[1], tuiResults[2])
+	}
+	if tuiResults[1].TopQualityChunks <= tuiResults[2].TopQualityChunks {
+		t.Errorf("fixture does not exercise top-quality count: %d <= %d", tuiResults[1].TopQualityChunks, tuiResults[2].TopQualityChunks)
+	}
+	if tuiResults[3].Score != tuiResults[4].Score ||
+		tuiResults[3].TermCount != tuiResults[4].TermCount ||
+		tuiResults[3].PathMatchCount != tuiResults[4].PathMatchCount ||
+		tuiResults[3].BoundaryQuality != tuiResults[4].BoundaryQuality {
+		t.Errorf("span pair differs on higher tiers: %+v / %+v", tuiResults[3], tuiResults[4])
+	}
+	if tuiResults[3].SpanLength >= tuiResults[4].SpanLength {
+		t.Errorf("fixture does not exercise span: %d >= %d", tuiResults[3].SpanLength, tuiResults[4].SpanLength)
+	}
+	if tuiResults[4].Score != tuiResults[5].Score ||
+		tuiResults[4].TermCount != tuiResults[5].TermCount ||
+		tuiResults[4].PathMatchCount != tuiResults[5].PathMatchCount {
+		t.Errorf("boundary-quality pair differs on higher tiers: %+v / %+v", tuiResults[4], tuiResults[5])
+	}
+	if tuiResults[4].BoundaryQuality <= tuiResults[5].BoundaryQuality {
+		t.Errorf("fixture does not exercise boundary quality: %d <= %d", tuiResults[4].BoundaryQuality, tuiResults[5].BoundaryQuality)
+	}
+	if tuiResults[2].Score != tuiResults[3].Score ||
+		tuiResults[2].TermCount != tuiResults[3].TermCount ||
+		tuiResults[2].PathMatchCount != tuiResults[3].PathMatchCount ||
+		tuiResults[2].BoundaryQuality != tuiResults[3].BoundaryQuality ||
+		tuiResults[2].SpanLength != tuiResults[3].SpanLength ||
+		tuiResults[2].TopQualityChunks != tuiResults[3].TopQualityChunks {
+		t.Errorf("fixture path-tie pair differs before final path tier: %+v / %+v", tuiResults[2], tuiResults[3])
+	}
+
+	for mode, got := range map[string][]string{
+		"path-only": pathOnly,
+		"plain":     plain,
+		"JSON":      jsonPaths,
+		"TUI":       tuiPaths,
+	} {
+		if !slicesEqual(got, want) {
+			t.Errorf("%s order = %v, want %v", mode, got, want)
+		}
+	}
+}
+
+func TestOutputModeTopNParity(t *testing.T) {
+	root, fullOrder := buildOutputOrderingParityFixture(t)
+	const cap = 3
+	want := fullOrder[:cap]
+
+	pathOnly := outputPathsFromPathOnly(t, outputOrderingParityArgs(
+		root, "--pathonly", "--max-results", fmt.Sprint(cap),
+	))
+	plain := outputPathsFromPlain(t, outputOrderingParityArgs(
+		root, "--plain", "--max-results", fmt.Sprint(cap),
+	))
+	jsonPaths := outputPathsFromJSON(t, outputOrderingParityArgs(
+		root, "--json", "--max-results", fmt.Sprint(cap), "--max-excerpts", "10",
+	))
+
+	tuiArgs := outputOrderingParityArgs(root, "--max-results", fmt.Sprint(cap), "--max-excerpts", "10")
+	tuiEngine := newTUIModel(tuiArgs).newSearchEngine()
+	if tuiEngine.MaxExcerpts != 10 {
+		t.Fatalf("capped TUI engine MaxExcerpts = %d, want 10", tuiEngine.MaxExcerpts)
+	}
+	tuiResults, err := tuiEngine.Execute()
+	if err != nil {
+		t.Fatalf("capped TUI engine Execute() error: %v", err)
+	}
+	if len(tuiResults) != cap {
+		t.Fatalf("capped TUI result count = %d, want %d", len(tuiResults), cap)
+	}
+
+	for mode, got := range map[string][]string{
+		"path-only": pathOnly,
+		"plain":     plain,
+		"JSON":      jsonPaths,
+		"TUI":       searchResultPaths(tuiResults),
+	} {
+		if !slicesEqual(got, want) {
+			t.Errorf("%s capped order = %v, want top-%d prefix %v", mode, got, cap, want)
+		}
+	}
+}
+
+func buildOutputOrderingParityFixture(t *testing.T) (string, []string) {
+	t.Helper()
+	root := t.TempDir()
+	fixtures := map[string]string{
+		"neutral/zz-alpha.txt": "alpha beta",
+		"neutral/zz-top.txt":   "alpha beta " + strings.Repeat("x", 1000) + " alpha beta",
+		"neutral/aa-tie.txt":   "alpha beta",
+		"neutral/ab-tie.txt":   "alpha beta",
+		"neutral/01-long.txt":  "alpha " + strings.Repeat("x", 40) + " beta",
+		"neutral/00-edge.txt":  "xalphay beta",
+	}
+	for name, content := range fixtures {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("create fixture directory %q: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write fixture %q: %v", name, err)
+		}
+	}
+
+	relativeOrder := []string{
+		"neutral/zz-alpha.txt",
+		"neutral/zz-top.txt",
+		"neutral/aa-tie.txt",
+		"neutral/ab-tie.txt",
+		"neutral/01-long.txt",
+		"neutral/00-edge.txt",
+	}
+	absoluteOrder := make([]string, len(relativeOrder))
+	for i, name := range relativeOrder {
+		absoluteOrder[i] = filepath.Join(root, filepath.FromSlash(name))
+	}
+	return root, absoluteOrder
+}
+
+func outputOrderingParityArgs(root string, extra ...string) *Arguments {
+	argv := []string{
+		"alpha", "beta",
+		"--startdir", root,
+		"--only", "txt",
+		"--partial=contains",
+		"--distance", "500",
+	}
+	return parseArguments(append(argv, extra...))
+}
+
+func outputPathsFromPathOnly(t *testing.T, args *Arguments) []string {
+	t.Helper()
+	out := strings.TrimSpace(string(captureCLIStdout(t, func() int { return runPathOnly(args) })))
+	if out == "" {
+		return nil
+	}
+	return strings.Split(out, "\n")
+}
+
+func outputPathsFromPlain(t *testing.T, args *Arguments) []string {
+	t.Helper()
+	out := string(captureCLIStdout(t, func() int { return runPlain(args) }))
+	return outputPathsFromPlainOutput(out)
+}
+
+func outputPathsFromPlainOutput(out string) []string {
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "FILE: ") {
+			paths = append(paths, strings.TrimPrefix(line, "FILE: "))
+		}
+	}
+	return paths
+}
+
+func excerptCountForPlainFile(out, path string) int {
+	inFile := false
+	count := 0
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case line == "FILE: "+path:
+			inFile = true
+		case inFile && strings.HasPrefix(line, "EXCERPT "):
+			count++
+		case inFile && line == "---":
+			return count
+		}
+	}
+	return count
+}
+
+func outputPathsFromJSON(t *testing.T, args *Arguments) []string {
+	t.Helper()
+	return jsonResultPaths(outputJSONFromCLI(t, args).Results)
+}
+
+func outputJSONFromCLI(t *testing.T, args *Arguments) jsonOutput {
+	t.Helper()
+	out := captureCLIStdout(t, func() int { return runJSON(args) })
+	var decoded jsonOutput
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("decode JSON output: %v", err)
+	}
+	return decoded
+}
+
+func jsonResultPaths(results []jsonResult) []string {
+	paths := make([]string, len(results))
+	for i, result := range results {
+		paths[i] = result.File
+	}
+	return paths
+}
+
+func searchResultPaths(results []search.SearchResult) []string {
+	paths := make([]string, len(results))
+	for i, result := range results {
+		paths[i] = result.FilePath
+	}
+	return paths
+}
+
 func buildOutputLimitFixture(t *testing.T, count int) string {
 	t.Helper()
 	root := t.TempDir()

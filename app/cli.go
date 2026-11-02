@@ -328,6 +328,39 @@ func resolveMaxResults(args *Arguments) int {
 	return 0
 }
 
+func newTUIModel(args *Arguments) model {
+	return model{
+		results:           []search.SearchResult{},
+		currentPage:       0,
+		pageSize:          1,
+		totalPages:        0,
+		searchTime:        0,
+		quitting:          false,
+		loading:           true,
+		width:             0,
+		height:            0,
+		searchWords:       args.SearchWords,
+		excludeWords:      args.ExcludeWords,
+		includeCode:       args.IncludeCode,
+		strict:            args.Strict,
+		partial:           args.Partial,
+		onlyType:          args.OnlyType,
+		distance:          args.Distance,
+		heavyConcurrency:  args.HeavyConcurrency,
+		fileTimeoutBinary: args.FileTimeoutBinary,
+		filterWorkers:     args.FilterWorkers,
+		maxResults:        resolveMaxResults(args),
+		maxExcerpts:       args.MaxExcerpts,
+		startDir:          args.StartDir,
+		pathScope:         args.PathScope,
+		noIgnore:          args.NoIgnore,
+		maxFileSize:       args.MaxFileSize,
+		confirmSelected:   "yes",
+		memUsageText:      "",
+		progressText:      "",
+	}
+}
+
 // showUsage (styled)
 func showUsage() {
 	fmt.Println()
@@ -809,37 +842,7 @@ func Run() int {
 		}
 	}
 
-	// Seed model for TUI
-	m := model{
-		results:           []search.SearchResult{},
-		currentPage:       0,
-		pageSize:          1,
-		totalPages:        0,
-		searchTime:        0,
-		quitting:          false,
-		loading:           true,
-		width:             0,
-		height:            0,
-		searchWords:       args.SearchWords,
-		excludeWords:      args.ExcludeWords,
-		includeCode:       args.IncludeCode,
-		strict:            args.Strict,
-		partial:           args.Partial,
-		onlyType:          args.OnlyType,
-		distance:          args.Distance,
-		heavyConcurrency:  args.HeavyConcurrency,
-		fileTimeoutBinary: args.FileTimeoutBinary,
-		filterWorkers:     args.FilterWorkers,
-		maxResults:        resolveMaxResults(args),
-		maxExcerpts:       args.MaxExcerpts,
-		startDir:          args.StartDir,
-		pathScope:         args.PathScope,
-		noIgnore:          args.NoIgnore,
-		maxFileSize:       args.MaxFileSize,
-		confirmSelected:   "yes",
-		memUsageText:      "",
-		progressText:      "",
-	}
+	m := newTUIModel(args)
 
 	// Start TUI
 	startWall = time.Now()
