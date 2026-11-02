@@ -59,6 +59,14 @@ type SearchResult struct {
 	EmailSubject     string
 }
 
+// ExecutionResult reports bounded search results and adjusted Stage 3 metadata.
+type ExecutionResult struct {
+	Results   []SearchResult
+	Matches   int
+	Returned  int
+	Truncated bool
+}
+
 // candidateMatch retains ranked metadata between filtering and result building.
 type candidateMatch struct {
 	filePath         string
@@ -146,6 +154,7 @@ type SearchEngine struct {
 	FilterWorkers     int
 	FileTimeoutBinary time.Duration
 	MaxExcerpts       int
+	MaxResults        int
 	NoIgnore          bool
 	MaxFileSize       int64
 
@@ -682,6 +691,9 @@ func sortSearchResults(results []SearchResult) {
 // list directly from candidate matches without re-reading files or extracting excerpts.
 func (se *SearchEngine) buildPathOnlyResults(matchingFiles []candidateMatch) []SearchResult {
 	ranked := sortAndDedupeCandidates(matchingFiles)
+	if se.MaxResults > 0 && len(ranked) > se.MaxResults {
+		ranked = ranked[:se.MaxResults]
+	}
 	results := make([]SearchResult, 0, len(ranked))
 	for _, match := range ranked {
 		results = append(results, SearchResult{
@@ -700,19 +712,36 @@ func (se *SearchEngine) buildPathOnlyResults(matchingFiles []candidateMatch) []S
 
 // ExtractAndBuildResults extracts content and builds search results
 func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) ([]SearchResult, error) {
-	return se.extractAndBuildResults(compileQuery(se.SearchWords, se.Partial), matchingFiles)
+	outcome, err := se.extractAndBuildResultsDetailed(compileQuery(se.SearchWords, se.Partial), matchingFiles)
+	return outcome.Results, err
 }
 
 func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFiles []candidateMatch) ([]SearchResult, error) {
+	outcome, err := se.extractAndBuildResultsDetailed(query, matchingFiles)
+	return outcome.Results, err
+}
+
+func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matchingFiles []candidateMatch) (ExecutionResult, error) {
 	matchingFiles = sortAndDedupeCandidates(matchingFiles)
+	outcome := ExecutionResult{Matches: len(matchingFiles)}
 	if se.PathOnly {
-		return se.buildPathOnlyResults(matchingFiles), nil
+		outcome.Results = se.buildPathOnlyResults(matchingFiles)
+		outcome.Returned = len(outcome.Results)
+		outcome.Truncated = outcome.Returned < outcome.Matches
+		return outcome, nil
 	}
 
-	results := make([]SearchResult, 0, len(matchingFiles))
+	resultCapacity := len(matchingFiles)
+	if se.MaxResults > 0 {
+		resultCapacity = min(resultCapacity, se.MaxResults)
+	}
+	results := make([]SearchResult, 0, resultCapacity)
 	cm := NewConcurrencyManager(se.HeavyConcurrency)
 
 	for _, match := range matchingFiles {
+		if se.MaxResults > 0 && len(results) >= se.MaxResults {
+			break
+		}
 		filePath := match.filePath
 		maybePaceForMemory()
 		var content string
@@ -727,6 +756,7 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 				if !se.Silent {
 					fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
 				}
+				outcome.Matches--
 				continue
 			}
 			fileSize = size
@@ -743,13 +773,19 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 			}
 
 			if extractor, exists := se.Registry.GetExtractor(ext); exists {
+				var extractErr error
 				err = cm.ExecuteWithTimeout(func() {
-					content, err = extractor.ExtractText([]byte(rawContent))
+					content, extractErr = extractor.ExtractText([]byte(rawContent))
 				}, se.FileTimeoutBinary)
-				if err != nil {
+				if err != nil || extractErr != nil {
 					if !se.Silent {
-						fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, err)
+						if extractErr != nil {
+							fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extractErr)
+						} else {
+							fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, err)
+						}
 					}
+					outcome.Matches--
 					continue
 				}
 				if strings.EqualFold(ext, ".pdf") {
@@ -759,6 +795,7 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 				if !se.Silent {
 					fmt.Printf("Warning: No extractor for %s\n", ext)
 				}
+				outcome.Matches--
 				continue
 			}
 		} else {
@@ -767,6 +804,7 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 				if !se.Silent {
 					fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
 				}
+				outcome.Matches--
 				continue
 			}
 		}
@@ -819,6 +857,11 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 		} else {
 			spans = extractRankedExcerptSpansQuery(cleanContent, query, maxExcerpts, match.termCount, minTerms, false)
 			excerpts = excerptSpanTexts(spans)
+		}
+
+		if len(excerpts) == 0 {
+			outcome.Matches--
+			continue
 		}
 
 		// If excerpts are very short (e.g., only a single terse sentence), expand the first excerpt
@@ -893,15 +936,25 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 		results = append(results, result)
 	}
 	sortSearchResults(results)
-	return results, nil
+	outcome.Results = results
+	outcome.Returned = len(results)
+	outcome.Truncated = outcome.Returned < outcome.Matches
+	return outcome, nil
 }
 
 // Execute performs the complete search operation
 func (se *SearchEngine) Execute() ([]SearchResult, error) {
+	outcome, err := se.ExecuteDetailed()
+	return outcome.Results, err
+}
+
+// ExecuteDetailed performs the complete search operation and reports bounded
+// result metadata adjusted for Stage 3 failures that were actually observed.
+func (se *SearchEngine) ExecuteDetailed() (ExecutionResult, error) {
 	startTime := time.Now()
 	query := compileQuery(se.SearchWords, se.Partial)
 	if len(query.terms) == 0 {
-		return nil, nil
+		return ExecutionResult{}, nil
 	}
 
 	// Emit initial progress with unknown total (0); discovery will update it
@@ -912,25 +965,25 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 	// Step 2: Discover candidates
 	candidateFiles, total, err := se.discoverCandidates(query, 0)
 	if err != nil {
-		return nil, err
+		return ExecutionResult{}, err
 	}
 	if candidateFiles == nil {
 		if se.OnProgress != nil {
 			se.OnProgress("discovery", 0, 0, "")
 		}
-		return nil, nil
+		return ExecutionResult{}, nil
 	}
 
 	// Step 3: Filter candidates
 	matchingFiles, err := se.filterCandidates(query, candidateFiles, total, startTime)
 	if err != nil {
-		return nil, err
+		return ExecutionResult{}, err
 	}
 	if len(matchingFiles) == 0 {
 		if !se.Silent {
 			fmt.Println("No files found containing all search terms.")
 		}
-		return nil, nil
+		return ExecutionResult{}, nil
 	}
 
 	// Step 4: Extract and build results
@@ -938,9 +991,9 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 		fmt.Printf("Found %s files containing all words. Extracting content...\n", formatNumber(len(matchingFiles)))
 	}
 
-	results, err := se.extractAndBuildResults(query, matchingFiles)
+	outcome, err := se.extractAndBuildResultsDetailed(query, matchingFiles)
 	if err != nil {
-		return nil, err
+		return ExecutionResult{}, err
 	}
 
 	totalTime := time.Since(startTime)
@@ -976,7 +1029,7 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 		}
 	}
 
-	return results, nil
+	return outcome, nil
 }
 
 // formatNumber formats a number with thousands separators
