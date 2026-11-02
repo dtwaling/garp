@@ -28,13 +28,16 @@ var CodeTypes = []string{
 	"dockerfile",
 }
 
-// CodeFilenames matches code files that have no usable extension and so can't be caught by
-// CodeTypes -- chiefly container build files. Patterns are matched case-insensitively against
-// the file's base name (filepath.Match semantics; "*" and "?" only).
+// CodeFilenames matches code files that cannot be safely selected by extension alone.
+// Patterns are matched case-insensitively against the file's base name
+// (filepath.Match semantics; "*" and "?" only).
 var CodeFilenames = []string{
 	"Dockerfile",    // exact
 	"Dockerfile.*",  // Dockerfile.dev, Dockerfile.prod, ...
 	"Containerfile", // Podman equivalent
+	".env.example",  // safe environment template
+	".env.sample",   // safe environment template
+	".env.template", // safe environment template
 }
 
 // IsCodeFile reports whether a file should be treated as source code -- by extension
@@ -48,8 +51,8 @@ func IsCodeFile(filename string) bool {
 	return IsCodeFilename(filename)
 }
 
-// IsCodeFilename reports whether the file's base name matches one of the special, mostly
-// extensionless code filenames in CodeFilenames (e.g. Dockerfile, Dockerfile.prod).
+// IsCodeFilename reports whether the file's base name matches a special code filename in
+// CodeFilenames (for example, Dockerfile, Dockerfile.prod, or .env.example).
 func IsCodeFilename(filename string) bool {
 	// filepath.Base only recognizes the host OS separator. Normalize first so
 	// Windows paths passed to a Unix build still match Dockerfile name globs.
@@ -125,10 +128,12 @@ func ShouldSkipDirectory(dirName string) bool {
 
 // GetFileTypeDescription returns a human-readable description of file types
 func GetFileTypeDescription(includeCode bool) string {
+	documents := "documents (txt, md, html, xml, csv, yaml, yml, eml, mbox, msg, pdf, doc, docx, odt, rtf, log, cfg, conf, ini, sh, bat)"
 	if includeCode {
-		return "documents (txt, md, html, xml, csv, yaml, yml, eml, mbox, msg, pdf, doc, docx, odt, rtf, log, cfg, conf, ini, sh, bat) + code files (go, js, ts, py, php, phtml, java, cpp, c, json, rs, rb, cs, swift, kt, scala, pas, dpr, dpk, inc, dfm, fmx, dproj, groupproj, Dockerfile)"
+		return documents + " + code extensions (" + strings.Join(CodeTypes, ", ") +
+			") + code filenames (" + strings.Join(CodeFilenames, ", ") + ")"
 	}
-	return "documents (txt, md, html, xml, csv, yaml, yml, eml, mbox, msg, pdf, doc, docx, odt, rtf, log, cfg, conf, ini, sh, bat)"
+	return documents
 }
 
 // BuildRipgrepFileTypes creates ripgrep file type arguments
@@ -156,18 +161,12 @@ func BuildRipgrepFileTypes(includeCode bool) []string {
 
 	// Add code file patterns if requested
 	if includeCode {
-		codeGlobs := []string{
-			"-g", "*.js", "-g", "*.ts", "-g", "*.sql", "-g", "*.py",
-			"-g", "*.php", "-g", "*.phtml", "-g", "*.java", "-g", "*.cpp", "-g", "*.c",
-			"-g", "*.json", "-g", "*.go", "-g", "*.rs", "-g", "*.rb",
-			"-g", "*.cs", "-g", "*.swift", "-g", "*.kt", "-g", "*.scala",
-			// Delphi / Object Pascal
-			"-g", "*.pas", "-g", "*.dpr", "-g", "*.dpk", "-g", "*.inc",
-			"-g", "*.dfm", "-g", "*.fmx", "-g", "*.dproj", "-g", "*.groupproj",
+		for _, ext := range CodeTypes {
+			types = append(types, "-g", "*."+ext)
 		}
-		types = append(types, codeGlobs...)
-		// Container build files, incl. the extensionless Dockerfile/Containerfile family.
-		types = append(types, DockerfileGlobs()...)
+		for _, name := range CodeFilenames {
+			types = append(types, "-g", name)
+		}
 	}
 
 	return types
@@ -178,7 +177,19 @@ func BuildRipgrepFileTypes(includeCode bool) []string {
 // extension-bearing "*.dockerfile". Name globs (those not starting with "*.") are matched
 // against the file's base name by the discovery walk.
 func DockerfileGlobs() []string {
-	return []string{"-g", "Dockerfile", "-g", "Dockerfile.*", "-g", "Containerfile", "-g", "*.dockerfile"}
+	var globs []string
+	for _, ext := range CodeTypes {
+		if strings.EqualFold(ext, "dockerfile") {
+			globs = append(globs, "-g", "*."+ext)
+		}
+	}
+	for _, name := range CodeFilenames {
+		lowerName := strings.ToLower(name)
+		if strings.Contains(lowerName, "dockerfile") || lowerName == "containerfile" {
+			globs = append(globs, "-g", name)
+		}
+	}
+	return globs
 }
 
 // OnlyTypeGlobs returns the -g glob arguments for a single `--only <type>` restriction.
