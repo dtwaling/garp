@@ -234,6 +234,7 @@ func parseArguments(args []string) *Arguments {
 	if expectStartDir {
 		result.StartDirErr = fmt.Errorf("--startdir: missing value")
 	}
+	result.SearchWords = search.NormalizeQueryTerms(result.SearchWords)
 
 	// Auto-derive HeavyConcurrency when not explicitly provided: base on workers and available RAM
 	if !heavyProvided {

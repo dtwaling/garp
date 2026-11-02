@@ -4,9 +4,52 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"garp/search"
 )
+
+func TestEngineCanonicalTerms(t *testing.T) {
+	root := t.TempDir()
+	fixture := filepath.Join(root, "service.txt")
+	if err := os.WriteFile(fixture, []byte("ms-option-api"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	engine := search.NewSearchEngine(
+		[]string{"ms-**-api", "MS-*-API"},
+		nil,
+		[]string{"-g", "*.txt"},
+		false,
+		1,
+		1000,
+	)
+	engine.StartDir = root
+	engine.Silent = true
+
+	if got := engine.SearchWords; len(got) != 1 || got[0] != "ms-*-api" {
+		t.Fatalf("SearchWords = %q, want [ms-*-api]", got)
+	}
+
+	matches, err := engine.FilterCandidates([]string{fixture}, 1, time.Now())
+	if err != nil {
+		t.Fatalf("FilterCandidates() error: %v", err)
+	}
+	results, err := engine.ExtractAndBuildResults(matches)
+	if err != nil {
+		t.Fatalf("ExtractAndBuildResults() error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("result count = %d, want 1", len(results))
+	}
+	if got := results[0]; got.Score != len("ms-*-api") ||
+		got.TermCount != 1 ||
+		len(got.MatchedTerms) != 1 ||
+		got.MatchedTerms[0] != "ms-*-api" {
+		t.Errorf("metadata = score %d, term count %d, terms %q; want %d, 1, [ms-*-api]",
+			got.Score, got.TermCount, got.MatchedTerms, len("ms-*-api"))
+	}
+}
 
 func TestEngineFilterCandidates(t *testing.T) {
 	root := t.TempDir()

@@ -164,7 +164,7 @@ type SearchEngine struct {
 // NewSearchEngine creates a new search engine instance
 func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, includeCode bool, heavyConcurrency int, fileTimeoutBinary int) *SearchEngine {
 	return &SearchEngine{
-		SearchWords:       searchWords,
+		SearchWords:       NormalizeQueryTerms(searchWords),
 		ExcludeWords:      excludeWords,
 		FileTypes:         fileTypes,
 		IncludeCode:       includeCode,
@@ -196,10 +196,17 @@ func NewSearchEngineWithWorkers(searchWords, excludeWords []string, fileTypes []
 
 // DiscoverCandidates finds files containing the first search word
 func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error) {
-	if !se.Silent {
-		fmt.Printf("Finding files with '%s'...\n", se.SearchWords[0])
+	return se.discoverCandidates(compileQuery(se.SearchWords, se.Partial), fileCount)
+}
+
+func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int) ([]string, int, error) {
+	if len(query.terms) == 0 {
+		return nil, 0, nil
 	}
-	candidateFiles, err := FindFilesWithFirstWordProgressPartialWithOptions(se.SearchWords, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
+	if !se.Silent {
+		fmt.Printf("Finding files with '%s'...\n", query.terms[0])
+	}
+	candidateFiles, err := FindFilesWithFirstWordProgressPartialWithOptions(query.terms, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
 		if se.OnProgress != nil {
 			se.OnProgress("discovery", processed, total, path)
 		}
@@ -210,18 +217,25 @@ func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error)
 	total := len(candidateFiles)
 	if len(candidateFiles) == 0 {
 		if !se.Silent {
-			fmt.Printf("No files found containing '%s'\n", se.SearchWords[0])
+			fmt.Printf("No files found containing '%s'\n", query.terms[0])
 		}
 		return nil, total, nil
 	}
 	if !se.Silent {
-		fmt.Printf("Found %s files containing '%s'\n", formatNumber(len(candidateFiles)), se.SearchWords[0])
+		fmt.Printf("Found %s files containing '%s'\n", formatNumber(len(candidateFiles)), query.terms[0])
 	}
 	return candidateFiles, total, nil
 }
 
 // FilterCandidates filters candidates for all words and excludes
 func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, startTime time.Time) ([]candidateMatch, error) {
+	return se.filterCandidates(compileQuery(se.SearchWords, se.Partial), candidateFiles, total, startTime)
+}
+
+func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []string, total int, startTime time.Time) ([]candidateMatch, error) {
+	if len(query.terms) == 0 {
+		return nil, nil
+	}
 	if !se.Silent {
 		fmt.Println("Filtering for files containing ALL words...")
 	}
@@ -275,8 +289,8 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 		}
 
 		// The ranked prefilter preserves Strategy A candidates in relaxed mode.
-		if !IsBinaryFormat(filePath) && len(se.SearchWords) >= 2 {
-			found, decided := streamContainsRankedWordsDecidedPartial(filePath, se.SearchWords, se.Strict, se.Partial, maxBytes)
+		if !IsBinaryFormat(filePath) && len(query.terms) >= 2 {
+			found, decided := streamContainsRankedWordsDecidedPartial(filePath, query.terms, se.Strict, se.Partial, maxBytes)
 			if decided && !found {
 				return false
 			}
@@ -284,14 +298,14 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 
 		// Check if file contains all search words
 		hasAllWords := true
-		if len(se.SearchWords) > 1 {
+		if len(query.terms) > 1 {
 			if IsBinaryFormat(filePath) {
 				ext := filepath.Ext(filePath)
 
 				// Bounded streaming prefilter for supported binary types.
 				cap := capForBinaryPrefilter(ext)
 				startPF := time.Now()
-				found, decided := BinaryStreamingPrefilterDecidedPartial(filePath, se.SearchWords, cap, se.Partial)
+				found, decided := BinaryStreamingPrefilterDecidedPartial(filePath, query.terms, cap, se.Partial)
 				durPF := time.Since(startPF)
 				switch strings.ToLower(ext) {
 				case ".eml":
@@ -344,7 +358,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 						}
 						return false
 					}
-					match.score, match.termCount, match.matchedTerms, match.spanLen, hasAllWords = CheckTextContainsRankedWordsPartial(CleanContent(extractedText), se.SearchWords, se.Distance, se.Strict, se.Partial)
+					match.score, match.termCount, match.matchedTerms, match.spanLen, hasAllWords = CheckTextContainsRankedWordsPartial(CleanContent(extractedText), query.terms, se.Distance, se.Strict, se.Partial)
 				} else {
 					if !se.Silent {
 						fmt.Printf("Warning: No extractor for %s\n", ext)
@@ -353,7 +367,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 				}
 			} else {
 				// Text file: stream+distance
-				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsPartial(filePath, se.SearchWords, se.Distance, se.Strict, se.Silent, se.Partial, maxBytes)
+				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsPartial(filePath, query.terms, se.Distance, se.Strict, se.Silent, se.Partial, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
@@ -365,7 +379,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 			}
 		} else {
 			// Single-word presence check
-			word := se.SearchWords[0]
+			word := query.terms[0]
 			if IsBinaryFormat(filePath) {
 				ext := filepath.Ext(filePath)
 				// Run bounded prefilter for binary types before extraction.
@@ -619,6 +633,10 @@ func (se *SearchEngine) buildPathOnlyResults(matchingFiles []candidateMatch) []S
 
 // ExtractAndBuildResults extracts content and builds search results
 func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) ([]SearchResult, error) {
+	return se.extractAndBuildResults(compileQuery(se.SearchWords, se.Partial), matchingFiles)
+}
+
+func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFiles []candidateMatch) ([]SearchResult, error) {
 	if se.PathOnly {
 		return se.buildPathOnlyResults(matchingFiles), nil
 	}
@@ -724,14 +742,14 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 		// minTerms mirrors Strategy A: relaxed 3+ term queries seed from 2-term
 		// clusters up; strict (and 1-2 term) queries require the full set.
 		minTerms := 0
-		if len(se.SearchWords) >= 3 && !se.Strict {
+		if len(query.terms) >= 3 && !se.Strict {
 			minTerms = 2
 		}
 		if isCode {
-			spans = extractRankedExcerptSpans(cleanContent, se.SearchWords, maxExcerpts, match.termCount, minTerms, true, se.Partial)
+			spans = extractRankedExcerptSpans(cleanContent, query.terms, maxExcerpts, match.termCount, minTerms, true, se.Partial)
 			excerpts = excerptSpanTexts(spans)
 		} else {
-			spans = extractRankedExcerptSpans(cleanContent, se.SearchWords, maxExcerpts, match.termCount, minTerms, false, se.Partial)
+			spans = extractRankedExcerptSpans(cleanContent, query.terms, maxExcerpts, match.termCount, minTerms, false, se.Partial)
 			excerpts = excerptSpanTexts(spans)
 		}
 
@@ -787,7 +805,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 				return merged
 			}
 
-			expanded := expandShort(cleanContent, excerpts[0], se.SearchWords, 600)
+			expanded := expandShort(cleanContent, excerpts[0], query.terms, 600)
 			if len(expanded) > len(excerpts[0]) {
 				excerpts[0] = expanded
 			}
@@ -796,7 +814,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 		// Highlight search terms in excerpts
 		highlightedExcerpts := make([]string, len(excerpts))
 		for i, excerpt := range excerpts {
-			highlightedExcerpts[i] = HighlightTermsPartial(excerpt, se.SearchWords, se.Partial)
+			highlightedExcerpts[i] = HighlightTermsPartial(excerpt, query.terms, se.Partial)
 		}
 
 		// Resolve 1-based start line per excerpt by anchoring it back to the raw content.
@@ -816,7 +834,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 			for i, idx := range docOrder {
 				docExcerpts[i] = excerpts[idx]
 			}
-			docLines := computeExcerptLinesPartial(content, docExcerpts, se.SearchWords, se.Distance, se.Partial)
+			docLines := computeExcerptLinesPartial(content, docExcerpts, query.terms, se.Distance, se.Partial)
 			startLines = make([]int, len(excerpts))
 			for i, idx := range docOrder {
 				startLines[idx] = docLines[i]
@@ -862,6 +880,10 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 // Execute performs the complete search operation
 func (se *SearchEngine) Execute() ([]SearchResult, error) {
 	startTime := time.Now()
+	query := compileQuery(se.SearchWords, se.Partial)
+	if len(query.terms) == 0 {
+		return nil, nil
+	}
 
 	// Emit initial progress with unknown total (0); discovery will update it
 	if se.OnProgress != nil {
@@ -869,7 +891,7 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 	}
 
 	// Step 2: Discover candidates
-	candidateFiles, total, err := se.DiscoverCandidates(0)
+	candidateFiles, total, err := se.discoverCandidates(query, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -881,7 +903,7 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 	}
 
 	// Step 3: Filter candidates
-	matchingFiles, err := se.FilterCandidates(candidateFiles, total, startTime)
+	matchingFiles, err := se.filterCandidates(query, candidateFiles, total, startTime)
 	if err != nil {
 		return nil, err
 	}
@@ -897,7 +919,7 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 		fmt.Printf("Found %s files containing all words. Extracting content...\n", formatNumber(len(matchingFiles)))
 	}
 
-	results, err := se.ExtractAndBuildResults(matchingFiles)
+	results, err := se.extractAndBuildResults(query, matchingFiles)
 	if err != nil {
 		return nil, err
 	}
