@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 )
 
 var binarySizePolicyExtensions = []string{
@@ -119,4 +121,121 @@ func TestStage1ExplicitMaxFileSizeRejectsEveryFormat(t *testing.T) {
 	}
 
 	assertStage1Discovery(t, root, WalkOptions{MaxFileSize: limit}, []string{"small.txt"})
+}
+
+func TestStage2ReadCap(t *testing.T) {
+	const limit int64 = 96
+	root := t.TempDir()
+
+	t.Run("streaming terms after cap", func(t *testing.T) {
+		filename := filepath.Join(root, "stream-post-cap.txt")
+		content := strings.Repeat(" ", int(limit)) + "alpha beta"
+		if err := os.WriteFile(filename, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		found, decided := streamContainsAllWordsDecidedPartial(
+			filename, []string{"alpha", "beta"}, PartialModeOff, limit,
+		)
+		if found || !decided {
+			t.Fatalf("all-words result = (%v, %v), want (false, true)", found, decided)
+		}
+
+		found, decided = streamContainsRankedWordsDecidedPartial(
+			filename, []string{"alpha", "beta"}, true, PartialModeOff, limit,
+		)
+		if found || !decided {
+			t.Fatalf("ranked result = (%v, %v), want (false, true)", found, decided)
+		}
+	})
+
+	t.Run("distance checks ignore post-cap cluster", func(t *testing.T) {
+		filename := filepath.Join(root, "distance-post-cap.txt")
+		prefix := "alpha " + strings.Repeat("pad ", 18) + "beta"
+		prefix += strings.Repeat(" ", int(limit)-len(prefix))
+		if err := os.WriteFile(filename, []byte(prefix+" alpha beta"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		ok, err := checkFileContainsAllWordsPartial(
+			filename, []string{"alpha", "beta"}, 16, true, PartialModeOff, limit,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			t.Fatal("all-words distance check matched a cluster after the cap")
+		}
+
+		_, _, _, _, ok, err = checkFileContainsRankedWordsPartial(
+			filename, []string{"alpha", "beta"}, 16, true, true, PartialModeOff, limit,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			t.Fatal("ranked distance check matched a cluster after the cap")
+		}
+	})
+
+	t.Run("exclusion after cap", func(t *testing.T) {
+		filename := filepath.Join(root, "exclude-post-cap.txt")
+		content := strings.Repeat(" ", int(limit)) + "forbidden"
+		if err := os.WriteFile(filename, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		found, err := checkFileContainsExcludeWords(filename, []string{"forbidden"}, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found {
+			t.Fatal("exclusion check matched a term after the cap")
+		}
+	})
+}
+
+func TestStage2FileGrowthUsesReadCap(t *testing.T) {
+	const limit int64 = 64
+	root := t.TempDir()
+	filename := filepath.Join(root, "growing.txt")
+	prefix := "alpha" + strings.Repeat(" ", int(limit)-len("alpha"))
+	if err := os.WriteFile(filename, []byte(prefix), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := FindFilesWithFirstWordPartialWithOptions(
+		"alpha", nil, root, nil, PartialModeOff, WalkOptions{MaxFileSize: limit},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("discovery candidates = %v, want one", candidates)
+	}
+	if err := os.WriteFile(filename, []byte(prefix+" beta forbidden"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := NewSearchEngine([]string{"alpha", "beta"}, nil, nil, false, 1, 1000)
+	engine.MaxFileSize = limit
+	engine.Silent = true
+	matches, err := engine.FilterCandidates(candidates, len(candidates), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("grown file matched terms after cap: %+v", matches)
+	}
+
+	engine = NewSearchEngine([]string{"alpha"}, []string{"forbidden"}, nil, false, 1, 1000)
+	engine.MaxFileSize = limit
+	engine.Silent = true
+	matches, err = engine.FilterCandidates(candidates, len(candidates), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("grown file excluded by term after cap; matches = %+v", matches)
+	}
 }

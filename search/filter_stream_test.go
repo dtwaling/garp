@@ -73,3 +73,41 @@ func TestCheckFileContainsRankedWords(t *testing.T) {
 		t.Fatalf("ranked file match = (%d, %d, %v, %d, %v), want (10, 2, [alpha gamma], 11, true)", score, count, terms, span, ok)
 	}
 }
+
+func TestStreamReadersMatchAcrossChunkBoundary(t *testing.T) {
+	const chunkSize = 64 * 1024
+	path := filepath.Join(t.TempDir(), "boundary.txt")
+	content := strings.Repeat("x", chunkSize-3) + " alpha beta"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	found, decided := search.StreamContainsAllWordsDecided(path, []string{"alpha", "beta"})
+	if !found || !decided {
+		t.Fatalf("all-words boundary match = (%v, %v), want (true, true)", found, decided)
+	}
+
+	found, decided = search.StreamContainsRankedWordsDecided(path, []string{"alpha", "beta"}, true)
+	if !found || !decided {
+		t.Fatalf("ranked boundary match = (%v, %v), want (true, true)", found, decided)
+	}
+}
+
+func TestStreamReadersStopAtDefaultTextCap(t *testing.T) {
+	const defaultTextCap = 5 << 20
+	path := filepath.Join(t.TempDir(), "post-cap.txt")
+	content := strings.Repeat(" ", defaultTextCap) + "alpha beta"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	found, decided := search.StreamContainsAllWordsDecided(path, []string{"alpha", "beta"})
+	if found || !decided {
+		t.Fatalf("all-words post-cap match = (%v, %v), want (false, true)", found, decided)
+	}
+
+	found, decided = search.StreamContainsRankedWordsDecided(path, []string{"alpha", "beta"}, true)
+	if found || !decided {
+		t.Fatalf("ranked post-cap match = (%v, %v), want (false, true)", found, decided)
+	}
+}
