@@ -290,7 +290,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 
 		// The ranked prefilter preserves Strategy A candidates in relaxed mode.
 		if !IsBinaryFormat(filePath) && len(query.terms) >= 2 {
-			found, decided := streamContainsRankedWordsDecidedPartial(filePath, query.terms, se.Strict, se.Partial, maxBytes)
+			found, decided := streamContainsRankedWordsDecidedQuery(filePath, query, se.Strict, maxBytes)
 			if decided && !found {
 				return false
 			}
@@ -305,7 +305,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 				// Bounded streaming prefilter for supported binary types.
 				cap := capForBinaryPrefilter(ext)
 				startPF := time.Now()
-				found, decided := BinaryStreamingPrefilterDecidedPartial(filePath, query.terms, cap, se.Partial)
+				found, decided := binaryStreamingPrefilterDecidedQuery(filePath, query, cap, se.Strict)
 				durPF := time.Since(startPF)
 				switch strings.ToLower(ext) {
 				case ".eml":
@@ -367,7 +367,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 				}
 			} else {
 				// Text file: stream+distance
-				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsPartial(filePath, query.terms, se.Distance, se.Strict, se.Silent, se.Partial, maxBytes)
+				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsQuery(filePath, query, se.Distance, se.Strict, se.Silent, se.Partial, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
@@ -384,7 +384,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 				ext := filepath.Ext(filePath)
 				// Run bounded prefilter for binary types before extraction.
 				cap := capForBinaryPrefilter(ext)
-				foundPF, decidedPF := BinaryStreamingPrefilterDecidedPartial(filePath, []string{word}, cap, se.Partial)
+				foundPF, decidedPF := binaryStreamingPrefilterDecidedQuery(filePath, query, cap, true)
 				// Decided negative => safe skip
 				if decidedPF && !foundPF {
 					return false
@@ -434,7 +434,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 					return false
 				}
 			} else {
-				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsPartial(filePath, []string{word}, se.Distance, se.Strict, se.Silent, se.Partial, maxBytes)
+				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsQuery(filePath, query, se.Distance, se.Strict, se.Silent, se.Partial, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)

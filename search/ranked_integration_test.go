@@ -113,10 +113,11 @@ func TestRankedMultiTermIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("heavy binary with primary and short secondary is pruned without its longest secondary", func(t *testing.T) {
+	t.Run("heavy binary follows relaxed Strategy A and strict conjunction", func(t *testing.T) {
 		root := t.TempDir()
 		writeRankedIntegrationFiles(t, root, map[string]string{
-			"common-primary.eml": "From: sender@example.com\nTo: recipient@example.com\nSubject: partial\nContent-Type: text/plain; charset=utf-8\n\nquery mutex",
+			"short-secondary.eml": "From: sender@example.com\nTo: recipient@example.com\nSubject: partial\nContent-Type: text/plain; charset=utf-8\n\nquery mutex",
+			"primary-only.eml":    "From: sender@example.com\nTo: recipient@example.com\nSubject: primary\nContent-Type: text/plain; charset=utf-8\n\nquery",
 		})
 
 		engine := search.NewSearchEngineWithWorkers(words, nil, []string{"-g", "*.eml"}, false, 1, 1000, 1)
@@ -127,8 +128,17 @@ func TestRankedMultiTermIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Execute() error: %v", err)
 		}
-		if len(results) != 0 {
-			t.Fatalf("heavy binary results = %v, want no extraction candidate without longest secondary", resultFileNames(results))
+		if len(results) != 1 || filepath.Base(results[0].FilePath) != "short-secondary.eml" {
+			t.Fatalf("relaxed heavy binary results = %v, want [short-secondary.eml]", resultFileNames(results))
+		}
+
+		engine.Strict = true
+		strictResults, err := engine.Execute()
+		if err != nil {
+			t.Fatalf("strict Execute() error: %v", err)
+		}
+		if len(strictResults) != 0 {
+			t.Fatalf("strict heavy binary results = %v, want none when a term is missing", resultFileNames(strictResults))
 		}
 	})
 }

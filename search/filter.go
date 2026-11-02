@@ -183,17 +183,6 @@ func buildWordRegexCI(word string) *regexp.Regexp {
 	return buildTermRegexCI(word, PartialModeOff)
 }
 
-func termRegexesCI(words []string, partial PartialMode) []*regexp.Regexp {
-	res := make([]*regexp.Regexp, 0, len(words))
-	for _, word := range words {
-		word = strings.TrimSpace(word)
-		if word != "" {
-			res = append(res, buildTermRegexCI(word, partial))
-		}
-	}
-	return res
-}
-
 // CheckTextContainsAllWords preserves the legacy strict-conjunction behavior.
 func CheckTextContainsAllWords(text string, words []string, distance int) bool {
 	return CheckTextContainsAllWordsPartial(text, words, distance, PartialModeOff)
@@ -890,22 +879,6 @@ func asciiSuffixEndsAtBoundary(buf []byte, start int, suffix string, caseInsensi
 		(end == len(buf) || !isWordByte(buf[end]))
 }
 
-// heavyBinaryPrefilterTerms keeps the discovery anchor while selecting the most
-// specific secondary term for bounded heavy-binary prefiltering.
-func heavyBinaryPrefilterTerms(words []string) []string {
-	if len(words) < 3 {
-		return words
-	}
-
-	longestSecondary := words[1]
-	for _, term := range words[2:] {
-		if len(term) > len(longestSecondary) {
-			longestSecondary = term
-		}
-	}
-	return []string{words[0], longestSecondary}
-}
-
 // FindFilesWithFirstWordProgress is like FindFilesWithFirstWord but emits per-file discovery progress.
 // walkRoot specifies the directory to search from; use "" or "." for the current directory.
 // pathScope, if non-empty, restricts results to files whose relative path matches at least
@@ -944,7 +917,12 @@ func findFilesWithFirstWordProgressQueryWithOptions(query compiledQuery, fileTyp
 	}
 
 	primaryMatcher := query.matchers[0]
-	termsToCheck := heavyBinaryPrefilterTerms(query.terms)
+	primaryQuery := compiledQuery{
+		terms:             query.terms[:1],
+		matchers:          query.matchers[:1],
+		maxMatchBytes:     primaryMatcher.maxMatchBytes,
+		maxDetectionBytes: primaryMatcher.detectionBytes,
+	}
 
 	// Results and synchronization
 	matches := make([]string, 0, 128)
@@ -1074,7 +1052,7 @@ func findFilesWithFirstWordProgressQueryWithOptions(query compiledQuery, fileTyp
 			default:
 				capBytes = 2 * 1024 * 1024
 			}
-			found, decided := BinaryStreamingPrefilterDecidedPartial(path, termsToCheck, capBytes, partial)
+			found, decided := binaryStreamingPrefilterDecidedQuery(path, primaryQuery, capBytes, true)
 			if decided && !found {
 				return nil // safe to skip
 			}
@@ -1111,92 +1089,32 @@ func StreamContainsAllWordsDecided(filePath string, words []string) (found bool,
 // StreamContainsAllWordsDecidedPartial streams a file and checks each term
 // using the requested partial-match mode.
 func StreamContainsAllWordsDecidedPartial(filePath string, words []string, partial PartialMode) (found bool, decided bool) {
-	return streamContainsAllWordsDecidedPartial(filePath, words, partial, defaultTextMaxBytes)
+	return streamContainsAllWordsDecidedQuery(filePath, compileQuery(words, partial), defaultTextMaxBytes)
 }
 
 // streamContainsAllWordsDecidedPartial treats maxBytes as the complete
 // searchable text prefix. Reaching the limit is therefore a conclusive miss.
 func streamContainsAllWordsDecidedPartial(filePath string, words []string, partial PartialMode, maxBytes int64) (found bool, decided bool) {
-	if len(words) == 0 {
+	return streamContainsAllWordsDecidedQuery(filePath, compileQuery(words, partial), maxBytes)
+}
+
+func streamContainsAllWordsDecidedQuery(filePath string, query compiledQuery, maxBytes int64) (found bool, decided bool) {
+	if len(query.matchers) == 0 {
 		return true, true
 	}
 	if maxBytes <= 0 {
 		maxBytes = defaultTextMaxBytes
 	}
 	f, err := os.Open(filePath)
-	_ = adviseSequential(f)
 	if err != nil {
-		return false, true
+		return false, false
 	}
+	_ = adviseSequential(f)
 	defer f.Close()
 
-	// Build partial-aware, case-insensitive term regexes.
-	res := make([]*regexp.Regexp, 0, len(words))
-	for _, w := range words {
-		w = strings.TrimSpace(w)
-		if w == "" {
-			continue
-		}
-		res = append(res, buildTermRegexCI(w, partial))
-	}
-	if len(res) == 0 {
-		return true, true
-	}
-
-	const chunkSize = 64 * 1024
-	const overlap = 128
-
-	foundFlags := make([]bool, len(res))
-	remaining := len(res)
-
-	var total int64
-	prev := make([]byte, 0, overlap)
-	buf := make([]byte, chunkSize)
-	for {
-		maybePaceForMemory()
-		if total >= maxBytes {
-			_ = adviseDontNeed(f)
-			return false, true
-		}
-		toRead := chunkSize
-		if rem := maxBytes - total; rem < int64(toRead) {
-			toRead = int(rem)
-		}
-		n, rErr := f.Read(buf[:toRead])
-		if n > 0 {
-			combined := append(prev, buf[:n]...)
-			for i, re := range res {
-				if !foundFlags[i] && re.Match(combined) {
-					foundFlags[i] = true
-					remaining--
-					if remaining == 0 {
-						_ = adviseDontNeed(f)
-						return true, true
-					}
-				}
-			}
-			if n >= overlap {
-				prev = append(prev[:0], buf[n-overlap:n]...)
-			} else {
-				if len(combined) >= overlap {
-					prev = append(prev[:0], combined[len(combined)-overlap:]...)
-				} else {
-					prev = append(prev[:0], combined...)
-				}
-			}
-			total += int64(n)
-		}
-		if rErr == io.EOF {
-			// End of file; if not all found, the decision is conclusive
-			_ = adviseDontNeed(f)
-			return false, true
-		}
-		if rErr != nil {
-			// I/O error; treat as decided false
-			_ = adviseDontNeed(f)
-			return false, true
-		}
-	}
+	found, complete, readErr := streamMatchesQuery(f, query, true, maxBytes)
+	_ = adviseDontNeed(f)
+	return decideStreamQueryResult(found, complete, readErr, true)
 }
 
 func StreamContainsAllWords(filePath string, words []string) bool {
@@ -1215,90 +1133,32 @@ func StreamContainsRankedWordsDecided(filePath string, words []string, strict bo
 // StreamContainsRankedWordsDecidedPartial streams a text file using the
 // requested partial-match mode before the distance check.
 func StreamContainsRankedWordsDecidedPartial(filePath string, words []string, strict bool, partial PartialMode) (found bool, decided bool) {
-	return streamContainsRankedWordsDecidedPartial(filePath, words, strict, partial, defaultTextMaxBytes)
+	return streamContainsRankedWordsDecidedQuery(filePath, compileQuery(words, partial), strict, defaultTextMaxBytes)
 }
 
 // streamContainsRankedWordsDecidedPartial treats maxBytes as the complete
 // searchable text prefix. Reaching the limit is therefore a conclusive miss.
 func streamContainsRankedWordsDecidedPartial(filePath string, words []string, strict bool, partial PartialMode, maxBytes int64) (found bool, decided bool) {
-	if len(words) <= 1 {
-		return streamContainsAllWordsDecidedPartial(filePath, words, partial, maxBytes)
+	return streamContainsRankedWordsDecidedQuery(filePath, compileQuery(words, partial), strict, maxBytes)
+}
+
+func streamContainsRankedWordsDecidedQuery(filePath string, query compiledQuery, strict bool, maxBytes int64) (found bool, decided bool) {
+	if len(query.matchers) == 0 {
+		return true, true
 	}
 	if maxBytes <= 0 {
 		maxBytes = defaultTextMaxBytes
 	}
-
 	f, err := os.Open(filePath)
 	if err != nil {
-		return false, true
+		return false, false
 	}
 	_ = adviseSequential(f)
 	defer f.Close()
 
-	res := make([]*regexp.Regexp, 0, len(words))
-	for _, word := range words {
-		word = strings.TrimSpace(word)
-		if word == "" {
-			continue
-		}
-		res = append(res, buildTermRegexCI(word, partial))
-	}
-	if len(res) <= 1 {
-		return streamContainsAllWordsDecidedPartial(filePath, words, partial, maxBytes)
-	}
-
-	const chunkSize = 64 * 1024
-	const overlap = 128
-	foundFlags := make([]bool, len(res))
-	remaining := len(res)
-	var total int64
-	prev := make([]byte, 0, overlap)
-	buf := make([]byte, chunkSize)
-	for {
-		maybePaceForMemory()
-		if total >= maxBytes {
-			_ = adviseDontNeed(f)
-			return false, true
-		}
-		toRead := chunkSize
-		if rem := maxBytes - total; rem < int64(toRead) {
-			toRead = int(rem)
-		}
-		n, readErr := f.Read(buf[:toRead])
-		if n > 0 {
-			combined := append(prev, buf[:n]...)
-			for i, re := range res {
-				if !foundFlags[i] && re.Match(combined) {
-					foundFlags[i] = true
-					remaining--
-				}
-			}
-			secondaryFound := false
-			for _, matched := range foundFlags[1:] {
-				secondaryFound = secondaryFound || matched
-			}
-			if (strict && remaining == 0) || (!strict && foundFlags[0] && secondaryFound) {
-				_ = adviseDontNeed(f)
-				return true, true
-			}
-			if n >= overlap {
-				prev = append(prev[:0], buf[n-overlap:n]...)
-			} else if len(combined) >= overlap {
-				prev = append(prev[:0], combined[len(combined)-overlap:]...)
-			} else {
-				prev = append(prev[:0], combined...)
-			}
-			total += int64(n)
-		}
-		if readErr == io.EOF {
-			_ = adviseDontNeed(f)
-			return false, true
-		}
-		if readErr != nil {
-			_ = adviseDontNeed(f)
-			return false, true
-		}
-	}
+	found, complete, readErr := streamMatchesQuery(f, query, strict, maxBytes)
+	_ = adviseDontNeed(f)
+	return decideStreamQueryResult(found, complete, readErr, true)
 }
 
 // StreamContainsAllWordsDecidedWithCap streams a file and returns whether all words are present.
@@ -1312,28 +1172,24 @@ func StreamContainsAllWordsDecidedWithCap(filePath string, words []string, capBy
 // StreamContainsAllWordsDecidedWithCapPartial is the capped streaming
 // prefilter using the requested partial-match mode.
 func StreamContainsAllWordsDecidedWithCapPartial(filePath string, words []string, capBytes int64, partial PartialMode) (bool, bool) {
-	if len(words) == 0 {
+	return streamContainsQueryDecidedWithCap(filePath, compileQuery(words, partial), true, capBytes)
+}
+
+func streamContainsQueryDecidedWithCap(filePath string, query compiledQuery, strict bool, capBytes int64) (bool, bool) {
+	if len(query.matchers) == 0 {
 		return true, true
 	}
 	f, err := os.Open(filePath)
-	_ = adviseSequential(f)
 	if err != nil {
-		return false, true
+		return false, false
 	}
+	_ = adviseSequential(f)
 	defer f.Close()
-
-	res := termRegexesCI(words, partial)
-	if len(res) == 0 {
-		return true, true
-	}
-
-	const chunkSize = 64 * 1024
-	const overlap = 128
 
 	// Align with GetFileContent limits, then apply optional capBytes
 	stat, statErr := f.Stat()
 	var maxBytes int64
-	var capped bool
+	completeAtLimit := false
 	if statErr == nil {
 		switch {
 		case stat.Size() > 50*1024*1024:
@@ -1342,66 +1198,125 @@ func StreamContainsAllWordsDecidedWithCapPartial(filePath string, words []string
 			maxBytes = 5 * 1024 * 1024
 		default:
 			maxBytes = stat.Size()
+			completeAtLimit = true
 		}
 	} else {
 		maxBytes = 10 * 1024 * 1024
 	}
 	if capBytes > 0 && capBytes < maxBytes {
 		maxBytes = capBytes
-		capped = true
+		completeAtLimit = false
 	}
 
-	foundFlags := make([]bool, len(res))
-	remaining := len(res)
+	found, complete, readErr := streamMatchesQuery(f, query, strict, maxBytes)
+	_ = adviseDontNeed(f)
+	return decideStreamQueryResult(found, complete, readErr, completeAtLimit)
+}
 
-	var total int64
+func decideStreamQueryResult(found, complete bool, readErr error, completeAtLimit bool) (bool, bool) {
+	if found {
+		return true, true
+	}
+	if readErr != nil {
+		return false, false
+	}
+	if complete || completeAtLimit {
+		return false, true
+	}
+	return false, false
+}
+
+func readerValidatedEOF(r io.Reader) bool {
+	var probe [1]byte
+	n, err := r.Read(probe[:])
+	return n == 0 && err == io.EOF
+}
+
+type streamQueryMatches struct {
+	found []bool
+}
+
+func (m *streamQueryMatches) observe(text string, query compiledQuery, from int) {
+	for i, matcher := range query.matchers {
+		if !m.found[i] {
+			if _, ok := matcher.find(text, from); ok {
+				m.found[i] = true
+			}
+		}
+	}
+}
+
+func (m *streamQueryMatches) satisfied(strict bool) bool {
+	if len(m.found) == 0 {
+		return true
+	}
+	if strict || len(m.found) <= 2 {
+		for _, found := range m.found {
+			if !found {
+				return false
+			}
+		}
+		return true
+	}
+	if !m.found[0] {
+		return false
+	}
+	for _, found := range m.found[1:] {
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func streamQueryOverlap(query compiledQuery) int {
+	overlap := query.maxDetectionBytes + 1
+	if overlap < 32 {
+		return 32
+	}
+	return overlap
+}
+
+// streamMatchesQuery returns complete only when the reader reaches EOF.
+func streamMatchesQuery(r io.Reader, query compiledQuery, strict bool, maxBytes int64) (found bool, complete bool, err error) {
+	if len(query.matchers) == 0 {
+		return true, true, nil
+	}
+	state := streamQueryMatches{found: make([]bool, len(query.matchers))}
+	const chunkSize = 64 * 1024
+	overlap := streamQueryOverlap(query)
 	prev := make([]byte, 0, overlap)
 	buf := make([]byte, chunkSize)
+	var total int64
 	for {
 		maybePaceForMemory()
 		if total >= maxBytes {
-			_ = adviseDontNeed(f)
-			if !capped {
-				// We reached the end of file without finding all terms
-				return false, true // decided miss
-			}
-			return false, false // budget reached; undecided
+			return false, false, nil
 		}
 		toRead := chunkSize
 		if rem := maxBytes - total; rem < int64(toRead) {
 			toRead = int(rem)
 		}
-		n, rErr := f.Read(buf[:toRead])
+		n, readErr := r.Read(buf[:toRead])
 		if n > 0 {
 			combined := append(prev, buf[:n]...)
-			for i, re := range res {
-				if !foundFlags[i] && re.Match(combined) {
-					foundFlags[i] = true
-					remaining--
-					if remaining == 0 {
-						_ = adviseDontNeed(f)
-						return true, true
-					}
-				}
+			from := discoveryChunkMatchStart(total, len(prev))
+			state.observe(string(combined), query, from)
+			if state.satisfied(strict) {
+				return true, true, nil
 			}
-			if n >= overlap {
-				prev = append(prev[:0], buf[n-overlap:n]...)
+			if len(combined) > overlap {
+				prev = append(prev[:0], combined[len(combined)-overlap:]...)
 			} else {
-				if len(combined) >= overlap {
-					prev = append(prev[:0], combined[len(combined)-overlap:]...)
-				} else {
-					prev = append(prev[:0], combined...)
-				}
+				prev = append(prev[:0], combined...)
 			}
 			total += int64(n)
 		}
-		if rErr == io.EOF {
-			_ = adviseDontNeed(f)
-			return false, true // EOF: conclusively not all present
+		if readErr == io.EOF {
+			return false, true, nil
 		}
-		if rErr != nil {
-			_ = adviseDontNeed(f)
-			return false, true // I/O error: treat as decided false
+		if readErr != nil {
+			return false, false, readErr
 		}
 	}
 }
@@ -1412,8 +1327,8 @@ func StreamContainsAllWordsDecidedWithCapPartial(filePath string, words []string
 //   - found = false, decided = true  => conclusively absent (prefilter fails; safe to skip)
 //   - found = false, decided = false => inconclusive (do not skip; proceed to extraction)
 //
-// It uses the existing StreamContainsAllWordsDecidedWithCap checker and, for 3+ terms,
-// checks the first query term and the longest secondary term.
+// Compatibility APIs use strict conjunction. Ranked Stage 2 callers pass their
+// strictness through the internal query-aware form.
 func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes int64) (bool, bool) {
 	return BinaryStreamingPrefilterDecidedPartial(filePath, words, capBytes, PartialModeOff)
 }
@@ -1421,12 +1336,26 @@ func BinaryStreamingPrefilterDecided(filePath string, words []string, capBytes i
 // BinaryStreamingPrefilterDecidedPartial performs bounded binary prefiltering
 // with partial-aware term matchers.
 func BinaryStreamingPrefilterDecidedPartial(filePath string, words []string, capBytes int64, partial PartialMode) (bool, bool) {
+	return binaryStreamingPrefilterDecidedQuery(filePath, compileQuery(words, partial), capBytes, true)
+}
+
+// BinaryStreamingPrefilterRankedDecided applies Stage 2 strict or relaxed
+// ranked semantics. The compatibility APIs above always use strict conjunction.
+func BinaryStreamingPrefilterRankedDecided(filePath string, words []string, capBytes int64, strict bool) (bool, bool) {
+	return BinaryStreamingPrefilterRankedDecidedPartial(filePath, words, capBytes, strict, PartialModeOff)
+}
+
+// BinaryStreamingPrefilterRankedDecidedPartial applies Stage 2 ranked
+// semantics with the requested partial-match mode.
+func BinaryStreamingPrefilterRankedDecidedPartial(filePath string, words []string, capBytes int64, strict bool, partial PartialMode) (bool, bool) {
+	return binaryStreamingPrefilterDecidedQuery(filePath, compileQuery(words, partial), capBytes, strict)
+}
+
+func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, capBytes int64, strict bool) (bool, bool) {
 	ext := strings.ToLower(filepath.Ext(filePath))
-	termsToCheck := heavyBinaryPrefilterTerms(words)
 	switch ext {
 	case ".eml", ".msg", ".mbox", ".rtf":
-		// Existing streaming prefilter for email/rtf-like formats
-		return StreamContainsAllWordsDecidedWithCapPartial(filePath, termsToCheck, capBytes, partial)
+		return streamContainsQueryDecidedWithCap(filePath, query, strict, capBytes)
 
 	case ".docx", ".odt":
 		// Conservative ZIP sniff + capped XML stream:
@@ -1477,72 +1406,26 @@ func BinaryStreamingPrefilterDecidedPartial(filePath string, words []string, cap
 		}
 		defer rc.Close()
 
-		res := termRegexesCI(termsToCheck, partial)
-		if len(res) == 0 {
+		if len(query.matchers) == 0 {
 			return true, true
 		}
 
-		// Stream the XML entry with a cap and overlap window
-		const chunkSize = 64 * 1024
-		const overlap = 128
-
 		maxBytes := capBytes
 		if maxBytes <= 0 {
-			// Reasonable default cap for XML streaming
 			maxBytes = 5 * 1024 * 1024
 		}
-
-		foundFlags := make([]bool, len(res))
-		remaining := len(res)
-
-		var total int64
-		prev := make([]byte, 0, overlap)
-		buf := make([]byte, chunkSize)
-
-		for {
-			if total >= maxBytes {
-				// Budget reached; undecided
-				return false, false
-			}
-			toRead := chunkSize
-			if rem := maxBytes - total; rem < int64(toRead) {
-				toRead = int(rem)
-			}
-			n, rErr := rc.Read(buf[:toRead])
-			if n > 0 {
-				combined := append(prev, buf[:n]...)
-				for i, re := range res {
-					if !foundFlags[i] && re.Match(combined) {
-						foundFlags[i] = true
-						remaining--
-						if remaining == 0 {
-							return true, true
-						}
-					}
-				}
-
-				// Maintain overlap
-				if n >= overlap {
-					prev = append(prev[:0], buf[n-overlap:n]...)
-				} else {
-					if len(combined) >= overlap {
-						prev = append(prev[:0], combined[len(combined)-overlap:]...)
-					} else {
-						prev = append(prev[:0], combined...)
-					}
-				}
-				total += int64(n)
-			}
-
-			if rErr == io.EOF {
-				// End of stream; conclusively absent
-				return false, true
-			}
-			if rErr != nil {
-				// I/O/read error on entry: undecided
-				return false, false
-			}
+		found, complete, readErr := streamMatchesQuery(rc, query, strict, maxBytes)
+		validatedAtLimit := false
+		if !found && !complete && readErr == nil &&
+			uint64(maxBytes) >= xmlFile.UncompressedSize64 {
+			validatedAtLimit = readerValidatedEOF(rc)
 		}
+		return decideStreamQueryResult(
+			found,
+			complete,
+			readErr,
+			validatedAtLimit,
+		)
 
 	case ".doc":
 		// Conservative OLE (.doc) prefilter:
@@ -1562,8 +1445,7 @@ func BinaryStreamingPrefilterDecidedPartial(filePath string, words []string, cap
 			return false, false
 		}
 
-		res := termRegexesCI(words, partial)
-		if len(res) == 0 {
+		if len(query.matchers) == 0 {
 			return true, true
 		}
 
@@ -1581,8 +1463,7 @@ func BinaryStreamingPrefilterDecidedPartial(filePath string, words []string, cap
 			"0Table":       true,
 		}
 
-		foundFlags := make([]bool, len(res))
-		remaining := len(res)
+		state := streamQueryMatches{found: make([]bool, len(query.matchers))}
 
 		for ent, err2 := cf.Next(); err2 == nil; ent, err2 = cf.Next() {
 			if total >= maxBytes {
@@ -1621,14 +1502,9 @@ func BinaryStreamingPrefilterDecidedPartial(filePath string, words []string, cap
 				text = strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(buf), " "))
 			}
 
-			for i, re := range res {
-				if !foundFlags[i] && re.MatchString(text) {
-					foundFlags[i] = true
-					remaining--
-					if remaining == 0 {
-						return true, true
-					}
-				}
+			state.observe(text, query, 0)
+			if state.satisfied(strict) {
+				return true, true
 			}
 		}
 
@@ -1657,8 +1533,12 @@ func CheckFileContainsAllWordsPartial(filePath string, words []string, distance 
 }
 
 func checkFileContainsAllWordsPartial(filePath string, words []string, distance int, silent bool, partial PartialMode, maxBytes int64) (bool, error) {
+	return checkFileContainsAllWordsQuery(filePath, compileQuery(words, partial), distance, silent, partial, maxBytes)
+}
+
+func checkFileContainsAllWordsQuery(filePath string, query compiledQuery, distance int, silent bool, partial PartialMode, maxBytes int64) (bool, error) {
 	// Fast prefilter: require presence of all words before full distance check
-	found, decided := streamContainsAllWordsDecidedPartial(filePath, words, partial, maxBytes)
+	found, decided := streamContainsAllWordsDecidedQuery(filePath, query, maxBytes)
 	if decided && !found {
 		return false, nil
 	}
@@ -1674,7 +1554,7 @@ func checkFileContainsAllWordsPartial(filePath string, words []string, distance 
 	if config.IsCodeFile(filePath) {
 		cleaned = CleanContentCode(content)
 	}
-	return CheckTextContainsAllWordsPartial(cleaned, words, distance, partial), nil
+	return CheckTextContainsAllWordsPartial(cleaned, query.terms, distance, partial), nil
 }
 
 // CheckFileContainsRankedWords checks a text file using the ranked matching
@@ -1690,7 +1570,11 @@ func CheckFileContainsRankedWordsPartial(filePath string, words []string, distan
 }
 
 func checkFileContainsRankedWordsPartial(filePath string, words []string, distance int, strict bool, silent bool, partial PartialMode, maxBytes int64) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
-	found, decided := streamContainsRankedWordsDecidedPartial(filePath, words, strict, partial, maxBytes)
+	return checkFileContainsRankedWordsQuery(filePath, compileQuery(words, partial), distance, strict, silent, partial, maxBytes)
+}
+
+func checkFileContainsRankedWordsQuery(filePath string, query compiledQuery, distance int, strict bool, silent bool, partial PartialMode, maxBytes int64) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
+	found, decided := streamContainsRankedWordsDecidedQuery(filePath, query, strict, maxBytes)
 	if decided && !found {
 		return 0, 0, nil, 0, false, nil
 	}
@@ -1703,7 +1587,7 @@ func checkFileContainsRankedWordsPartial(filePath string, words []string, distan
 	if config.IsCodeFile(filePath) {
 		cleaned = CleanContentCode(content)
 	}
-	score, termCount, matchedTerms, spanLen, ok = CheckTextContainsRankedWordsPartial(cleaned, words, distance, strict, partial)
+	score, termCount, matchedTerms, spanLen, ok = CheckTextContainsRankedWordsPartial(cleaned, query.terms, distance, strict, partial)
 	return score, termCount, matchedTerms, spanLen, ok, nil
 }
 
