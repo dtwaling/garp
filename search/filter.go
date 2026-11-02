@@ -1459,14 +1459,22 @@ func checkFileContainsRankedWordsPartial(filePath string, words []string, distan
 }
 
 func checkFileContainsRankedWordsQuery(filePath string, query compiledQuery, distance int, strict bool, silent bool, maxBytes int64) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
+	analysis, ok, err := checkFileRankedAnalysisQuery(filePath, query, distance, strict, maxBytes)
+	if err != nil || !ok {
+		return 0, 0, nil, 0, ok, err
+	}
+	return analysis.Score, analysis.TermCount, analysis.MatchedTerms, analysis.SpanLength, true, nil
+}
+
+func checkFileRankedAnalysisQuery(filePath string, query compiledQuery, distance int, strict bool, maxBytes int64) (rankedTextAnalysis, bool, error) {
 	found, decided := streamContainsRankedWordsDecidedQuery(filePath, query, strict, maxBytes)
 	if decided && !found {
-		return 0, 0, nil, 0, false, nil
+		return rankedTextAnalysis{}, false, nil
 	}
 
 	content, err := readTextForStage2(filePath, maxBytes)
 	if err != nil {
-		return 0, 0, nil, 0, false, err
+		return rankedTextAnalysis{}, false, err
 	}
 	cleaned := CleanContent(content)
 	if config.IsCodeFile(filePath) {
@@ -1474,9 +1482,9 @@ func checkFileContainsRankedWordsQuery(filePath string, query compiledQuery, dis
 	}
 	analysis, ok := analyzeRankedText(cleaned, query, distance, strict)
 	if !ok {
-		return 0, 0, nil, 0, false, nil
+		return rankedTextAnalysis{}, false, nil
 	}
-	return analysis.Score, analysis.TermCount, analysis.MatchedTerms, analysis.SpanLength, true, nil
+	return analysis, true, nil
 }
 
 // CheckFileContainsExcludeWords checks if a file contains any exclude words

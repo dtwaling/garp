@@ -1,7 +1,9 @@
 package search
 
 import (
+	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // rankedInterval is one two-sided minimal qualifying occurrence window.
@@ -12,14 +14,15 @@ type rankedInterval struct {
 
 // rankedTextAnalysis is the authoritative Stage 2 text-ranking result.
 type rankedTextAnalysis struct {
-	Score           int
-	TermCount       int
-	MatchedTerms    []string
-	BoundaryQuality int
-	SpanLength      int
-	start           int
-	end             int
-	bestIntervals   []rankedInterval
+	Score            int
+	TermCount        int
+	MatchedTerms     []string
+	BoundaryQuality  int
+	SpanLength       int
+	TopQualityChunks int
+	start            int
+	end              int
+	bestIntervals    []rankedInterval
 }
 
 type rankedOccurrence struct {
@@ -108,15 +111,111 @@ func analyzeRankedText(text string, query compiledQuery, distance int, strict bo
 
 	representative := best.representative
 	return rankedTextAnalysis{
-		Score:           representative.score,
-		TermCount:       representative.termCount,
-		MatchedTerms:    rankedWindowTerms(query, occurrences, representative.left, representative.right),
-		BoundaryQuality: representative.boundaryQuality,
-		SpanLength:      representative.end - representative.start,
-		start:           representative.start,
-		end:             representative.end,
-		bestIntervals:   best.intervals,
+		Score:            representative.score,
+		TermCount:        representative.termCount,
+		MatchedTerms:     rankedWindowTerms(query, occurrences, representative.left, representative.right),
+		BoundaryQuality:  representative.boundaryQuality,
+		SpanLength:       representative.end - representative.start,
+		TopQualityChunks: topQualityChunkCount(best.intervals),
+		start:            representative.start,
+		end:              representative.end,
+		bestIntervals:    best.intervals,
 	}, true
+}
+
+// pathMatchCount counts distinct canonical query terms represented in the
+// slash-normalized path relative to the active search root.
+func pathMatchCount(filePath, startDir string, query compiledQuery) int {
+	relPath := rankingRelativePath(filePath, resolveRankingRoot(startDir))
+
+	count := 0
+	lowerPath := strings.ToLower(relPath)
+	for i, matcher := range query.matchers {
+		if matcher.matches(relPath) {
+			count++
+			continue
+		}
+		core := alphanumericCore(query.terms[i])
+		if len(core) >= 2 && strings.Contains(lowerPath, strings.ToLower(core)) {
+			count++
+		}
+	}
+	return count
+}
+
+// resolveRankingRoot mirrors the logical-root side of resolveWalkRoot without
+// requiring the root to still be readable during Stage 2.
+func resolveRankingRoot(startDir string) string {
+	if startDir == "" {
+		startDir = "."
+	}
+	absolute, err := filepath.Abs(startDir)
+	if err != nil {
+		return filepath.Clean(startDir)
+	}
+	return filepath.Clean(absolute)
+}
+
+func rankingRelativePath(filePath, resolvedRoot string) string {
+	absolutePath, err := filepath.Abs(filePath)
+	if err != nil {
+		return filepath.ToSlash(filepath.Base(filePath))
+	}
+	absolutePath = filepath.Clean(absolutePath)
+
+	relPath, err := filepath.Rel(resolvedRoot, absolutePath)
+	if err != nil {
+		return filepath.ToSlash(filepath.Base(absolutePath))
+	}
+	relPath = filepath.ToSlash(relPath)
+	if relPath == "" || relPath == "." || relPath == ".." || strings.HasPrefix(relPath, "../") {
+		return filepath.ToSlash(filepath.Base(absolutePath))
+	}
+	return relPath
+}
+
+func alphanumericCore(term string) string {
+	var core strings.Builder
+	core.Grow(len(term))
+	for i := 0; i < len(term); i++ {
+		if isASCIIAlphanumeric(term[i]) {
+			core.WriteByte(term[i])
+		}
+	}
+	return core.String()
+}
+
+func isASCIIAlphanumeric(b byte) bool {
+	return b >= 'a' && b <= 'z' ||
+		b >= 'A' && b <= 'Z' ||
+		b >= '0' && b <= '9'
+}
+
+// topQualityChunkCount returns the maximum cardinality subset of pairwise
+// non-overlapping half-open intervals.
+func topQualityChunkCount(intervals []rankedInterval) int {
+	ordered := append([]rankedInterval(nil), intervals...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].end != ordered[j].end {
+			return ordered[i].end < ordered[j].end
+		}
+		return ordered[i].start < ordered[j].start
+	})
+
+	count := 0
+	lastEnd := 0
+	haveInterval := false
+	for _, interval := range ordered {
+		if interval.end <= interval.start {
+			continue
+		}
+		if !haveInterval || interval.start >= lastEnd {
+			count++
+			lastEnd = interval.end
+			haveInterval = true
+		}
+	}
+	return count
 }
 
 func (best *rankedBestWindows) observe(window rankedWindow) {

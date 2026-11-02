@@ -60,11 +60,23 @@ type SearchResult struct {
 
 // candidateMatch retains ranked metadata between filtering and result building.
 type candidateMatch struct {
-	filePath     string
-	score        int
-	termCount    int
-	matchedTerms []string
-	spanLen      int
+	filePath         string
+	score            int
+	termCount        int
+	matchedTerms     []string
+	pathMatchCount   int
+	boundaryQuality  int
+	spanLen          int
+	topQualityChunks int
+}
+
+func (match *candidateMatch) setAnalysis(analysis rankedTextAnalysis) {
+	match.score = analysis.Score
+	match.termCount = analysis.TermCount
+	match.matchedTerms = analysis.MatchedTerms
+	match.boundaryQuality = analysis.BoundaryQuality
+	match.spanLen = analysis.SpanLength
+	match.topQualityChunks = analysis.TopQualityChunks
 }
 
 // ProgressFunc is an optional callback to report progress like: processed, total, path
@@ -240,6 +252,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 		fmt.Println("Filtering for files containing ALL words...")
 	}
 	maxBytes := se.walkOptions().TextMaxBytes()
+	rankingRoot := resolveRankingRoot(se.StartDir)
 
 	// Separate excludes into extensions and words
 	var extExcludes []string
@@ -360,10 +373,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 					}
 					analysis, ok := analyzeRankedText(CleanContent(extractedText), query, se.Distance, se.Strict)
 					if ok {
-						match.score = analysis.Score
-						match.termCount = analysis.TermCount
-						match.matchedTerms = analysis.MatchedTerms
-						match.spanLen = analysis.SpanLength
+						match.setAnalysis(analysis)
 					}
 					hasAllWords = ok
 				} else {
@@ -374,14 +384,16 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 				}
 			} else {
 				// Text file: stream+distance
-				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsQuery(filePath, query, se.Distance, se.Strict, se.Silent, maxBytes)
+				analysis, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
 					}
 					return false
 				}
-				match.score, match.termCount, match.matchedTerms, match.spanLen = score, termCount, matchedTerms, spanLen
+				if ok {
+					match.setAnalysis(analysis)
+				}
 				hasAllWords = ok
 			}
 		} else {
@@ -434,10 +446,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 					}
 					analysis, ok := analyzeRankedText(CleanContent(extractedText), query, se.Distance, se.Strict)
 					if ok {
-						match.score = analysis.Score
-						match.termCount = analysis.TermCount
-						match.matchedTerms = analysis.MatchedTerms
-						match.spanLen = analysis.SpanLength
+						match.setAnalysis(analysis)
 					}
 					hasAllWords = ok
 				} else {
@@ -447,14 +456,16 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 					return false
 				}
 			} else {
-				score, termCount, matchedTerms, spanLen, ok, err := checkFileContainsRankedWordsQuery(filePath, query, se.Distance, se.Strict, se.Silent, maxBytes)
+				analysis, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
 					}
 					return false
 				}
-				match.score, match.termCount, match.matchedTerms, match.spanLen = score, termCount, matchedTerms, spanLen
+				if ok {
+					match.setAnalysis(analysis)
+				}
 				hasAllWords = ok
 			}
 		}
@@ -516,6 +527,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 			return false
 		}
 
+		match.pathMatchCount = pathMatchCount(filePath, rankingRoot, query)
 		mu.Lock()
 		matchingFiles = append(matchingFiles, match)
 		mu.Unlock()

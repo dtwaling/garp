@@ -1,9 +1,179 @@
 package search
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
+
+type rankingStaticExtractor struct {
+	text string
+}
+
+func (e rankingStaticExtractor) ExtractText([]byte) (string, error) {
+	return e.text, nil
+}
+
+func TestPathMatchCount(t *testing.T) {
+	root := t.TempDir()
+	query := compileQuery([]string{"ms-", "api"}, PartialModeContains)
+
+	t.Run("absolute root control", func(t *testing.T) {
+		tests := []struct {
+			path string
+			want int
+		}{
+			{path: filepath.Join(root, "app", "Services", "MsOptionApiClient.php"), want: 2},
+			{path: filepath.Join(root, "app", "Utils", "ms_helper.php"), want: 1},
+			{path: filepath.Join(root, "app", "Utils", "other.php"), want: 0},
+		}
+		for _, tt := range tests {
+			if got := pathMatchCount(tt.path, root, query); got != tt.want {
+				t.Errorf("pathMatchCount(%q) = %d, want %d", tt.path, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("alphanumeric core fallback", func(t *testing.T) {
+		path := filepath.Join(root, "MsOptionApiClient.php")
+		if got := pathMatchCount(path, root, query); got != 2 {
+			t.Fatalf("pathMatchCount(%q) = %d, want 2", path, got)
+		}
+		if got := pathMatchCount(filepath.Join(root, "xylophone.php"), root, compileQuery([]string{"x-"}, PartialModeContains)); got != 0 {
+			t.Fatalf("one-byte core fallback count = %d, want 0", got)
+		}
+	})
+
+	t.Run("default root uses current directory", func(t *testing.T) {
+		cwd := t.TempDir()
+		t.Chdir(cwd)
+		path := filepath.Join(cwd, "app", "MsArea", "ApiClients", "other.php")
+		if got := pathMatchCount(path, "", query); got != 2 {
+			t.Fatalf("pathMatchCount(%q, default root) = %d, want 2", path, got)
+		}
+	})
+
+	t.Run("relative root preserves descendants", func(t *testing.T) {
+		cwd := t.TempDir()
+		t.Chdir(cwd)
+		const relativeRoot = "workspace"
+		path := filepath.Join(cwd, relativeRoot, "app", "MsArea", "ApiClients", "other.php")
+		if got := pathMatchCount(path, relativeRoot, query); got != 2 {
+			t.Fatalf("pathMatchCount(%q, %q) = %d, want 2", path, relativeRoot, got)
+		}
+	})
+
+	t.Run("outside root uses basename", func(t *testing.T) {
+		base := t.TempDir()
+		searchRoot := filepath.Join(base, "root")
+		path := filepath.Join(base, "ms-api-parent", "other.php")
+		if got := pathMatchCount(path, searchRoot, query); got != 0 {
+			t.Fatalf("outside-root pathMatchCount(%q) = %d, want basename-only 0", path, got)
+		}
+	})
+
+	t.Run("empty relative path uses basename", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "MsApiRoot")
+		if got := pathMatchCount(path, path, query); got != 2 {
+			t.Fatalf("empty-relative pathMatchCount(%q) = %d, want basename count 2", path, got)
+		}
+	})
+
+	if runtime.GOOS == "windows" {
+		t.Run("Windows separators and root case", func(t *testing.T) {
+			base := t.TempDir()
+			searchRoot := filepath.Join(base, "RepoRoot")
+			path := filepath.Join(searchRoot, "app", "Services", "other.php")
+			path = strings.ReplaceAll(path, `\`, "/")
+			serviceQuery := compileQuery([]string{"services"}, PartialModeContains)
+			if got := pathMatchCount(path, strings.ToUpper(searchRoot), serviceQuery); got != 1 {
+				t.Fatalf("Windows pathMatchCount(%q) = %d, want 1", path, got)
+			}
+		})
+	}
+}
+
+func TestTopQualityChunks(t *testing.T) {
+	intervals := []rankedInterval{
+		{start: 10, end: 30},
+		{start: 20, end: 40},
+		{start: 35, end: 50},
+	}
+	if got := topQualityChunkCount(intervals); got != 2 {
+		t.Fatalf("topQualityChunkCount(%v) = %d, want 2", intervals, got)
+	}
+}
+
+func TestTopQualityChunksFiltersScoreCollisionByTermCount(t *testing.T) {
+	text := "aa bbbbbbbb " + strings.Repeat(" ", 30) +
+		"aa bbb ccccc " + strings.Repeat(" ", 30) +
+		"aa bbb ccccc"
+	analysis, ok := analyzeRankedText(
+		text,
+		compileQuery([]string{"aa", "bbbbbbbb", "bbb", "ccccc"}, PartialModeOff),
+		15,
+		false,
+	)
+	if !ok {
+		t.Fatal("analysis rejected qualifying text")
+	}
+	if analysis.Score != 10 || analysis.TermCount != 3 {
+		t.Fatalf("best pair = (%d, %d), want (10, 3)", analysis.Score, analysis.TermCount)
+	}
+	if analysis.TopQualityChunks != 2 {
+		t.Fatalf("TopQualityChunks = %d, want 2", analysis.TopQualityChunks)
+	}
+	if len(analysis.bestIntervals) != 2 {
+		t.Fatalf("best intervals = %v, want only two three-term intervals", analysis.bestIntervals)
+	}
+}
+
+func TestEngineStage2RankingMetadata(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	contentDir := filepath.Join(root, "MsArea", "ApiClients")
+	if err := os.MkdirAll(contentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "ms-option-api" + strings.Repeat(" ", 40) + "ms-option-api"
+	textPath := filepath.Join(contentDir, "text.txt")
+	binaryPath := filepath.Join(contentDir, "binary.pdf")
+	for _, path := range []string{textPath, binaryPath} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Chdir(parent)
+	engine := NewSearchEngine([]string{"ms-", "api"}, nil, nil, false, 1, 1000)
+	engine.StartDir = "workspace"
+	engine.Partial = PartialModeContains
+	engine.Distance = 20
+	engine.Silent = true
+	engine.Registry.extractors["pdf"] = rankingStaticExtractor{text: content}
+
+	matches, err := engine.FilterCandidates([]string{textPath, binaryPath}, 2, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("matches = %+v, want text and extracted binary", matches)
+	}
+	for _, match := range matches {
+		if match.pathMatchCount != 2 ||
+			match.boundaryQuality != 2 ||
+			match.topQualityChunks != 2 {
+			t.Errorf("%s metadata = path %d, boundary %d, top chunks %d; want 2, 2, 2",
+				filepath.Base(match.filePath),
+				match.pathMatchCount,
+				match.boundaryQuality,
+				match.topQualityChunks)
+		}
+	}
+}
 
 func TestAnalyzeRankedTextQualification(t *testing.T) {
 	query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
