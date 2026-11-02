@@ -8,6 +8,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -467,9 +468,11 @@ func formatLine(start int) string {
 
 // jsonOutput is the top-level envelope emitted by --json.
 type jsonOutput struct {
-	Query   jsonQuery    `json:"query"`
-	Matches int          `json:"matches"`
-	Results []jsonResult `json:"results"`
+	Query     jsonQuery    `json:"query"`
+	Matches   int          `json:"matches"`
+	Returned  int          `json:"returned"`
+	Truncated bool         `json:"truncated"`
+	Results   []jsonResult `json:"results"`
 }
 
 // jsonQuery echoes the search parameters back to the caller so the response is self-describing.
@@ -556,12 +559,27 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 func runJSON(args *Arguments) int {
 	se := newSilentSearchEngine(args)
 
-	results, err := se.Execute()
+	outcome, err := se.ExecuteDetailed()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
 		return 1
 	}
 
+	out := buildJSONOutput(args, outcome)
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	// Don't HTML-escape <, >, & -- code excerpts (PHP "<?php", Delphi generics, "&&") are
+	// far more readable as raw characters, and stdout consumers don't need HTML safety.
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(out); err != nil {
+		fmt.Fprintln(os.Stderr, "Error encoding JSON: "+err.Error())
+		return 1
+	}
+	return 0
+}
+
+func buildJSONOutput(args *Arguments, outcome search.ExecutionResult) jsonOutput {
 	out := jsonOutput{
 		Query: jsonQuery{
 			Terms:       args.SearchWords,
@@ -575,11 +593,13 @@ func runJSON(args *Arguments) int {
 			NoIgnore:    args.NoIgnore,
 			MaxFileSize: args.MaxFileSize,
 		},
-		Matches: len(results),
-		Results: make([]jsonResult, 0, len(results)),
+		Matches:   outcome.Matches,
+		Returned:  outcome.Returned,
+		Truncated: outcome.Truncated,
+		Results:   make([]jsonResult, 0, outcome.Returned),
 	}
 
-	for _, r := range results {
+	for _, r := range outcome.Results {
 		excerpts := make([]jsonExcerpt, len(r.RawExcerpts))
 		for i, ex := range r.RawExcerpts {
 			excerpts[i] = jsonExcerpt{
@@ -599,23 +619,13 @@ func runJSON(args *Arguments) int {
 			Excerpts:     excerpts,
 		})
 	}
-
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	// Don't HTML-escape <, >, & -- code excerpts (PHP "<?php", Delphi generics, "&&") are
-	// far more readable as raw characters, and stdout consumers don't need HTML safety.
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(out); err != nil {
-		fmt.Fprintln(os.Stderr, "Error encoding JSON: "+err.Error())
-		return 1
-	}
-	return 0
+	return out
 }
 
 // runPlain executes the search without the TUI and writes clean text to stdout.
 // Output format:
 //
-//	MATCH <n>/<total>
+//	MATCH <n>/<returned>
 //	FILE: <path>
 //	SIZE: <bytes>
 //	EXCERPT <i> [L<start>]: <text>
@@ -629,44 +639,51 @@ func runJSON(args *Arguments) int {
 func runPlain(args *Arguments) int {
 	se := newSilentSearchEngine(args)
 
-	results, err := se.Execute()
+	outcome, err := se.ExecuteDetailed()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
 		return 1
 	}
+	writePlainOutput(os.Stdout, args, outcome)
+	return 0
+}
+
+func writePlainOutput(w io.Writer, args *Arguments, outcome search.ExecutionResult) {
 	if args.Partial != search.PartialModeOff {
-		fmt.Printf("Mode: partial (%s)\n", args.Partial)
+		fmt.Fprintf(w, "Mode: partial (%s)\n", args.Partial)
 	}
 
-	if len(results) == 0 {
-		fmt.Println("NO RESULTS")
-		return 0
+	if outcome.Returned == 0 {
+		fmt.Fprintln(w, "NO RESULTS")
+		return
 	}
 
 	// Use RawExcerpts (pre-highlight) -- no ANSI stripping needed.
 	// Excerpt headers carry per-chunk ranked quality when the chunk framed a
 	// ranked window; the old "[L<start>]" form is kept for quality-less chunks.
-	for i, r := range results {
-		fmt.Printf("MATCH %d/%d [Score: %d (%d/%d terms)]\n", i+1, len(results), r.Score, r.TermCount, len(args.SearchWords))
-		fmt.Printf("FILE: %s\n", r.FilePath)
-		fmt.Printf("SIZE: %d\n", r.FileSize)
+	for i, r := range outcome.Results {
+		fmt.Fprintf(w, "MATCH %d/%d [Score: %d (%d/%d terms)]\n", i+1, outcome.Returned, r.Score, r.TermCount, len(args.SearchWords))
+		fmt.Fprintf(w, "FILE: %s\n", r.FilePath)
+		fmt.Fprintf(w, "SIZE: %d\n", r.FileSize)
 		for j, ex := range r.RawExcerpts {
 			score := excerptChunkScoreAt(r.ChunkScores, j)
 			terms := excerptChunkTermCountAt(r.ChunkTermCounts, j)
 			switch {
 			case score > 0 && terms > 0 && formatLine(excerptStartLineAt(r.StartLines, j)) != "":
-				fmt.Printf("EXCERPT %d [%s, Score: %d (%d terms)]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), score, terms, ex)
+				fmt.Fprintf(w, "EXCERPT %d [%s, Score: %d (%d terms)]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), score, terms, ex)
 			case score > 0 && terms > 0:
-				fmt.Printf("EXCERPT %d [Score: %d (%d terms)]: %s\n", j+1, score, terms, ex)
+				fmt.Fprintf(w, "EXCERPT %d [Score: %d (%d terms)]: %s\n", j+1, score, terms, ex)
 			case formatLine(excerptStartLineAt(r.StartLines, j)) != "":
-				fmt.Printf("EXCERPT %d [%s]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), ex)
+				fmt.Fprintf(w, "EXCERPT %d [%s]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), ex)
 			default:
-				fmt.Printf("EXCERPT %d: %s\n", j+1, ex)
+				fmt.Fprintf(w, "EXCERPT %d: %s\n", j+1, ex)
 			}
 		}
-		fmt.Println("---")
+		fmt.Fprintln(w, "---")
 	}
-	return 0
+	if outcome.Truncated {
+		fmt.Fprintf(w, "# truncated: showing %d of %d matching files (use --max-results 0 for all)\n", outcome.Returned, outcome.Matches)
+	}
 }
 
 // runPathOnly executes the search without the TUI and writes distinct matching

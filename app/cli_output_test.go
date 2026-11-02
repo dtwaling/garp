@@ -1,12 +1,16 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"garp/search"
 )
 
 func TestCLIOutputFormats(t *testing.T) {
@@ -167,27 +171,175 @@ func TestJSONTraversalOptionsOmissionAndPresence(t *testing.T) {
 	}
 }
 
+func TestJSONMaxResultsMetadata(t *testing.T) {
+	root := buildOutputLimitFixture(t, 52)
+	tests := []struct {
+		name          string
+		maxArgs       []string
+		wantReturned  int
+		wantTruncated bool
+	}{
+		{name: "default 50", wantReturned: 50, wantTruncated: true},
+		{name: "explicit zero is unlimited", maxArgs: []string{"--max-results", "0"}, wantReturned: 52},
+		{name: "explicit N", maxArgs: []string{"--max-results", "7"}, wantReturned: 7, wantTruncated: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			argv := []string{"alpha", "--startdir", root, "--only", "txt", "--json"}
+			argv = append(argv, tt.maxArgs...)
+			out := captureCLIStdout(t, func() int { return runJSON(parseArguments(argv)) })
+
+			var got jsonOutput
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatalf("decode JSON output: %v", err)
+			}
+			if got.Matches != 52 || got.Returned != tt.wantReturned || got.Truncated != tt.wantTruncated {
+				t.Fatalf("metadata = matches %d, returned %d, truncated %t; want 52, %d, %t",
+					got.Matches, got.Returned, got.Truncated, tt.wantReturned, tt.wantTruncated)
+			}
+			if len(got.Results) != tt.wantReturned {
+				t.Fatalf("results = %d, want %d", len(got.Results), tt.wantReturned)
+			}
+			assertJSONEnvelopeKeys(t, out, tt.wantReturned, tt.wantTruncated)
+		})
+	}
+}
+
+func TestJSONZeroResultsIncludesMetadataKeys(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "miss.txt"), []byte("beta"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := parseArguments([]string{"alpha", "--startdir", root, "--only", "txt", "--json"})
+	out := captureCLIStdout(t, func() int { return runJSON(args) })
+	assertJSONEnvelopeKeys(t, out, 0, false)
+}
+
+func assertJSONEnvelopeKeys(t *testing.T, out []byte, returned int, truncated bool) {
+	t.Helper()
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(out, &raw); err != nil {
+		t.Fatalf("decode raw JSON output: %v", err)
+	}
+	want := map[string]string{
+		"query":     "",
+		"matches":   "",
+		"returned":  fmt.Sprint(returned),
+		"truncated": fmt.Sprint(truncated),
+		"results":   "",
+	}
+	for key, value := range want {
+		got, ok := raw[key]
+		if !ok {
+			t.Errorf("JSON output missing top-level %q", key)
+		} else if value != "" && string(got) != value {
+			t.Errorf("JSON %s = %s, want %s", key, got, value)
+		}
+	}
+}
+
+func TestPlainMaxResultsMetadata(t *testing.T) {
+	root := buildOutputLimitFixture(t, 52)
+
+	t.Run("default 50 uses returned denominator and footer", func(t *testing.T) {
+		args := parseArguments([]string{"alpha", "--startdir", root, "--only", "txt", "--plain"})
+		out := string(captureCLIStdout(t, func() int { return runPlain(args) }))
+		if got := strings.Count(out, "MATCH "); got != 50 {
+			t.Fatalf("MATCH count = %d, want 50", got)
+		}
+		if !strings.Contains(out, "MATCH 50/50 ") {
+			t.Errorf("plain output missing returned denominator:\n%s", out)
+		}
+		const footer = "# truncated: showing 50 of 52 matching files (use --max-results 0 for all)\n"
+		if !strings.HasSuffix(out, footer) {
+			t.Errorf("plain output does not end with exact footer %q", footer)
+		}
+	})
+
+	t.Run("explicit zero is unlimited without footer", func(t *testing.T) {
+		args := parseArguments([]string{"alpha", "--startdir", root, "--only", "txt", "--plain", "--max-results", "0"})
+		out := string(captureCLIStdout(t, func() int { return runPlain(args) }))
+		if !strings.Contains(out, "MATCH 52/52 ") {
+			t.Errorf("plain output missing unlimited final header")
+		}
+		if strings.Contains(out, "# truncated:") {
+			t.Errorf("untruncated plain output contains truncation footer")
+		}
+	})
+}
+
+func TestOutputMetadataUsesAdjustedStage3Matches(t *testing.T) {
+	args := parseArguments([]string{"alpha"})
+	outcome := search.ExecutionResult{
+		Results: []search.SearchResult{
+			{FilePath: "second.txt", Score: 1, TermCount: 1},
+			{FilePath: "third.txt", Score: 1, TermCount: 1},
+		},
+		Matches:   3,
+		Returned:  2,
+		Truncated: true,
+	}
+
+	jsonResult := buildJSONOutput(args, outcome)
+	if jsonResult.Matches != 3 || jsonResult.Returned != 2 || !jsonResult.Truncated {
+		t.Fatalf("JSON metadata = %+v, want adjusted 3 matches, 2 returned, truncated", jsonResult)
+	}
+
+	var plain bytes.Buffer
+	writePlainOutput(&plain, args, outcome)
+	if !strings.Contains(plain.String(), "MATCH 2/2 ") {
+		t.Errorf("plain output missing returned denominator:\n%s", plain.String())
+	}
+	const footer = "# truncated: showing 2 of 3 matching files (use --max-results 0 for all)\n"
+	if !strings.HasSuffix(plain.String(), footer) {
+		t.Errorf("plain output does not end with adjusted footer %q:\n%s", footer, plain.String())
+	}
+}
+
+func buildOutputLimitFixture(t *testing.T, count int) string {
+	t.Helper()
+	root := t.TempDir()
+	for i := 0; i < count; i++ {
+		name := filepath.Join(root, fmt.Sprintf("match-%03d.txt", i))
+		if err := os.WriteFile(name, []byte("alpha"), 0o600); err != nil {
+			t.Fatalf("write fixture %q: %v", name, err)
+		}
+	}
+	return root
+}
+
 func captureCLIStdout(t *testing.T, run func() int) []byte {
 	t.Helper()
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("create stdout pipe: %v", err)
 	}
+	type readResult struct {
+		out []byte
+		err error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		out, readErr := io.ReadAll(reader)
+		readDone <- readResult{out: out, err: readErr}
+	}()
+
 	originalStdout := os.Stdout
 	os.Stdout = writer
 	code := run()
 	_ = writer.Close()
 	os.Stdout = originalStdout
-	defer reader.Close()
+	result := <-readDone
+	_ = reader.Close()
 
 	if code != 0 {
 		t.Fatalf("CLI exit code = %d, want 0", code)
 	}
-	out, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read stdout: %v", err)
+	if result.err != nil {
+		t.Fatalf("read stdout: %v", result.err)
 	}
-	return out
+	return result.out
 }
 
 func slicesEqual(got, want []string) bool {
