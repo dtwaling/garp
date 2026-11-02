@@ -690,17 +690,9 @@ func FindFilesWithFirstWordPartial(word string, fileTypes []string, walkRoot str
 func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
 	// Precompute lowercased search word for fast ASCII whole-word scan
 	wLower := strings.ToLower(word)
-	heavy := map[string]bool{
-		".pdf":  true,
-		".docx": true,
-		".odt":  true,
-		".msg":  true,
-		".eml":  true,
-		".mbox": true,
-	}
 	matches := make([]string, 0, 128)
 	err := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
-		if heavy[strings.ToLower(filepath.Ext(path))] {
+		if IsBinaryFormat(path) {
 			// include heavy binary types as candidates; full check later
 			matches = append(matches, path)
 			return nil
@@ -708,7 +700,7 @@ func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, w
 
 		// Stream up to maxBytes looking for the first word
 		const chunkSize = 64 * 1024
-		const maxBytes = 5 * 1024 * 1024
+		maxBytes := options.TextMaxBytes()
 		overlap := 32
 		if l := len(wLower) - 1; l > overlap {
 			overlap = l
@@ -722,7 +714,7 @@ func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, w
 
 		// Early path for small files: read whole file at once, avoid chunk loop
 		if st, stErr := f.Stat(); stErr == nil && st.Size() <= chunkSize {
-			data, _ := io.ReadAll(f)
+			data, _ := io.ReadAll(io.LimitReader(f, maxBytes))
 			found := asciiIndexPartialCI(data, []byte(wLower), partial)
 			if found >= 0 {
 				matches = append(matches, path)
@@ -824,14 +816,6 @@ func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes 
 
 	primaryLower := strings.ToLower(words[0])
 	termsToCheck := heavyBinaryPrefilterTerms(words)
-	heavy := map[string]bool{
-		".pdf":  true,
-		".docx": true,
-		".odt":  true,
-		".msg":  true,
-		".eml":  true,
-		".mbox": true,
-	}
 
 	// Results and synchronization
 	matches := make([]string, 0, 128)
@@ -855,7 +839,7 @@ func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes 
 		go func() {
 			defer wg.Done()
 			const chunkSize = 64 * 1024
-			const maxBytes = 5 * 1024 * 1024
+			maxBytes := options.TextMaxBytes()
 			overlap := 32
 			if l := len(primaryLower) - 1; l > overlap {
 				overlap = l
@@ -872,7 +856,7 @@ func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes 
 
 				// Early path for small files: read whole file at once, avoid chunk loop
 				if st, stErr := f.Stat(); stErr == nil && st.Size() <= chunkSize {
-					data, _ := io.ReadAll(f)
+					data, _ := io.ReadAll(io.LimitReader(f, maxBytes))
 					_ = adviseDontNeed(f)
 					_ = f.Close()
 
@@ -926,7 +910,7 @@ func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes 
 				_ = adviseDontNeed(f)
 				_ = f.Close()
 
-				if found || (!found && readTotal >= maxBytes) {
+				if found {
 					mu.Lock()
 					matches = append(matches, p)
 					mu.Unlock()
@@ -947,7 +931,7 @@ func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes 
 		}
 
 		// Heavy files: conservative prefilter for non-PDF; include unless decisively absent
-		if heavy[ext] {
+		if IsBinaryFormat(path) {
 			if ext == ".pdf" {
 				// PDFs are handled later under strict guardrails; include as candidate
 				mu.Lock()

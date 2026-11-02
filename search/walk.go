@@ -27,6 +27,13 @@ func (options WalkOptions) TextMaxBytes() int64 {
 
 type candidateVisitor func(logicalPath string, info os.FileInfo) error
 
+func candidateSizeEligible(path string, size int64, options WalkOptions) bool {
+	if options.MaxFileSize > 0 {
+		return size <= options.MaxFileSize
+	}
+	return IsBinaryFormat(path) || size <= options.TextMaxBytes()
+}
+
 // walkCandidates applies the common traversal and candidate eligibility policy.
 func walkCandidates(
 	fileTypes []string,
@@ -118,11 +125,7 @@ func walkCandidates(
 			if infoErr != nil || !info.Mode().IsRegular() {
 				continue
 			}
-			if options.MaxFileSize > 0 {
-				if info.Size() > options.MaxFileSize {
-					continue
-				}
-			} else if !IsBinaryFormat(logicalPath) && info.Size() > options.TextMaxBytes() {
+			if !candidateSizeEligible(logicalPath, info.Size(), options) {
 				continue
 			}
 
