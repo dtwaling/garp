@@ -746,10 +746,10 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 			minTerms = 2
 		}
 		if isCode {
-			spans = extractRankedExcerptSpans(cleanContent, query.terms, maxExcerpts, match.termCount, minTerms, true, se.Partial)
+			spans = extractRankedExcerptSpansQuery(cleanContent, query, maxExcerpts, match.termCount, minTerms, true)
 			excerpts = excerptSpanTexts(spans)
 		} else {
-			spans = extractRankedExcerptSpans(cleanContent, query.terms, maxExcerpts, match.termCount, minTerms, false, se.Partial)
+			spans = extractRankedExcerptSpansQuery(cleanContent, query, maxExcerpts, match.termCount, minTerms, false)
 			excerpts = excerptSpanTexts(spans)
 		}
 
@@ -757,64 +757,17 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 		// by pulling in neighboring sentences to provide more context. This helps fill the UI box
 		// when there is little content returned.
 		if len(excerpts) == 1 && len(excerpts[0]) < 160 {
-			// Local helper to expand context from surrounding sentences up to a target length.
-			expandShort := func(clean, ex string, terms []string, target int) string {
-				sents := splitIntoSentences(clean)
-				if len(sents) == 0 {
-					return ex
-				}
-				// Find a sentence that contains the excerpt, or the first that contains any term.
-				best := -1
-				for i, s := range sents {
-					if strings.Contains(s, ex) {
-						best = i
-						break
-					}
-					if best == -1 && containsAnySearchTerm(s, terms) {
-						best = i
-					}
-				}
-				if best == -1 {
-					return ex
-				}
-
-				out := []string{strings.TrimSpace(sents[best])}
-				l, r := best-1, best+1
-
-				// Grow context outward until we reach the target length or run out of sentences.
-				for (l >= 0 || r < len(sents)) && len(strings.Join(out, " ")) < target {
-					if l >= 0 {
-						left := strings.TrimSpace(sents[l])
-						if left != "" {
-							out = append([]string{left}, out...)
-						}
-						l--
-					}
-					if r < len(sents) && len(strings.Join(out, " ")) < target {
-						right := strings.TrimSpace(sents[r])
-						if right != "" {
-							out = append(out, right)
-						}
-						r++
-					}
-				}
-
-				merged := strings.Join(out, " ")
-				// Normalize whitespace
-				merged = strings.Join(strings.Fields(merged), " ")
-				return merged
-			}
-
-			expanded := expandShort(cleanContent, excerpts[0], query.terms, 600)
-			if len(expanded) > len(excerpts[0]) {
-				excerpts[0] = expanded
+			expanded := expandShortExcerptSpan(spans[0], 600)
+			if len(expanded.text) > len(excerpts[0]) {
+				spans[0] = expanded
+				excerpts[0] = expanded.text
 			}
 		}
 
 		// Highlight search terms in excerpts
 		highlightedExcerpts := make([]string, len(excerpts))
-		for i, excerpt := range excerpts {
-			highlightedExcerpts[i] = HighlightTermsPartial(excerpt, query.terms, se.Partial)
+		for i := range spans {
+			highlightedExcerpts[i] = highlightExcerptSpan(spans[i])
 		}
 
 		// Resolve 1-based start line per excerpt by anchoring it back to the raw content.
@@ -830,11 +783,11 @@ func (se *SearchEngine) extractAndBuildResults(query compiledQuery, matchingFile
 				docOrder[i] = i
 			}
 			sort.SliceStable(docOrder, func(a, b int) bool { return spans[docOrder[a]].left < spans[docOrder[b]].left })
-			docExcerpts := make([]string, len(docOrder))
+			docSpans := make([]excerptSpan, len(docOrder))
 			for i, idx := range docOrder {
-				docExcerpts[i] = excerpts[idx]
+				docSpans[i] = spans[idx]
 			}
-			docLines := computeExcerptLinesPartial(content, docExcerpts, query.terms, se.Distance, se.Partial)
+			docLines := computeExcerptSpanLinesQuery(content, docSpans, query, se.Distance)
 			startLines = make([]int, len(excerpts))
 			for i, idx := range docOrder {
 				startLines[idx] = docLines[i]
