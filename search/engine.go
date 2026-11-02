@@ -133,6 +133,7 @@ type SearchEngine struct {
 	FilterWorkers     int
 	FileTimeoutBinary time.Duration
 	MaxExcerpts       int
+	NoIgnore          bool
 	MaxFileSize       int64
 
 	// StartDir, if non-empty, sets the root directory for file walks.
@@ -178,7 +179,10 @@ func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, inc
 }
 
 func (se *SearchEngine) walkOptions() WalkOptions {
-	return WalkOptions{MaxFileSize: se.MaxFileSize}
+	return WalkOptions{
+		NoIgnore:    se.NoIgnore,
+		MaxFileSize: se.MaxFileSize,
+	}
 }
 
 // NewSearchEngineWithWorkers creates a new search engine instance with an explicit filter worker count
@@ -195,11 +199,11 @@ func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error)
 	if !se.Silent {
 		fmt.Printf("Finding files with '%s'...\n", se.SearchWords[0])
 	}
-	candidateFiles, err := FindFilesWithFirstWordProgressPartial(se.SearchWords, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
+	candidateFiles, err := FindFilesWithFirstWordProgressPartialWithOptions(se.SearchWords, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
 		if se.OnProgress != nil {
 			se.OnProgress("discovery", processed, total, path)
 		}
-	}, se.StartDir, se.PathScope, se.Partial)
+	}, se.StartDir, se.PathScope, se.Partial, se.walkOptions())
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to find files with first word: %w", err)
 	}
@@ -672,7 +676,7 @@ func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) (
 				continue
 			}
 		} else {
-			content, fileSize, err = GetFileContent(filePath)
+			content, fileSize, err = readTextPrefix(filePath, se.walkOptions().TextMaxBytes())
 			if err != nil {
 				if !se.Silent {
 					fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)

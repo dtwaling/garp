@@ -1626,6 +1626,32 @@ func readTextForStage2(filePath string, maxBytes int64) (string, error) {
 	return string(content), nil
 }
 
+// readTextPrefix reads only the active searchable prefix while reporting the
+// file size observed before the read.
+func readTextPrefix(filePath string, maxBytes int64) (string, int64, error) {
+	if maxBytes <= 0 {
+		maxBytes = defaultTextMaxBytes
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+	_ = adviseSequential(file)
+
+	stat, err := file.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	content, err := io.ReadAll(io.LimitReader(file, maxBytes))
+	_ = adviseDontNeed(file)
+	if err != nil {
+		return "", 0, err
+	}
+	return string(content), stat.Size(), nil
+}
+
 // GetFileContent reads and returns file content with size limits
 func GetFileContent(filePath string) (string, int64, error) {
 	file, err := os.Open(filePath)
