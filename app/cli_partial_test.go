@@ -147,7 +147,12 @@ func TestShowUsageDocumentsPartial(t *testing.T) {
 		showUsage()
 		return 0
 	}))
-	for _, want := range []string{"--partial[=MODE]", "prefix, contains", "deploy*"} {
+	for _, want := range []string{
+		"--partial[=MODE]",
+		"prefix, contains",
+		"Tip: valid query terms support inline * and ?.",
+		"Invalid or over-limit wildcard terms match literally. See README for bounds.",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("usage missing %q:\n%s", want, out)
 		}
