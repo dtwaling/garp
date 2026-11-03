@@ -853,24 +853,37 @@ func submatchRange(loc []int) (int, int) {
 }
 
 func expandShortExcerptSpan(span excerptSpan, target int) excerptSpan {
-	sentences := sourceSentenceSpans(span.sourceText)
+	sentences := sourceSentenceSpans(span.sourceText, span.sourceMatches)
 	if len(sentences) == 0 || len(span.matches) == 0 || len(span.sourceMatches) == 0 {
 		return span
 	}
 
-	anchor := span.matches[0].source
-	best := -1
-	for i, sentence := range sentences {
-		if anchor.start >= sentence.start && anchor.end <= sentence.end {
-			best = i
-			break
+	sentenceAt := func(pos int) int {
+		i := sort.Search(len(sentences), func(i int) bool {
+			return sentences[i].end > pos
+		})
+		if i < len(sentences) && sentences[i].start <= pos {
+			return i
 		}
+		return -1
 	}
-	if best == -1 {
+	left, right := len(sentences), -1
+	for _, match := range span.matches {
+		first := sentenceAt(match.source.start)
+		last := sentenceAt(match.source.end - 1)
+		if first == -1 || last == -1 {
+			return span
+		}
+		left = min(left, first)
+		right = max(right, last)
+	}
+	if right == -1 {
+		return span
+	}
+	if sentences[right].end-sentences[left].start > target {
 		return span
 	}
 
-	left, right := best, best
 	expanded := span
 	for {
 		text, matches := formatExcerptText(
@@ -896,12 +909,34 @@ func expandShortExcerptSpan(span excerptSpan, target int) excerptSpan {
 	}
 }
 
-func sourceSentenceSpans(text string) []matchRange {
+func sourceSentenceSpans(text string, matches []excerptMatch) []matchRange {
 	abbreviations := map[string]bool{
 		"mr": true, "mrs": true, "ms": true, "dr": true, "prof": true,
 		"sr": true, "jr": true, "st": true, "vs": true, "no": true,
 		"inc": true, "ltd": true, "co": true,
 	}
+	matchRanges := make([]matchRange, 0, len(matches))
+	for _, match := range matches {
+		if match.source.end > match.source.start {
+			matchRanges = append(matchRanges, match.source)
+		}
+	}
+	sort.Slice(matchRanges, func(i, j int) bool {
+		return matchRanges[i].start < matchRanges[j].start
+	})
+	for i := 1; i < len(matchRanges); i++ {
+		if matchRanges[i].end < matchRanges[i-1].end {
+			matchRanges[i].end = matchRanges[i-1].end
+		}
+	}
+	boundaryInsideMatch := func(boundary int) bool {
+		firstAtOrAfterBoundary := sort.Search(len(matchRanges), func(i int) bool {
+			return matchRanges[i].start >= boundary
+		})
+		return firstAtOrAfterBoundary > 0 &&
+			matchRanges[firstAtOrAfterBoundary-1].end > boundary
+	}
+
 	var spans []matchRange
 	start := 0
 	appendSpan := func(end int) {
@@ -927,12 +962,20 @@ func sourceSentenceSpans(text string) []matchRange {
 
 	for i := 0; i < len(text); i++ {
 		if text[i] == '\n' && i+1 < len(text) && text[i+1] == '\n' {
+			if boundaryInsideMatch(i+1) || boundaryInsideMatch(i+2) {
+				i++
+				continue
+			}
 			appendSpan(i)
 			start = i + 2
 			i++
 			continue
 		}
 		if text[i] != '.' && text[i] != '!' && text[i] != '?' {
+			continue
+		}
+		end := i + 1
+		if boundaryInsideMatch(end) {
 			continue
 		}
 		if text[i] == '.' {
@@ -952,7 +995,6 @@ func sourceSentenceSpans(text string) []matchRange {
 				continue
 			}
 		}
-		end := i + 1
 		nextUpper := false
 		if end < len(text) {
 			next, _ := utf8.DecodeRuneInString(text[end:])

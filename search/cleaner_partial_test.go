@@ -2,6 +2,7 @@ package search
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -191,6 +192,35 @@ func TestShortExcerptExpansionCarriesNeighborMatches(t *testing.T) {
 	}
 }
 
+func TestShortExcerptExpansionPreservesMatchesAndBounds(t *testing.T) {
+	tests := []struct {
+		name, clean, want string
+		terms             []string
+		target            int
+		all, bounded      bool
+	}{
+		{name: "all visible matches", clean: "Long preceding sentence. First api. Bridge. Last omega.", terms: []string{"api", "omega"}, target: 30, all: true, want: "First \033[1;31mapi\033[0m. Bridge. Last \033[1;31momega\033[0m."},
+		{name: "dot-leading match", clean: "Before. Use .NET now. After.", terms: []string{".NET"}, target: len("Use .NET now."), want: "Use \033[1;31m.NET\033[0m now."},
+		{name: "distant sentences", clean: "First api. " + strings.Repeat("Middle sentence. ", 20) + "Last omega.", terms: []string{"api", "omega"}, target: 100, all: true, bounded: true},
+		{name: "single merged sentence", clean: "Use .NET " + strings.Repeat("context ", 20) + "end.", terms: []string{".NET"}, target: 100, bounded: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			span := testExcerptSpan(tt.clean, compileQuery(tt.terms, PartialModeOff), 0, strings.Join(tt.terms, " ... "))
+			if tt.all {
+				span.matches = append([]excerptMatch(nil), span.sourceMatches...)
+			}
+			expanded := expandShortExcerptSpan(span, tt.target)
+			if tt.bounded && !reflect.DeepEqual(expanded, span) {
+				t.Fatalf("oversized covering range replaced bounded excerpt: %#v", expanded)
+			}
+			if !tt.bounded && highlightExcerptSpan(expanded) != tt.want {
+				t.Fatalf("expanded excerpt = %q, want %q", highlightExcerptSpan(expanded), tt.want)
+			}
+		})
+	}
+}
+
 func TestShortExcerptExpansionUsesSourceRangeForRepeatedText(t *testing.T) {
 	clean := "Repeat api. Repeat api. Neighbor omega."
 	query := compileQuery([]string{"api", "omega"}, PartialModeOff)
@@ -200,7 +230,7 @@ func TestShortExcerptExpansionUsesSourceRangeForRepeatedText(t *testing.T) {
 	span.right = secondAPI.source.end
 	span.matches = []excerptMatch{secondAPI}
 
-	expanded := expandShortExcerptSpan(span, 1)
+	expanded := expandShortExcerptSpan(span, len("Repeat api."))
 	if want := strings.Index(clean, "Repeat api.") + len("Repeat api. "); expanded.left != want {
 		t.Fatalf("expanded left = %d, want second repeated sentence at %d", expanded.left, want)
 	}
@@ -263,7 +293,7 @@ func TestSourceSentenceSpansTrimUTF8OnRuneBoundaries(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sourceSentenceSpans(tt.text)
+			got := sourceSentenceSpans(tt.text, nil)
 			if len(got) != 1 || got[0] != tt.want {
 				t.Fatalf("sourceSentenceSpans(%q) = %#v, want [%#v]", tt.text, got, tt.want)
 			}
@@ -272,6 +302,37 @@ func TestSourceSentenceSpansTrimUTF8OnRuneBoundaries(t *testing.T) {
 			}
 			if !utf8.ValidString(tt.text[got[0].start:got[0].end]) {
 				t.Fatalf("span split valid UTF-8: %#v", got[0])
+			}
+		})
+	}
+}
+
+func TestSourceSentenceSpansMatchedBoundaries(t *testing.T) {
+	match := func(text, term string) excerptMatch {
+		start := strings.Index(text, term)
+		loc := matchRange{start: start, end: start + len(term)}
+		return excerptMatch{matchRange: loc, source: loc}
+	}
+	paragraph, overlap := "Use alpha\n\nBeta now. After.", "Use aa.BB!CC now. Next."
+	short := matchRange{start: strings.Index(overlap, ".BB"), end: strings.Index(overlap, "!CC") + 1}
+	tests := []struct {
+		name, text string
+		matches    []excerptMatch
+		want       []string
+	}{
+		{name: "normal punctuation", text: "First.Second!Third?Fourth", want: []string{"First.", "Second!", "Third?", "Fourth"}},
+		{name: "matched paragraph", text: paragraph, matches: []excerptMatch{match(paragraph, "alpha\n\nBeta")}, want: []string{"Use alpha\n\nBeta now.", "After."}},
+		{name: "unsorted overlapping matches", text: overlap, matches: []excerptMatch{match(overlap, "Next"), {matchRange: short, source: short}, match(overlap, "aa.BB!CC")}, want: []string{"Use aa.BB!CC now.", "Next."}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ranges := sourceSentenceSpans(tt.text, tt.matches)
+			got := make([]string, len(ranges))
+			for i, span := range ranges {
+				got[i] = tt.text[span.start:span.end]
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("sentence spans = %#v, want %#v", got, tt.want)
 			}
 		})
 	}
