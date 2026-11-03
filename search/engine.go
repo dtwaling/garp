@@ -311,14 +311,6 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 			return false
 		}
 
-		// The ranked prefilter preserves Strategy A candidates in relaxed mode.
-		if !IsBinaryFormat(filePath) && len(query.terms) >= 2 {
-			found, decided := streamContainsRankedWordsDecidedQuery(filePath, query, se.Strict, maxBytes)
-			if decided && !found {
-				return false
-			}
-		}
-
 		// Check if file contains all search words
 		hasAllWords := true
 		if len(query.terms) > 1 {
