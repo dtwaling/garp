@@ -237,8 +237,13 @@ func truncateExcerpt(text string, matches []excerptMatch, budget int) (string, [
 	cut := utf8BudgetCut(text, budget)
 	text = text[:cut]
 	matches = slices.DeleteFunc(matches, func(match excerptMatch) bool {
-		return match.end > cut
+		return match.start >= cut || match.end <= match.start
 	})
+	for i := range matches {
+		if matches[i].end > cut {
+			matches[i].end = cut
+		}
+	}
 	return text, matches
 }
 
@@ -256,6 +261,14 @@ func normalizeExcerptBounds(source string, left, right int) (int, int) {
 }
 
 func formatExcerptText(source string, left, right, budget int, matches []excerptMatch) (string, []excerptMatch) {
+	return formatExcerptTextBoundaryMatches(source, left, right, budget, matches, false)
+}
+
+func formatMultipartExcerptText(source string, left, right int, matches []excerptMatch) (string, []excerptMatch) {
+	return formatExcerptTextBoundaryMatches(source, left, right, 0, matches, true)
+}
+
+func formatExcerptTextBoundaryMatches(source string, left, right, budget int, matches []excerptMatch, clampBoundaries bool) (string, []excerptMatch) {
 	left, right = normalizeExcerptBounds(source, left, right)
 	raw := source[left:right]
 	trimmed := strings.TrimSpace(raw)
@@ -266,12 +279,19 @@ func formatExcerptText(source string, left, right, budget int, matches []excerpt
 	trimRight := trimLeft + len(trimmed)
 
 	local := make([]excerptMatch, 0, len(matches))
+	visibleLeft := left + trimLeft
+	visibleRight := left + trimRight
 	for _, match := range matches {
-		if match.start < left+trimLeft || match.end > left+trimRight {
+		if match.end <= visibleLeft || match.start >= visibleRight {
 			continue
 		}
+		if !clampBoundaries && (match.start < visibleLeft || match.end > visibleRight) {
+			continue
+		}
+		matchStart := max(match.start, visibleLeft)
+		matchEnd := min(match.end, visibleRight)
 		local = append(local, excerptMatch{
-			matchRange: matchRange{start: match.start - left - trimLeft, end: match.end - left - trimLeft},
+			matchRange: matchRange{start: matchStart - visibleLeft, end: matchEnd - visibleLeft},
 			source:     match.source,
 			term:       match.term,
 		})
@@ -697,7 +717,7 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 					partLeft := max(0, center-perTerm/2)
 					partRight := min(len(cleaned), center+perTerm/2)
 					partLeft, partRight = normalizeExcerptBounds(cleaned, partLeft, partRight)
-					frag, fragMatches := formatExcerptText(cleaned, partLeft, partRight, 0, allExactMatches)
+					frag, fragMatches := formatMultipartExcerptText(cleaned, partLeft, partRight, allExactMatches)
 					if frag != "" {
 						shift := 0
 						if len(parts) > 0 {
