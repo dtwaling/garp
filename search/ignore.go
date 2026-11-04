@@ -148,24 +148,6 @@ func hasRepositoryBoundary(directory string) bool {
 	return err == nil && (info.IsDir() || info.Mode().IsRegular())
 }
 
-func pathScopeExemptsDirectChild(name string, normScope []string) bool {
-	for _, pattern := range normScope {
-		if pattern == "" {
-			continue
-		}
-		hasSlash := strings.Contains(pattern, "/")
-		parts := splitPathScopeParts(pattern)
-		if len(parts) == 0 || parts[0] == "**" || (!hasSlash && strings.Contains(parts[0], ".")) {
-			continue
-		}
-		first, child := normalizePathScopeMatchPair(parts[0], name)
-		if matched, err := path.Match(first, child); err == nil && matched {
-			return true
-		}
-	}
-	return false
-}
-
 func findRepositoryRoot(start string) (string, bool) {
 	current := filepath.Clean(start)
 	for {

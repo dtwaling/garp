@@ -65,6 +65,7 @@ type Arguments struct {
 	// Empty slice means no restriction.
 	PathScope    []string
 	PathScopeErr error // non-nil if validation failed
+	UserGlobs    []search.UserGlob
 
 	// NoIgnore disables repository ignore-file evaluation.
 	NoIgnore bool
@@ -132,7 +133,7 @@ func isNegativeInteger(value string) bool {
 
 func isStringValueFlag(flag string) bool {
 	switch flag {
-	case "--only", "-t", "--type", "--startdir", "--pathscope":
+	case "--only", "-t", "--type", "--startdir", "--pathscope", "-g", "--glob", "--iglob":
 		return true
 	}
 	return false
@@ -257,7 +258,7 @@ func parseArguments(args []string) *Arguments {
 		case "--distance", "-distance", "--heavy-concurrency", "--file-timeout-binary",
 			"--workers", "-workers", "--max-excerpts", "-m", "--max-count", "--max-results",
 			"--only", "-t", "--type",
-			"--startdir", "--pathscope", "--max-filesize":
+			"--startdir", "--pathscope", "-g", "--glob", "--iglob", "--max-filesize":
 			valueFlag = true
 		}
 		if valueFlag {
@@ -359,6 +360,14 @@ func parseArguments(args []string) *Arguments {
 					result.PathScopeErr = parseErr
 				} else {
 					result.PathScope = segments
+				}
+				setParseError(parseErr)
+			case "-g", "--glob", "--iglob":
+				glob, parseErr := search.ValidateUserGlob(value, flag == "--iglob")
+				if parseErr == nil {
+					result.UserGlobs = append(result.UserGlobs, glob)
+				} else {
+					parseErr = fmt.Errorf("%s: %w", flag, parseErr)
 				}
 				setParseError(parseErr)
 			case "--max-filesize":
@@ -535,6 +544,7 @@ func newTUIModel(args *Arguments) model {
 		maxExcerpts:       args.MaxExcerpts,
 		startDir:          args.StartDir,
 		pathScope:         args.PathScope,
+		userGlobs:         args.UserGlobs,
 		noIgnore:          args.NoIgnore,
 		maxFileSize:       args.MaxFileSize,
 		confirmSelected:   "yes",
@@ -732,8 +742,10 @@ func buildFileTypes(includeCode bool, onlyType string, onlyTypes []string) []str
 
 func walkOptions(args *Arguments) search.WalkOptions {
 	return search.WalkOptions{
-		NoIgnore:    args.NoIgnore,
-		MaxFileSize: args.MaxFileSize,
+		NoIgnore:                    args.NoIgnore,
+		MaxFileSize:                 args.MaxFileSize,
+		UserGlobs:                   args.UserGlobs,
+		PositiveGlobCodeEligibility: len(args.OnlyTypes) == 0,
 	}
 }
 
@@ -772,6 +784,8 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 	if len(args.PathScope) > 0 {
 		se.PathScope = args.PathScope
 	}
+	se.UserGlobs = args.UserGlobs
+	se.PositiveGlobCodeEligibility = len(args.OnlyTypes) == 0
 	se.MaxExcerpts = args.MaxExcerpts
 	se.MaxResults = resolveMaxResults(args)
 	return se

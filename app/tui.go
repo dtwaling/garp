@@ -110,6 +110,7 @@ type model struct {
 	maxExcerpts       int
 	startDir          string   // --startdir: root directory for file walks
 	pathScope         []string // --pathscope: restrict walks to matching paths
+	userGlobs         []search.UserGlob
 	noIgnore          bool
 	maxFileSize       int64
 
@@ -669,6 +670,8 @@ func (m model) newSearchEngine() *search.SearchEngine {
 	if len(m.pathScope) > 0 {
 		se.PathScope = m.pathScope
 	}
+	se.UserGlobs = m.userGlobs
+	se.PositiveGlobCodeEligibility = len(m.onlyTypes) == 0
 	return se
 }
 
@@ -678,7 +681,12 @@ func (m model) preflightFileCount() (int, error) {
 		fileTypes,
 		m.startDir,
 		m.pathScope,
-		search.WalkOptions{NoIgnore: m.noIgnore, MaxFileSize: m.maxFileSize},
+		search.WalkOptions{
+			NoIgnore:                    m.noIgnore,
+			MaxFileSize:                 m.maxFileSize,
+			UserGlobs:                   m.userGlobs,
+			PositiveGlobCodeEligibility: len(m.onlyTypes) == 0,
+		},
 	)
 }
 

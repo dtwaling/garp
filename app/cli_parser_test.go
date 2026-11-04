@@ -192,6 +192,85 @@ func TestParseArgumentsStrict(t *testing.T) {
 	})
 }
 
+func TestParseArgumentsUserGlobs(t *testing.T) {
+	args := parseArguments([]string{
+		"needle",
+		"-g", "*.go",
+		"--glob=!vendor/**",
+		"--iglob", "README.*",
+		"--glob", "docs/a,b/*.md",
+	})
+	if args.ParseErr != nil {
+		t.Fatalf("ParseErr = %v", args.ParseErr)
+	}
+	want := []search.UserGlob{
+		{Pattern: "*.go"},
+		{Pattern: "vendor/**", Negated: true},
+		{Pattern: "README.*", IgnoreCase: true},
+		{Pattern: "docs/a,b/*.md"},
+	}
+	if len(args.UserGlobs) != len(want) {
+		t.Fatalf("UserGlobs = %+v, want %+v", args.UserGlobs, want)
+	}
+	for i := range want {
+		if args.UserGlobs[i] != want[i] {
+			t.Errorf("UserGlobs[%d] = %+v, want %+v", i, args.UserGlobs[i], want[i])
+		}
+	}
+}
+
+func TestParseArgumentsUserGlobErrorUsesActualAliasOnce(t *testing.T) {
+	for _, flag := range []string{"-g", "--glob", "--iglob"} {
+		t.Run(flag, func(t *testing.T) {
+			args := parseArguments([]string{"needle", flag, "!"})
+			want := flag + ": user glob negation must include a pattern"
+			if args.ParseErr == nil || args.ParseErr.Error() != want {
+				t.Fatalf("ParseErr = %q, want %q", args.ParseErr, want)
+			}
+		})
+	}
+}
+
+func TestParseArgumentsRejectsBareDirectoryMarkers(t *testing.T) {
+	tests := []struct {
+		flag  string
+		value string
+	}{
+		{flag: "--pathscope", value: "/"},
+		{flag: "--pathscope", value: `\`},
+		{flag: "-g", value: "/"},
+		{flag: "--glob", value: "!/"},
+		{flag: "--iglob", value: `\`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.flag+"="+tt.value, func(t *testing.T) {
+			args := parseArguments([]string{"needle", tt.flag, tt.value})
+			if args.ParseErr == nil {
+				t.Fatalf("parseArguments accepted %s %q", tt.flag, tt.value)
+			}
+			if !strings.Contains(args.ParseErr.Error(), tt.flag) {
+				t.Fatalf("ParseErr = %q, want flag context %q", args.ParseErr, tt.flag)
+			}
+		})
+	}
+}
+
+func TestRunRejectsInvalidGlobBeforeRootPreflight(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	code, stderr := runWithArgsAndStderr(t, []string{
+		"garp", "needle", "--glob", "!", "--startdir", missing,
+	})
+	if code != 1 {
+		t.Fatalf("Run() = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "--glob") {
+		t.Fatalf("stderr = %q, want glob validation error", stderr)
+	}
+	if strings.Contains(stderr, "search root") || strings.Contains(stderr, missing) {
+		t.Fatalf("stderr = %q, root preflight ran before glob validation", stderr)
+	}
+}
+
 func TestParseArgumentsSeparator(t *testing.T) {
 	got := parseArguments([]string{"term", "--", "-v", "--bogus", "-C3"})
 	if got.ParseErr != nil {

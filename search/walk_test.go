@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+
+	"garp/config"
 )
 
 func writeWalkFixture(t *testing.T, root, relative, content string) string {
@@ -55,6 +57,23 @@ func TestCandidateWalkSkipsHardcodedDescendants(t *testing.T) {
 	got := collectCandidates(t, root, []string{"-g", "*.md"}, nil, WalkOptions{NoIgnore: true})
 	if !reflect.DeepEqual(got, []string{"keep/document.md"}) {
 		t.Fatalf("candidates = %v, want only non-skipped descendant", got)
+	}
+}
+
+func TestCandidateWalkAbsoluteScopeCannotOverrideHardSkip(t *testing.T) {
+	root := t.TempDir()
+	writeWalkFixture(t, root, "vendor/hidden.md", "anchor")
+	writeWalkFixture(t, root, "keep/visible.md", "anchor")
+
+	got := collectCandidates(
+		t,
+		root,
+		[]string{"-g", "*.md"},
+		[]string{filepath.Join(root, "vendor")},
+		WalkOptions{NoIgnore: true},
+	)
+	if len(got) != 0 {
+		t.Fatalf("absolute vendor scope bypassed hard skip: %v", got)
 	}
 }
 
@@ -198,6 +217,57 @@ func TestCountDiscoveryParity(t *testing.T) {
 	}
 	if count != 2 || len(plain) != count || len(progress) != count {
 		t.Fatalf("count/plain/progress = %d/%d/%d, want parity", count, len(plain), len(progress))
+	}
+}
+
+func TestPositiveGlobAddsKnownCodeEligibilityOnly(t *testing.T) {
+	root := t.TempDir()
+	writeWalkFixture(t, root, "main.go", "anchor")
+	writeWalkFixture(t, root, "image.png", "anchor")
+	writeWalkFixture(t, root, "arbitrary.zzz", "anchor")
+	writeWalkFixture(t, root, "readme.md", "anchor")
+
+	options := WalkOptions{
+		UserGlobs:                   []UserGlob{{Pattern: "*"}},
+		PositiveGlobCodeEligibility: true,
+	}
+	got := collectCandidates(t, root, config.BuildRipgrepFileTypes(false), nil, options)
+	want := []string{"main.go", "readme.md"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates = %v, want documents plus known code only %v", got, want)
+	}
+}
+
+func TestGlobPolicyRemainsSeparateFromTypeGate(t *testing.T) {
+	root := t.TempDir()
+	writeWalkFixture(t, root, "main.go", "anchor")
+	writeWalkFixture(t, root, "main.md", "anchor")
+	options := WalkOptions{
+		UserGlobs:                   []UserGlob{{Pattern: "*.go"}},
+		PositiveGlobCodeEligibility: true,
+	}
+	if got := collectCandidates(t, root, config.BuildRipgrepFileTypes(false), nil, options); !reflect.DeepEqual(got, []string{"main.go"}) {
+		t.Fatalf("positive code glob candidates = %v, want [main.go]", got)
+	}
+	options.PositiveGlobCodeEligibility = false
+	if got := collectCandidates(t, root, []string{"-g", "*.md"}, nil, options); len(got) != 0 {
+		t.Fatalf("--only override candidates = %v, want none", got)
+	}
+}
+
+func TestCodeTypeGateIntersectsUserGlobs(t *testing.T) {
+	root := t.TempDir()
+	writeWalkFixture(t, root, "main.go", "anchor")
+	writeWalkFixture(t, root, "main.ts", "anchor")
+	writeWalkFixture(t, root, "readme.md", "anchor")
+
+	options := WalkOptions{
+		UserGlobs:                   []UserGlob{{Pattern: "*.go"}},
+		PositiveGlobCodeEligibility: true,
+	}
+	got := collectCandidates(t, root, config.BuildRipgrepFileTypes(true), nil, options)
+	if !reflect.DeepEqual(got, []string{"main.go"}) {
+		t.Fatalf("--code with user glob candidates = %v, want [main.go]", got)
 	}
 }
 

@@ -164,7 +164,9 @@ type SearchEngine struct {
 	StartDir string
 	// PathScope, if non-empty, restricts file walks to paths whose relative
 	// path matches at least one simple glob pattern (e.g., "*/backend/*").
-	PathScope []string
+	PathScope                   []string
+	UserGlobs                   []UserGlob
+	PositiveGlobCodeEligibility bool
 
 	// PDF metrics (atomic)
 	pdfProcessed     int64 // atomic counter
@@ -210,8 +212,10 @@ func (se *SearchEngine) queryOptions() QueryOptions {
 
 func (se *SearchEngine) walkOptions() WalkOptions {
 	return WalkOptions{
-		NoIgnore:    se.NoIgnore,
-		MaxFileSize: se.MaxFileSize,
+		NoIgnore:                    se.NoIgnore,
+		MaxFileSize:                 se.MaxFileSize,
+		UserGlobs:                   se.UserGlobs,
+		PositiveGlobCodeEligibility: se.PositiveGlobCodeEligibility,
 	}
 }
 

@@ -13,8 +13,10 @@ const defaultTextMaxBytes int64 = 5 << 20
 // WalkOptions controls candidate traversal policy. A zero MaxFileSize applies
 // the default text limit while leaving binary formats uncapped.
 type WalkOptions struct {
-	NoIgnore    bool
-	MaxFileSize int64
+	NoIgnore                    bool
+	MaxFileSize                 int64
+	UserGlobs                   []UserGlob
+	PositiveGlobCodeEligibility bool
 }
 
 // TextMaxBytes returns the active text and code file limit.
@@ -52,7 +54,10 @@ func walkCandidates(
 	}
 
 	matcher := newFileTypeMatcher(fileTypes)
-	normScope := normalizePathScopePatterns(pathScope, logicalRoot)
+	policy, err := CompilePathPolicy(pathScope, options.UserGlobs, logicalRoot, physicalRoot)
+	if err != nil {
+		return err
+	}
 	rootChain := ignoreChain{}
 	if !options.NoIgnore {
 		rootChain = initialIgnoreChain(physicalRoot)
@@ -90,7 +95,7 @@ func walkCandidates(
 					switch {
 					case nestedRepository:
 						childChain = initialIgnoreChain(physicalPath)
-					case depth == 0 && pathScopeExemptsDirectChild(entry.Name(), normScope):
+					case depth == 0 && policy.exemptsDirectChild(entry.Name()):
 						childChain = chain.withoutPathScopeContainerExcludes(physicalPath).withLocalFiles(physicalPath)
 					default:
 						if ignoredByRules(chain.rules, physicalPath, true) {
@@ -99,7 +104,7 @@ func walkCandidates(
 						childChain = chain.withLocalFiles(physicalPath)
 					}
 				}
-				if len(normScope) > 0 && !dirCouldMatchPathScope(logicalPath, logicalRoot, normScope) {
+				if !policy.CouldMatchDirectory(logicalPath) {
 					continue
 				}
 				if err := walkDirectory(logicalPath, physicalPath, depth+1, childChain); err != nil {
@@ -114,10 +119,15 @@ func walkCandidates(
 			if !options.NoIgnore && ignoredByRules(chain.rules, physicalPath, false) {
 				continue
 			}
-			if !matcher.allows(logicalPath) {
+			typeEligible := matcher.allows(logicalPath)
+			if !typeEligible && options.PositiveGlobCodeEligibility &&
+				len(policy.globPositive) > 0 && config.IsCodeFile(logicalPath) {
+				typeEligible = matchesAnyPattern(policy.globPositive, filepath.ToSlash(mustRelativePath(logicalRoot, logicalPath)), false)
+			}
+			if !typeEligible {
 				continue
 			}
-			if !matchesPathScope(logicalPath, logicalRoot, normScope) {
+			if !policy.MatchesFile(logicalPath) {
 				continue
 			}
 
@@ -137,4 +147,12 @@ func walkCandidates(
 	}
 
 	return walkDirectory(logicalRoot, physicalRoot, 0, rootChain)
+}
+
+func mustRelativePath(root, filename string) string {
+	relative, err := filepath.Rel(root, filename)
+	if err != nil {
+		return filename
+	}
+	return relative
 }

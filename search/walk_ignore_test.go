@@ -221,6 +221,23 @@ func TestPathScopeExemptionNonExemptPatternsDoNotBypassParentIgnore(t *testing.T
 	}
 }
 
+func TestNegativePathScopeDoesNotExemptIgnoredContainer(t *testing.T) {
+	root := t.TempDir()
+	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "RepoA/\n")
+	writeWalkFixture(t, root, "RepoA/main.md", "anchor")
+
+	got := collectCandidates(
+		t,
+		root,
+		[]string{"-g", "*.md"},
+		[]string{"!RepoA/**"},
+		WalkOptions{},
+	)
+	if len(got) != 0 {
+		t.Fatalf("candidates = %v, want ignored container to remain pruned", got)
+	}
+}
+
 func TestIgnoreChainSharesUntilLocalRulesRequireCopy(t *testing.T) {
 	root := t.TempDir()
 	emptyChild := filepath.Join(root, "empty")

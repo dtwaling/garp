@@ -54,6 +54,18 @@ func TestBuildRipgrepFileTypesCarriesCodeRegistryGlobs(t *testing.T) {
 	}
 }
 
+func TestBuildRipgrepFileTypesHas28DefaultDocumentExtensions(t *testing.T) {
+	globs := BuildRipgrepFileTypes(false)
+	if got := len(globs) / 2; got != 28 {
+		t.Fatalf("default document glob count = %d, want 28", got)
+	}
+	for i := 0; i < len(globs); i += 2 {
+		if globs[i] != "-g" || !strings.HasPrefix(globs[i+1], "*.") {
+			t.Fatalf("default document glob pair %d = %q %q", i/2, globs[i], globs[i+1])
+		}
+	}
+}
+
 func TestCodeRegistryIncludesOnlySafeEnvironmentTemplates(t *testing.T) {
 	codeGlobs := globSet(BuildRipgrepFileTypes(true))
 	for _, name := range []string{".env.example", ".env.sample", ".env.template"} {
