@@ -151,6 +151,7 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `--json` | off | Skip TUI; emit structured JSON to stdout. Preferred for MCP/agent callers |
 | `--plain` | off | Skip TUI; emit plain line-oriented text to stdout. Useful for shell scripts |
 | `--max-excerpts N` | 1 | Maximum excerpts per matching file (maximum 50) |
+| `--max-results N` | JSON/plain: 50; path-only/TUI: 0 | Maximum matching files to return. An explicit `0` means unlimited |
 | `--workers N` | 4 | Stage 2 filter worker count |
 | `--heavy-concurrency N` | auto | Concurrent heavy (binary) extractions |
 | `--file-timeout-binary N` | 1000 | Timeout in ms for binary extraction |
@@ -168,10 +169,25 @@ Use `--partial=contains` for raw substring matching when internal matches are
 useful: `deploy` also matches `redeploy` and `autodeploy`. Contains mode is broad,
 so prefer prefix mode for technical terms and code identifiers when possible.
 
-Append `*` to an individual query term for an inline glob. For example,
-`garp deploy* service` applies prefix matching to `deploy` while `service` remains
-whole-word matching, without enabling a global partial mode. This is useful when
-only one term needs expansion.
+Use `*` and `?` inside an individual query term for inline wildcard matching.
+For example, `ms-*-api` matches `ms-option-api`, `ms-?-api` matches
+`ms-a-api`, and `*OptionApi*` matches `defaultMsOptionApiOrigin`. `?` matches
+exactly one byte. An internal `*` matches zero or more bytes. An edge wildcard,
+`*` or `?`, removes the matcher boundary on that side. An edge `?` still
+consumes one byte. An edge `*` consumes no bytes in the selected exact range.
+Inline wildcards work with every partial mode.
+
+Wildcard expansion accepts only ASCII letters, digits, `_`, `.`, and `-`.
+It cannot consume spaces, tabs, newlines, or other punctuation. Consecutive
+stars collapse before matching and output, so `ms-**-api` becomes `ms-*-api`.
+
+A wildcard term is valid only when it has 2 to 128 literal bytes, at most four
+`*` characters, and at most 16 `?` characters after star collapse. Each
+internal `*` can consume at most `floor(128 / canonical star count)` bytes.
+The divisor includes all canonical `*` characters, including leading and
+trailing stars. If a term exceeds any bound, garp treats `*` and `?` as literal
+characters and applies whole-token matching. This fallback applies in `off`,
+`prefix`, and `contains` modes.
 
 Prefix matching supports standard punctuation plus `snake_case` and `kebab-case`
 identifier boundaries. Go's RE2 regex engine does not support zero-width
@@ -194,6 +210,8 @@ filtering unrelated results.
     "include_code": true
   },
   "matches": 2,
+  "returned": 2,
+  "truncated": false,
   "results": [
     {
       "file": "/path/to/audio2midi/dsp.py",
@@ -216,9 +234,24 @@ filtering unrelated results.
 
 Each result includes ranked-match metadata. `score` is the sum of the lengths
 of the distinct matched query terms, `term_count` is their count, and
-`matched_terms` lists them in query order. Results sort by score, then term
-count, then the number of top-quality chunks (chunks matching the file's best
-window), then tighter match span, then file path.
+`matched_terms` lists them in query order.
+
+Every output mode uses the same seven ranking tiers:
+
+1. `score`, descending
+2. `term_count`, descending
+3. `PathMatchCount`, descending
+4. `BoundaryQuality`, descending
+5. match span length, ascending
+6. `TopQualityChunks`, descending
+7. file path, ascending: slash-normalized, case-insensitive byte order, then
+   exact byte order
+
+`PathMatchCount` is the number of distinct query terms represented in the
+path relative to the search root. `BoundaryQuality` rewards terms that match
+on both identifier boundaries. `TopQualityChunks` counts non-overlapping
+windows with the file's best score and term count. These fields set file order
+before excerpt extraction. `--max-excerpts` cannot change file order.
 
 Chunks within a file form a per-file ranked subset: with `--max-excerpts N`
 every match quality tier from the query's minimum requirement up to the full
@@ -241,12 +274,27 @@ rendered `text` (the excerpt window pads a little context around the match and c
 into one line). In practice this is what you want: it lands you on the match. Line numbers are
 present for text/code files and omitted for binary/extracted formats (PDF, DOCX, email) that have
 no stable source lines. The plain (`--plain`) output prefixes each excerpt with `[L<start>]` when known.
-Each plain result begins with `MATCH X/Y [Score: S (T/N terms)]`, where `X/Y`
-is the result position and total, `S` is the score, `T` is the matched-term
-count, and `N` is the total query-term count.
+Each plain result begins with `MATCH X/Y [Score: S (T/N terms)]`, where `Y`
+is the number of returned files, `S` is the score, `T` is the matched-term
+count, and `N` is the total query-term count. When output is truncated, plain
+output ends with this exact footer:
 
-`matches` is always present as a top-level integer so callers can zero-check without
-iterating `results`. Errors go to stderr; check exit code before parsing stdout as JSON.
+```text
+# truncated: showing <returned> of <matches> matching files (use --max-results 0 for all)
+```
+
+The footer is omitted when all matching files are returned.
+
+`--max-results` limits returned files after ranking. JSON and plain output
+default to 50. Path-only output and the TUI default to unlimited. An explicit
+`--max-results 0` selects unlimited output in every mode.
+
+JSON always includes `matches`, `returned`, and `truncated`. `matches` is the
+deduplicated matching-file count, adjusted only for file-open, extraction, or
+zero-excerpt failures observed while garp fills the result limit. `returned`
+is the number of entries in `results`. `truncated` is true when `returned` is
+less than the adjusted `matches`. Errors go to stderr; check the exit code
+before parsing stdout as JSON.
 
 ### Bounded-overlap excerpts
 

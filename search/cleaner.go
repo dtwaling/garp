@@ -3,9 +3,11 @@ package search
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 var (
@@ -119,11 +121,20 @@ func CleanContentCode(content string) string {
 // count) of the window that framed it. Quality fields are zero for
 // fallback-path excerpts that do not frame a ranked window.
 type excerptSpan struct {
-	text      string
-	left      int
-	right     int
-	score     int
-	termCount int
+	text          string
+	left          int
+	right         int
+	score         int
+	termCount     int
+	matches       []excerptMatch
+	sourceText    string
+	sourceMatches []excerptMatch
+}
+
+type excerptMatch struct {
+	matchRange
+	source matchRange
+	term   int
 }
 
 func excerptSpanTexts(spans []excerptSpan) []string {
@@ -189,6 +200,153 @@ func excerptOverlapUnion(candidate excerptSpan, emitted []excerptSpan) int {
 func excerptSpanWithinOverlapTolerance(candidate excerptSpan, emitted []excerptSpan) bool {
 	overlap := excerptOverlapUnion(candidate, emitted)
 	return overlap <= int(excerptOverlapTolerance*float64(candidate.right-candidate.left))
+}
+
+func firstRangeWithin(ranges []matchRange, left, right int) (matchRange, bool) {
+	i := sort.Search(len(ranges), func(i int) bool {
+		return ranges[i].start >= left
+	})
+	for ; i < len(ranges) && ranges[i].start < right; i++ {
+		if ranges[i].end <= right {
+			return ranges[i], true
+		}
+	}
+	return matchRange{}, false
+}
+
+func utf8BudgetCut(text string, budget int) int {
+	if budget <= 0 {
+		return 0
+	}
+	if budget >= len(text) {
+		return len(text)
+	}
+	if !utf8.ValidString(text) {
+		return budget
+	}
+	for budget > 0 && !utf8.RuneStart(text[budget]) {
+		budget--
+	}
+	return budget
+}
+
+func truncateExcerpt(text string, matches []excerptMatch, budget int) (string, []excerptMatch) {
+	if budget >= len(text) {
+		return text, matches
+	}
+	cut := utf8BudgetCut(text, budget)
+	text = text[:cut]
+	matches = slices.DeleteFunc(matches, func(match excerptMatch) bool {
+		return match.start >= cut || match.end <= match.start
+	})
+	for i := range matches {
+		if matches[i].end > cut {
+			matches[i].end = cut
+		}
+	}
+	return text, matches
+}
+
+func normalizeExcerptBounds(source string, left, right int) (int, int) {
+	if !utf8.ValidString(source) {
+		return left, right
+	}
+	for left < right && !utf8.RuneStart(source[left]) {
+		left++
+	}
+	for right > left && right < len(source) && !utf8.RuneStart(source[right]) {
+		right--
+	}
+	return left, right
+}
+
+func formatExcerptText(source string, left, right, budget int, matches []excerptMatch) (string, []excerptMatch) {
+	return formatExcerptTextBoundaryMatches(source, left, right, budget, matches, false)
+}
+
+func formatMultipartExcerptText(source string, left, right int, matches []excerptMatch) (string, []excerptMatch) {
+	return formatExcerptTextBoundaryMatches(source, left, right, 0, matches, true)
+}
+
+func formatExcerptTextBoundaryMatches(source string, left, right, budget int, matches []excerptMatch, clampBoundaries bool) (string, []excerptMatch) {
+	left, right = normalizeExcerptBounds(source, left, right)
+	raw := source[left:right]
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	trimLeft := strings.Index(raw, trimmed)
+	trimRight := trimLeft + len(trimmed)
+
+	local := make([]excerptMatch, 0, len(matches))
+	visibleLeft := left + trimLeft
+	visibleRight := left + trimRight
+	for _, match := range matches {
+		if match.end <= visibleLeft || match.start >= visibleRight {
+			continue
+		}
+		if !clampBoundaries && (match.start < visibleLeft || match.end > visibleRight) {
+			continue
+		}
+		matchStart := max(match.start, visibleLeft)
+		matchEnd := min(match.end, visibleRight)
+		local = append(local, excerptMatch{
+			matchRange: matchRange{start: matchStart - visibleLeft, end: matchEnd - visibleLeft},
+			source:     match.source,
+			term:       match.term,
+		})
+	}
+
+	text := trimmed
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.ReplaceAll(text, "\t", " ")
+	text, local = replaceExcerptText(text, dividerRegex, " ", local)
+	text, local = replaceExcerptText(text, whitespaceRegex, " ", local)
+	if budget > 0 && len(text) > budget {
+		text, local = truncateExcerpt(text, local, budget)
+	}
+	return text, local
+}
+
+func replaceExcerptText(text string, re *regexp.Regexp, replacement string, matches []excerptMatch) (string, []excerptMatch) {
+	replacements := re.FindAllStringIndex(text, -1)
+	if len(replacements) == 0 {
+		return text, matches
+	}
+
+	mapOffset := func(offset int) int {
+		delta := 0
+		for _, loc := range replacements {
+			if offset <= loc[0] {
+				break
+			}
+			if offset >= loc[1] {
+				delta += len(replacement) - (loc[1] - loc[0])
+				continue
+			}
+			return loc[0] + delta
+		}
+		return offset + delta
+	}
+	mapped := matches[:0]
+	for _, match := range matches {
+		changed := false
+		for _, loc := range replacements {
+			if match.start < loc[1] && match.end > loc[0] && text[loc[0]:loc[1]] != replacement {
+				changed = true
+				break
+			}
+		}
+		if changed {
+			continue
+		}
+		match.start = mapOffset(match.start)
+		match.end = mapOffset(match.end)
+		if match.end > match.start {
+			mapped = append(mapped, match)
+		}
+	}
+	return re.ReplaceAllString(text, replacement), mapped
 }
 
 func emittedOverlapRight(candidate excerptSpan, emitted []excerptSpan) int {
@@ -288,7 +446,8 @@ func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts
 // ExtractMeaningfulExcerptsPartial returns targeted excerpts using the requested
 // term matching mode.
 func ExtractMeaningfulExcerptsPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, partial PartialMode) []string {
-	return excerptSpanTexts(extractExcerptSpansPartial(content, searchTerms, maxExcerpts, targetScore, false, partial))
+	query := compileQuery(searchTerms, partial)
+	return excerptSpanTexts(extractExcerptSpansQuery(content, query, maxExcerpts, targetScore, false))
 }
 
 // ExtractMeaningfulExcerptsCode is the code-aware variant of ExtractMeaningfulExcerpts. It uses
@@ -299,7 +458,8 @@ func ExtractMeaningfulExcerptsCode(content string, searchTerms []string, maxExce
 
 // ExtractMeaningfulExcerptsCodePartial is the code-aware partial-match variant.
 func ExtractMeaningfulExcerptsCodePartial(content string, searchTerms []string, maxExcerpts int, targetScore int, partial PartialMode) []string {
-	return excerptSpanTexts(extractExcerptSpansPartial(content, searchTerms, maxExcerpts, targetScore, true, partial))
+	query := compileQuery(searchTerms, partial)
+	return excerptSpanTexts(extractExcerptSpansQuery(content, query, maxExcerpts, targetScore, true))
 }
 
 // extractExcerptSpans extracts spans with default whole-word matching.
@@ -308,7 +468,12 @@ func extractExcerptSpans(content string, searchTerms []string, maxExcerpts int, 
 }
 
 func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, isCode bool, partial PartialMode) []excerptSpan {
-	return extractRankedExcerptSpansPartial(content, searchTerms, maxExcerpts, targetScore, 0, isCode, partial)
+	query := compileQuery(searchTerms, partial)
+	return extractExcerptSpansQuery(content, query, maxExcerpts, targetScore, isCode)
+}
+
+func extractExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetScore int, isCode bool) []excerptSpan {
+	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetScore, 0, isCode)
 }
 
 // extractRankedExcerptSpans emits per-file chunks ranked best-first. Every
@@ -323,6 +488,12 @@ func extractRankedExcerptSpans(content string, searchTerms []string, maxExcerpts
 // enables multi-level candidate generation (per-file ranked subsets); the
 // legacy single-level behavior runs otherwise.
 func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
+	query := compileQuery(searchTerms, partial)
+	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetScore, minTerms, isCode)
+}
+
+// extractRankedExcerptSpansQuery reuses the execution's exact matcher ranges.
+func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetScore int, minTerms int, isCode bool) []excerptSpan {
 	var cleaned string
 	if isCode {
 		// Minimal cleaning: preserve every code token; only normalize control chars/whitespace.
@@ -345,27 +516,12 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 	if maxExcerpts <= 0 {
 		maxExcerpts = 3
 	}
-	if len(cleaned) == 0 || len(searchTerms) == 0 {
+	if len(cleaned) == 0 || len(query.matchers) == 0 {
 		return []excerptSpan{}
 	}
 
-	// Build regexes for each term using the same partial-aware matcher as filtering.
-	// termWords stays parallel to termRE for per-window scoring.
-	termRE := make([]*regexp.Regexp, 0, len(searchTerms))
-	termWords := make([]string, 0, len(searchTerms))
-	for _, t := range searchTerms {
-		tt := strings.TrimSpace(t)
-		if tt == "" {
-			continue
-		}
-		termRE = append(termRE, buildTermRegexCI(tt, partial))
-		termWords = append(termWords, tt)
-	}
-	if len(termRE) == 0 {
-		return []excerptSpan{}
-	}
-	if targetScore <= 0 || targetScore > len(termRE) {
-		targetScore = len(termRE)
+	if targetScore <= 0 || targetScore > len(query.matchers) {
+		targetScore = len(query.matchers)
 	}
 	// Coverage levels that can seed a chunk. Ranked mode (minTerms > 0) spans
 	// minTerms up to the full term set so every quality tier of cluster is
@@ -373,7 +529,7 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 	levelMin, levelMax := targetScore, targetScore
 	if minTerms > 0 {
 		levelMin = max(1, minTerms)
-		levelMax = len(termRE)
+		levelMax = len(query.matchers)
 	}
 
 	// Clamp window for scanning sentence boundaries around each match
@@ -403,16 +559,14 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 		end   int
 		idx   int
 	}
-	type candidate struct {
-		left  int
-		right int
-	}
 	all := make([]tmatch, 0, 128)
-	for i, re := range termRE {
-		idxs := re.FindAllStringSubmatchIndex(cleaned, -1)
-		for _, loc := range idxs {
-			start, end := submatchRange(loc)
-			all = append(all, tmatch{start: start, end: end, idx: i})
+	rangesByMatcher := make([][]matchRange, len(query.matchers))
+	allExactMatches := make([]excerptMatch, 0, 128)
+	for i, matcher := range query.matchers {
+		rangesByMatcher[i] = matcher.findAll(cleaned)
+		for _, loc := range rangesByMatcher[i] {
+			all = append(all, tmatch{start: loc.start, end: loc.end, idx: i})
+			allExactMatches = append(allExactMatches, excerptMatch{matchRange: loc, source: loc, term: i})
 		}
 	}
 	if len(all) > 0 {
@@ -429,7 +583,7 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 		}
 		candidates := make([]candidate, 0, maxExcerpts)
 		for level := levelMax; level >= levelMin; level-- {
-			counts := make(map[int]int, len(termRE))
+			counts := make(map[int]int, len(query.matchers))
 			covered := 0
 			r := 0
 			for l := 0; l < len(all); l++ {
@@ -451,7 +605,7 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 					}
 					for idx, count := range counts {
 						if count > 0 {
-							score += len(termWords[idx])
+							score += len(query.terms[idx])
 							termCount++
 						}
 					}
@@ -536,51 +690,58 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 			}
 
 			if span <= budget {
-				ex := strings.TrimSpace(cleaned[window.left:window.right])
-				ex = strings.ReplaceAll(ex, "\n", " ")
-				ex = strings.ReplaceAll(ex, "	", " ")
-				ex = dividerRegex.ReplaceAllString(ex, " ")
-				ex = whitespaceRegex.ReplaceAllString(ex, " ")
-				if len(ex) > budget {
-					ex = ex[:budget]
-				}
+				formatLeft, formatRight := normalizeExcerptBounds(cleaned, window.left, window.right)
+				ex, matches := formatExcerptText(cleaned, formatLeft, formatRight, budget, allExactMatches)
 				if _, ok := seen[ex]; !ok && ex != "" {
 					seen[ex] = struct{}{}
-					excerpts = append(excerpts, excerptSpan{text: ex, left: window.left, right: window.right, score: c.score, termCount: c.termCount})
+					excerpts = append(excerpts, excerptSpan{
+						text: ex, left: formatLeft, right: formatRight,
+						score: c.score, termCount: c.termCount, matches: matches,
+						sourceText: cleaned, sourceMatches: allExactMatches,
+					})
 					emitted = append(emitted, window)
 				}
 			} else {
-				perTerm := budget / max(1, len(termRE))
+				perTerm := budget / max(1, len(query.matchers))
 				if perTerm < 60 {
 					perTerm = 60
 				}
-				parts := make([]string, 0, len(termRE))
-				spanText := cleaned[c.left:c.right]
-				for _, re := range termRE {
-					loc := re.FindStringSubmatchIndex(spanText)
-					if loc == nil {
+				parts := make([]string, 0, len(query.matchers))
+				partMatches := make([]excerptMatch, 0, len(query.matchers))
+				for i := range query.matchers {
+					loc, ok := firstRangeWithin(rangesByMatcher[i], c.left, c.right)
+					if !ok {
 						continue
 					}
-					start, end := submatchRange(loc)
-					center := c.left + start + (end-start)/2
+					center := loc.start + (loc.end-loc.start)/2
 					partLeft := max(0, center-perTerm/2)
 					partRight := min(len(cleaned), center+perTerm/2)
-					frag := strings.TrimSpace(cleaned[partLeft:partRight])
-					frag = strings.ReplaceAll(frag, "\n", " ")
-					frag = strings.ReplaceAll(frag, "	", " ")
-					frag = dividerRegex.ReplaceAllString(frag, " ")
-					frag = whitespaceRegex.ReplaceAllString(frag, " ")
+					partLeft, partRight = normalizeExcerptBounds(cleaned, partLeft, partRight)
+					frag, fragMatches := formatMultipartExcerptText(cleaned, partLeft, partRight, allExactMatches)
 					if frag != "" {
+						shift := 0
+						if len(parts) > 0 {
+							shift = len(strings.Join(parts, " ... ")) + len(" ... ")
+						}
+						for _, match := range fragMatches {
+							match.start += shift
+							match.end += shift
+							partMatches = append(partMatches, match)
+						}
 						parts = append(parts, frag)
 					}
 				}
 				ex := strings.Join(parts, " ... ")
 				if len(ex) > budget {
-					ex = ex[:budget]
+					ex, partMatches = truncateExcerpt(ex, partMatches, budget)
 				}
 				if _, ok := seen[ex]; !ok && ex != "" {
 					seen[ex] = struct{}{}
-					excerpts = append(excerpts, excerptSpan{text: ex, left: c.left, right: c.right, score: c.score, termCount: c.termCount})
+					excerpts = append(excerpts, excerptSpan{
+						text: ex, left: c.left, right: c.right,
+						score: c.score, termCount: c.termCount, matches: partMatches,
+						sourceText: cleaned, sourceMatches: allExactMatches,
+					})
 					emitted = append(emitted, window)
 				}
 			}
@@ -591,32 +752,33 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 	}
 
 	// Ensure at least one sentence per term (when possible)
-	for _, re := range termRE {
+	for _, ranges := range rangesByMatcher {
 		if len(excerpts) >= maxExcerpts {
 			break
 		}
-		locs := re.FindAllStringSubmatchIndex(cleaned, 3) // up to 3 matches per term
-		for _, loc := range locs {
+		if len(ranges) > 3 {
+			ranges = ranges[:3]
+		}
+		for _, loc := range ranges {
 			if len(excerpts) >= maxExcerpts {
 				break
 			}
-			start, end := submatchRange(loc)
-			left, right := expandToBoundaries(cleaned, start, end, maxContext)
+			left, right := expandToBoundaries(cleaned, loc.start, loc.end, maxContext)
+			left, right = normalizeExcerptBounds(cleaned, left, right)
 
-			// Build sentence snippet and normalize whitespace
-			ex := strings.TrimSpace(cleaned[left:right])
+			ex, matches := formatExcerptText(cleaned, left, right, 0, allExactMatches)
 			if ex == "" {
 				continue
 			}
-			ex = strings.ReplaceAll(ex, "\n", " ")
-			ex = strings.ReplaceAll(ex, "\t", " ")
-			ex = whitespaceRegex.ReplaceAllString(ex, " ")
 
 			if _, ok := seen[ex]; ok {
 				continue
 			}
 			seen[ex] = struct{}{}
-			excerpts = append(excerpts, excerptSpan{text: ex, left: left, right: right})
+			excerpts = append(excerpts, excerptSpan{
+				text: ex, left: left, right: right, matches: matches,
+				sourceText: cleaned, sourceMatches: allExactMatches,
+			})
 		}
 	}
 
@@ -632,7 +794,11 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 		total := 0
 		for i := range excerpts {
 			if len(excerpts[i].text) > maxEx {
-				excerpts[i].text = excerpts[i].text[:maxEx]
+				excerpts[i].text, excerpts[i].matches = truncateExcerpt(
+					excerpts[i].text,
+					excerpts[i].matches,
+					maxEx,
+				)
 			}
 			total += len(excerpts[i].text)
 			if total > maxTotal {
@@ -643,7 +809,11 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 					cut = 0
 				}
 				if cut < len(excerpts[i].text) {
-					excerpts[i].text = excerpts[i].text[:cut]
+					excerpts[i].text, excerpts[i].matches = truncateExcerpt(
+						excerpts[i].text,
+						excerpts[i].matches,
+						cut,
+					)
 				}
 				excerpts = excerpts[:i+1]
 				break
@@ -653,20 +823,20 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 	}
 
 	// Fallback: find the first occurrence of any term and expand within a small window
-	for _, re := range termRE {
-		loc := re.FindStringSubmatchIndex(cleaned)
-		if loc == nil {
+	for _, ranges := range rangesByMatcher {
+		if len(ranges) == 0 {
 			continue
 		}
-		start, end := submatchRange(loc)
-		left, right := expandToBoundaries(cleaned, start, end, maxContext)
+		loc := ranges[0]
+		left, right := expandToBoundaries(cleaned, loc.start, loc.end, maxContext)
+		left, right = normalizeExcerptBounds(cleaned, left, right)
 
-		ex := strings.TrimSpace(cleaned[left:right])
-		ex = strings.ReplaceAll(ex, "\n", " ")
-		ex = strings.ReplaceAll(ex, "	", " ")
-		ex = whitespaceRegex.ReplaceAllString(ex, " ")
+		ex, matches := formatExcerptText(cleaned, left, right, 0, allExactMatches)
 		if ex != "" {
-			return []excerptSpan{{text: ex, left: left, right: right}}
+			return []excerptSpan{{
+				text: ex, left: left, right: right, matches: matches,
+				sourceText: cleaned, sourceMatches: allExactMatches,
+			}}
 		}
 	}
 
@@ -682,171 +852,161 @@ func submatchRange(loc []int) (int, int) {
 	return loc[0], loc[1]
 }
 
-// matchInfo represents a search term match location
-type matchInfo struct {
-	start int
-	end   int
-	term  string
-}
+func expandShortExcerptSpan(span excerptSpan, target int) excerptSpan {
+	sentences := sourceSentenceSpans(span.sourceText, span.sourceMatches)
+	if len(sentences) == 0 || len(span.matches) == 0 || len(span.sourceMatches) == 0 {
+		return span
+	}
 
-// containsAnySearchTerm checks if text contains any of the search terms
-func containsAnySearchTerm(text string, searchTerms []string) bool {
-	for _, term := range searchTerms {
-		if containsWholeWord(text, term) {
-			return true
+	sentenceAt := func(pos int) int {
+		i := sort.Search(len(sentences), func(i int) bool {
+			return sentences[i].end > pos
+		})
+		if i < len(sentences) && sentences[i].start <= pos {
+			return i
+		}
+		return -1
+	}
+	left, right := len(sentences), -1
+	for _, match := range span.matches {
+		first := sentenceAt(match.source.start)
+		last := sentenceAt(match.source.end - 1)
+		if first == -1 || last == -1 {
+			return span
+		}
+		left = min(left, first)
+		right = max(right, last)
+	}
+	if right == -1 {
+		return span
+	}
+	if sentences[right].end-sentences[left].start > target {
+		return span
+	}
+
+	expanded := span
+	for {
+		text, matches := formatExcerptText(
+			span.sourceText,
+			sentences[left].start,
+			sentences[right].end,
+			0,
+			span.sourceMatches,
+		)
+		expanded.text = text
+		expanded.left = sentences[left].start
+		expanded.right = sentences[right].end
+		expanded.matches = matches
+		if len(text) >= target || left == 0 && right == len(sentences)-1 {
+			return expanded
+		}
+		if left > 0 {
+			left--
+		}
+		if len(text) < target && right < len(sentences)-1 {
+			right++
 		}
 	}
-	return false
 }
 
-// splitIntoSentences splits content into sentences for better excerpt extraction
-// Improved boundaries:
-// - End at punctuation followed by whitespace OR directly followed by an uppercase letter.
-// - Avoid splitting inside common abbreviations (e.g., "e.g.", "i.e.", "Dr.", "U.S.") and decimals (e.g., "3.14").
-// - Treat double newlines as hard paragraph boundaries.
-// Falls back to line or chunk splitting when boundaries are scarce.
-func splitIntoSentences(content string) []string {
-	// Clean content first
-	cleaned := CleanContent(content)
-	if strings.TrimSpace(cleaned) == "" {
-		return []string{}
-	}
-
-	// Common abbreviations (lowercased without trailing dot)
-	abbr := map[string]bool{
+func sourceSentenceSpans(text string, matches []excerptMatch) []matchRange {
+	abbreviations := map[string]bool{
 		"mr": true, "mrs": true, "ms": true, "dr": true, "prof": true,
 		"sr": true, "jr": true, "st": true, "vs": true, "no": true,
-		"inc": true, "ltd": true, "co": true, "u.s": true, "u.k": true,
-		"e.g": true, "i.e": true,
+		"inc": true, "ltd": true, "co": true,
+	}
+	matchRanges := make([]matchRange, 0, len(matches))
+	for _, match := range matches {
+		if match.source.end > match.source.start {
+			matchRanges = append(matchRanges, match.source)
+		}
+	}
+	sort.Slice(matchRanges, func(i, j int) bool {
+		return matchRanges[i].start < matchRanges[j].start
+	})
+	for i := 1; i < len(matchRanges); i++ {
+		if matchRanges[i].end < matchRanges[i-1].end {
+			matchRanges[i].end = matchRanges[i-1].end
+		}
+	}
+	boundaryInsideMatch := func(boundary int) bool {
+		firstAtOrAfterBoundary := sort.Search(len(matchRanges), func(i int) bool {
+			return matchRanges[i].start >= boundary
+		})
+		return firstAtOrAfterBoundary > 0 &&
+			matchRanges[firstAtOrAfterBoundary-1].end > boundary
 	}
 
-	sentences := make([]string, 0, 16)
-	var sb strings.Builder
+	var spans []matchRange
+	start := 0
+	appendSpan := func(end int) {
+		for start < end {
+			r, size := utf8.DecodeRuneInString(text[start:end])
+			if r == utf8.RuneError && size == 1 || !unicode.IsSpace(r) {
+				break
+			}
+			start += size
+		}
+		for end > start {
+			r, size := utf8.DecodeLastRuneInString(text[start:end])
+			if r == utf8.RuneError && size == 1 || !unicode.IsSpace(r) {
+				break
+			}
+			end -= size
+		}
+		if end > start {
+			spans = append(spans, matchRange{start: start, end: end})
+		}
+		start = end
+	}
 
-	isUpper := func(r rune) bool { return unicode.IsUpper(r) }
-	isDigit := func(r rune) bool { return r >= '0' && r <= '9' }
-
-	runes := []rune(cleaned)
-	n := len(runes)
-	for i := 0; i < n; i++ {
-		r := runes[i]
-		sb.WriteRune(r)
-
-		// Hard paragraph boundary on double newline
-		if r == '\n' {
-			if i+1 < n && runes[i+1] == '\n' {
-				s := strings.TrimSpace(sb.String())
-				if s != "" {
-					sentences = append(sentences, s)
+	for i := 0; i < len(text); i++ {
+		if text[i] == '\n' && i+1 < len(text) && text[i+1] == '\n' {
+			if boundaryInsideMatch(i+1) || boundaryInsideMatch(i+2) {
+				i++
+				continue
+			}
+			appendSpan(i)
+			start = i + 2
+			i++
+			continue
+		}
+		if text[i] != '.' && text[i] != '!' && text[i] != '?' {
+			continue
+		}
+		end := i + 1
+		if boundaryInsideMatch(end) {
+			continue
+		}
+		if text[i] == '.' {
+			if i > 0 && i+1 < len(text) && text[i-1] >= '0' && text[i-1] <= '9' &&
+				text[i+1] >= '0' && text[i+1] <= '9' {
+				continue
+			}
+			tokenStart := i
+			for tokenStart > start {
+				r, size := utf8.DecodeLastRuneInString(text[start:tokenStart])
+				if !unicode.IsLetter(r) {
+					break
 				}
-				sb.Reset()
-				i++ // consume the second newline
+				tokenStart -= size
+			}
+			if abbreviations[strings.ToLower(text[tokenStart:i])] {
 				continue
 			}
 		}
-
-		// Sentence-ending punctuation
-		if r == '.' || r == '!' || r == '?' {
-			// Avoid decimals: digit '.' digit
-			if i > 0 && i+1 < n && isDigit(runes[i-1]) && isDigit(runes[i+1]) {
-				continue
-			}
-
-			// Abbreviation check: capture token before dot
-			j := i - 1
-			for j >= 0 && unicode.IsSpace(runes[j]) {
-				j--
-			}
-			k := j
-			for k >= 0 && unicode.IsLetter(runes[k]) {
-				k--
-			}
-			token := strings.ToLower(string(runes[k+1 : j+1])) // letters immediately before '.'
-			if token != "" && abbr[token] {
-				// e.g., "Dr.", "Inc.", "e.g.", "U.S."
-				// For initialisms like "U.S." the next '.' will be handled here as well.
-				continue
-			}
-
-			// Decide boundary based on next rune
-			nextIsUpper, nextIsSpace := false, false
-			if i+1 < n {
-				next := runes[i+1]
-				nextIsUpper = isUpper(next)
-				nextIsSpace = unicode.IsSpace(next)
-			} else {
-				nextIsSpace = true
-			}
-
-			if nextIsSpace || nextIsUpper {
-				// End of sentence here
-				s := strings.TrimSpace(sb.String())
-				if s != "" {
-					sentences = append(sentences, s)
-				}
-				sb.Reset()
-
-				// Skip a single space after punctuation to avoid leading space
-				if nextIsSpace && i+1 < n && unicode.IsSpace(runes[i+1]) {
-					i++
-				}
-			}
+		nextUpper := false
+		if end < len(text) {
+			next, _ := utf8.DecodeRuneInString(text[end:])
+			nextUpper = unicode.IsUpper(next)
+		}
+		if end == len(text) || nextUpper || end < len(text) && (text[end] == ' ' || text[end] == '\t' || text[end] == '\r' || text[end] == '\n') {
+			appendSpan(end)
+			start = end
 		}
 	}
-
-	// Flush remainder
-	if sb.Len() > 0 {
-		s := strings.TrimSpace(sb.String())
-		if s != "" {
-			sentences = append(sentences, s)
-		}
-	}
-
-	// Fallbacks when we couldn't segment well
-	if len(sentences) == 0 {
-		parts := strings.Split(cleaned, "\n")
-		if len(parts) > 1 {
-			return parts
-		}
-		if len(cleaned) > 500 {
-			if strings.Contains(cleaned, "  ") {
-				return strings.Split(cleaned, "  ")
-			}
-			return chunkText(cleaned, 100)
-		}
-		return []string{cleaned}
-	}
-
-	return sentences
-}
-
-// chunkText splits text into chunks at word boundaries
-func chunkText(text string, chunkSize int) []string {
-	words := strings.Fields(text)
-	if len(words) == 0 {
-		return []string{text}
-	}
-
-	var chunks []string
-	var currentChunk strings.Builder
-
-	for _, word := range words {
-		if currentChunk.Len()+len(word)+1 > chunkSize && currentChunk.Len() > 0 {
-			chunks = append(chunks, currentChunk.String())
-			currentChunk.Reset()
-		}
-
-		if currentChunk.Len() > 0 {
-			currentChunk.WriteString(" ")
-		}
-		currentChunk.WriteString(word)
-	}
-
-	if currentChunk.Len() > 0 {
-		chunks = append(chunks, currentChunk.String())
-	}
-
-	return chunks
+	appendSpan(len(text))
+	return spans
 }
 
 // containsWholeWord checks if text contains a whole word (case insensitive, plural-aware)
@@ -865,35 +1025,62 @@ func HighlightTerms(text string, searchTerms []string) string {
 // HighlightTermsPartial highlights search terms without coloring left boundary
 // characters consumed by prefix-match patterns.
 func HighlightTermsPartial(text string, searchTerms []string, partial PartialMode) string {
-	const HI = "\033[1;31m" // bold red for stronger, more visible highlighting
+	return highlightTermsQuery(text, compileQuery(searchTerms, partial))
+}
+
+func highlightTermsQuery(text string, query compiledQuery) string {
+	var ranges []matchRange
+	for _, matcher := range query.matchers {
+		ranges = append(ranges, matcher.findAll(text)...)
+	}
+	return highlightExactRanges(text, ranges)
+}
+
+func highlightExcerptSpan(span excerptSpan) string {
+	ranges := make([]matchRange, len(span.matches))
+	for i, match := range span.matches {
+		ranges[i] = match.matchRange
+	}
+	return highlightExactRanges(span.text, ranges)
+}
+
+func highlightExactRanges(text string, ranges []matchRange) string {
+	const HI = "\033[1;31m"
 	const NC = "\033[0m"
 
-	result := text
-	for _, term := range searchTerms {
-		base := strings.TrimSpace(term)
-		mode := partial
-		isGlob := strings.HasSuffix(base, "*") && len(strings.TrimSuffix(base, "*")) > 1
-		if isGlob {
-			base = strings.TrimSuffix(base, "*")
-			if mode != PartialModeContains {
-				mode = PartialModePrefix
+	if len(ranges) == 0 {
+		return text
+	}
+	sort.SliceStable(ranges, func(i, j int) bool {
+		if ranges[i].start != ranges[j].start {
+			return ranges[i].start < ranges[j].start
+		}
+		return ranges[i].end > ranges[j].end
+	})
+	merged := ranges[:0]
+	for _, loc := range ranges {
+		if loc.end <= loc.start {
+			continue
+		}
+		if len(merged) > 0 && loc.start < merged[len(merged)-1].end {
+			if loc.end > merged[len(merged)-1].end {
+				merged[len(merged)-1].end = loc.end
 			}
-		} else if len(base) <= 2 {
-			mode = PartialModeOff
+			continue
 		}
-
-		switch mode {
-		case PartialModePrefix:
-			pattern := fmt.Sprintf(`(?i)(^|[^a-zA-Z0-9_]|_)(%s\w*)`, regexp.QuoteMeta(base))
-			result = getWordRegex(pattern).ReplaceAllString(result, "$1"+HI+"$2"+NC)
-		case PartialModeContains:
-			pattern := fmt.Sprintf(`(?i)(%s)`, regexp.QuoteMeta(base))
-			result = getWordRegex(pattern).ReplaceAllString(result, HI+"$1"+NC)
-		default:
-			pattern := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(term))
-			result = getWordRegex(pattern).ReplaceAllString(result, HI+"$0"+NC)
-		}
+		merged = append(merged, loc)
 	}
 
-	return result
+	var result strings.Builder
+	result.Grow(len(text) + len(merged)*(len(HI)+len(NC)))
+	cursor := 0
+	for _, loc := range merged {
+		result.WriteString(text[cursor:loc.start])
+		result.WriteString(HI)
+		result.WriteString(text[loc.start:loc.end])
+		result.WriteString(NC)
+		cursor = loc.end
+	}
+	result.WriteString(text[cursor:])
+	return result.String()
 }

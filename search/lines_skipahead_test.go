@@ -14,14 +14,9 @@ func TestExcerptLineAnchorsFollowDistinctRawClusters(t *testing.T) {
 		"between second and third",
 		"needle deploy third cluster",
 	}, "\n")
-	excerpts := []string{
-		"needle deploy first cluster",
-		"needle deploy second cluster",
-		"needle deploy third cluster",
-	}
-	terms := []string{"needle", "deploy"}
-
-	starts := computeExcerptLines(raw, excerpts, terms, 200)
+	query := compileQuery([]string{"needle", "deploy"}, PartialModeOff)
+	spans := lineSpans([]int{0, 1}, []int{0, 1}, []int{0, 1})
+	starts := computeExcerptSpanLinesQuery(raw, spans, query, 200)
 	want := []int{2, 4, 6}
 	if len(starts) != len(want) {
 		t.Fatalf("got %d anchors, want %d", len(starts), len(want))
@@ -50,15 +45,11 @@ func TestExcerptLineAnchorsFollowDistinctRawClusters(t *testing.T) {
 
 func TestExcerptLineAnchorsMayRepeatOnSingleLine(t *testing.T) {
 	raw := "needle deploy first cluster; needle deploy second cluster; needle deploy third cluster"
-	excerpts := []string{
-		"needle deploy first cluster",
-		"needle deploy second cluster",
-		"needle deploy third cluster",
-	}
-
-	starts := computeExcerptLines(raw, excerpts, []string{"needle", "deploy"}, 200)
-	if len(starts) != len(excerpts) {
-		t.Fatalf("got %d anchors, want %d", len(starts), len(excerpts))
+	query := compileQuery([]string{"needle", "deploy"}, PartialModeOff)
+	spans := lineSpans([]int{0, 1}, []int{0, 1}, []int{0, 1})
+	starts := computeExcerptSpanLinesQuery(raw, spans, query, 200)
+	if len(starts) != len(spans) {
+		t.Fatalf("got %d anchors, want %d", len(starts), len(spans))
 	}
 	for i, start := range starts {
 		if start != 1 {

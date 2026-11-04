@@ -8,6 +8,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,19 +26,22 @@ var version = "0.9.2"
 
 // Arguments for CLI flags (used to seed TUI)
 type Arguments struct {
-	SearchWords       []string
-	ExcludeWords      []string
-	IncludeCode       bool
-	Strict            bool
-	SmartForms        bool
-	Distance          int
-	HeavyConcurrency  int
-	FilterWorkers     int
-	FileTimeoutBinary int
-	MaxExcerpts       int
-	OnlyType          string
-	Partial           search.PartialMode
-	PartialErr        error // non-nil if --partial validation failed
+	SearchWords        []string
+	ExcludeWords       []string
+	IncludeCode        bool
+	Strict             bool
+	SmartForms         bool
+	Distance           int
+	HeavyConcurrency   int
+	FilterWorkers      int
+	FileTimeoutBinary  int
+	MaxExcerpts        int
+	MaxResults         int
+	MaxResultsProvided bool
+	MaxResultsErr      error // non-nil if --max-results validation failed
+	OnlyType           string
+	Partial            search.PartialMode
+	PartialErr         error // non-nil if --partial validation failed
 
 	// StartDir: base directory for file walks (--startdir flag).
 	// Empty string means use the current working directory.
@@ -87,6 +91,7 @@ func parseArguments(args []string) *Arguments {
 	expectTimeout := false
 	expectWorkers := false
 	expectMaxExcerpts := false
+	expectMaxResults := false
 	expectOnly := false
 	expectStartDir := false
 	expectPathScope := false
@@ -131,6 +136,20 @@ func parseArguments(args []string) *Arguments {
 				result.MaxExcerpts = n
 			}
 			expectMaxExcerpts = false
+			continue
+		}
+		if expectMaxResults {
+			result.MaxResultsErr = nil
+			n, err := strconv.Atoi(a)
+			switch {
+			case err != nil:
+				result.MaxResultsErr = fmt.Errorf("--max-results: invalid integer %q", a)
+			case n < 0:
+				result.MaxResultsErr = fmt.Errorf("--max-results: value must be non-negative")
+			default:
+				result.MaxResults = n
+			}
+			expectMaxResults = false
 			continue
 		}
 		if expectOnly {
@@ -182,6 +201,9 @@ func parseArguments(args []string) *Arguments {
 			expectWorkers = true
 		case "--max-excerpts":
 			expectMaxExcerpts = true
+		case "--max-results":
+			result.MaxResultsProvided = true
+			expectMaxResults = true
 		case "--only":
 			expectOnly = true
 		case "--startdir":
@@ -231,9 +253,13 @@ func parseArguments(args []string) *Arguments {
 		result.MaxFileSize = 0
 		result.MaxFileSizeErr = fmt.Errorf("--max-filesize: missing value")
 	}
+	if expectMaxResults {
+		result.MaxResultsErr = fmt.Errorf("--max-results: missing value")
+	}
 	if expectStartDir {
 		result.StartDirErr = fmt.Errorf("--startdir: missing value")
 	}
+	result.SearchWords = search.NormalizeQueryTerms(result.SearchWords)
 
 	// Auto-derive HeavyConcurrency when not explicitly provided: base on workers and available RAM
 	if !heavyProvided {
@@ -289,6 +315,52 @@ func parseArguments(args []string) *Arguments {
 	return result
 }
 
+func resolveMaxResults(args *Arguments) int {
+	if args.MaxResultsProvided {
+		return args.MaxResults
+	}
+	if args.PathOnly {
+		return 0
+	}
+	if args.JSONOutput || args.PlainOutput {
+		return 50
+	}
+	return 0
+}
+
+func newTUIModel(args *Arguments) model {
+	return model{
+		results:           []search.SearchResult{},
+		currentPage:       0,
+		pageSize:          1,
+		totalPages:        0,
+		searchTime:        0,
+		quitting:          false,
+		loading:           true,
+		width:             0,
+		height:            0,
+		searchWords:       args.SearchWords,
+		excludeWords:      args.ExcludeWords,
+		includeCode:       args.IncludeCode,
+		strict:            args.Strict,
+		partial:           args.Partial,
+		onlyType:          args.OnlyType,
+		distance:          args.Distance,
+		heavyConcurrency:  args.HeavyConcurrency,
+		fileTimeoutBinary: args.FileTimeoutBinary,
+		filterWorkers:     args.FilterWorkers,
+		maxResults:        resolveMaxResults(args),
+		maxExcerpts:       args.MaxExcerpts,
+		startDir:          args.StartDir,
+		pathScope:         args.PathScope,
+		noIgnore:          args.NoIgnore,
+		maxFileSize:       args.MaxFileSize,
+		confirmSelected:   "yes",
+		memUsageText:      "",
+		progressText:      "",
+	}
+}
+
 // showUsage (styled)
 func showUsage() {
 	fmt.Println()
@@ -306,7 +378,7 @@ func showUsage() {
 
 	// Usage
 	fmt.Println(subHeaderStyle.Render("USAGE"))
-	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--startdir PATH] [--pathscope PATTERNS] [--no-ignore] [--max-filesize SIZE] [--pathonly] [--plain] [--json] [--heavy-concurrency N] [--workers N] [--file-timeout-binary N] <word1> <word2> ... [--not <exclude1> <exclude2> ...]", 100)))
+	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--max-results N]\n[--startdir PATH] [--pathscope PATTERNS] [--no-ignore] [--max-filesize SIZE]\n[--pathonly] [--plain] [--json] [--heavy-concurrency N] [--workers N]\n[--file-timeout-binary N] <word1> <word2> ...\n[--not <exclude1> <exclude2> ...]", 100)))
 	fmt.Println()
 
 	// Flags
@@ -315,9 +387,12 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("  --strict                Require all search terms to match"))
 	fmt.Println(infoStyle.Render("  --partial[=MODE]        Enable partial word matching (prefix, contains)."))
 	fmt.Println(infoStyle.Render("                          Default mode: prefix. When omitted: whole-word."))
-	fmt.Println(infoStyle.Render("                          Tip: append * to a term (e.g. deploy*) for per-term prefix."))
+	fmt.Println(infoStyle.Render("                          Tip: valid query terms support inline * and ?."))
+	fmt.Println(infoStyle.Render("                          Invalid or over-limit wildcard terms match literally. See README for bounds."))
 	fmt.Println(infoStyle.Render("  --distance N            Proximity window in characters (default 5000)"))
 	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum excerpts per file; >=90% new content (up to 10% overlap; default 1, max 50)"))
+	fmt.Println(infoStyle.Render("  --max-results N         Maximum matching files; 0 = unlimited."))
+	fmt.Println(infoStyle.Render("                          Defaults: --json 50, --plain 50, --pathonly 0, TUI 0."))
 	fmt.Println(infoStyle.Render("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted)"))
 	fmt.Println(infoStyle.Render("  --workers N             Stage 2 text filter workers (default 2)"))
 	fmt.Println(infoStyle.Render("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000)"))
@@ -427,9 +502,11 @@ func formatLine(start int) string {
 
 // jsonOutput is the top-level envelope emitted by --json.
 type jsonOutput struct {
-	Query   jsonQuery    `json:"query"`
-	Matches int          `json:"matches"`
-	Results []jsonResult `json:"results"`
+	Query     jsonQuery    `json:"query"`
+	Matches   int          `json:"matches"`
+	Returned  int          `json:"returned"`
+	Truncated bool         `json:"truncated"`
+	Results   []jsonResult `json:"results"`
 }
 
 // jsonQuery echoes the search parameters back to the caller so the response is self-describing.
@@ -507,6 +584,7 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 		se.PathScope = args.PathScope
 	}
 	se.MaxExcerpts = args.MaxExcerpts
+	se.MaxResults = resolveMaxResults(args)
 	return se
 }
 
@@ -515,12 +593,27 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 func runJSON(args *Arguments) int {
 	se := newSilentSearchEngine(args)
 
-	results, err := se.Execute()
+	outcome, err := se.ExecuteDetailed()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
 		return 1
 	}
 
+	out := buildJSONOutput(args, outcome)
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	// Don't HTML-escape <, >, & -- code excerpts (PHP "<?php", Delphi generics, "&&") are
+	// far more readable as raw characters, and stdout consumers don't need HTML safety.
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(out); err != nil {
+		fmt.Fprintln(os.Stderr, "Error encoding JSON: "+err.Error())
+		return 1
+	}
+	return 0
+}
+
+func buildJSONOutput(args *Arguments, outcome search.ExecutionResult) jsonOutput {
 	out := jsonOutput{
 		Query: jsonQuery{
 			Terms:       args.SearchWords,
@@ -534,11 +627,13 @@ func runJSON(args *Arguments) int {
 			NoIgnore:    args.NoIgnore,
 			MaxFileSize: args.MaxFileSize,
 		},
-		Matches: len(results),
-		Results: make([]jsonResult, 0, len(results)),
+		Matches:   outcome.Matches,
+		Returned:  outcome.Returned,
+		Truncated: outcome.Truncated,
+		Results:   make([]jsonResult, 0, outcome.Returned),
 	}
 
-	for _, r := range results {
+	for _, r := range outcome.Results {
 		excerpts := make([]jsonExcerpt, len(r.RawExcerpts))
 		for i, ex := range r.RawExcerpts {
 			excerpts[i] = jsonExcerpt{
@@ -558,23 +653,13 @@ func runJSON(args *Arguments) int {
 			Excerpts:     excerpts,
 		})
 	}
-
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	// Don't HTML-escape <, >, & -- code excerpts (PHP "<?php", Delphi generics, "&&") are
-	// far more readable as raw characters, and stdout consumers don't need HTML safety.
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(out); err != nil {
-		fmt.Fprintln(os.Stderr, "Error encoding JSON: "+err.Error())
-		return 1
-	}
-	return 0
+	return out
 }
 
 // runPlain executes the search without the TUI and writes clean text to stdout.
 // Output format:
 //
-//	MATCH <n>/<total>
+//	MATCH <n>/<returned>
 //	FILE: <path>
 //	SIZE: <bytes>
 //	EXCERPT <i> [L<start>]: <text>
@@ -588,44 +673,51 @@ func runJSON(args *Arguments) int {
 func runPlain(args *Arguments) int {
 	se := newSilentSearchEngine(args)
 
-	results, err := se.Execute()
+	outcome, err := se.ExecuteDetailed()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
 		return 1
 	}
+	writePlainOutput(os.Stdout, args, outcome)
+	return 0
+}
+
+func writePlainOutput(w io.Writer, args *Arguments, outcome search.ExecutionResult) {
 	if args.Partial != search.PartialModeOff {
-		fmt.Printf("Mode: partial (%s)\n", args.Partial)
+		fmt.Fprintf(w, "Mode: partial (%s)\n", args.Partial)
 	}
 
-	if len(results) == 0 {
-		fmt.Println("NO RESULTS")
-		return 0
+	if outcome.Returned == 0 {
+		fmt.Fprintln(w, "NO RESULTS")
+		return
 	}
 
 	// Use RawExcerpts (pre-highlight) -- no ANSI stripping needed.
 	// Excerpt headers carry per-chunk ranked quality when the chunk framed a
 	// ranked window; the old "[L<start>]" form is kept for quality-less chunks.
-	for i, r := range results {
-		fmt.Printf("MATCH %d/%d [Score: %d (%d/%d terms)]\n", i+1, len(results), r.Score, r.TermCount, len(args.SearchWords))
-		fmt.Printf("FILE: %s\n", r.FilePath)
-		fmt.Printf("SIZE: %d\n", r.FileSize)
+	for i, r := range outcome.Results {
+		fmt.Fprintf(w, "MATCH %d/%d [Score: %d (%d/%d terms)]\n", i+1, outcome.Returned, r.Score, r.TermCount, len(args.SearchWords))
+		fmt.Fprintf(w, "FILE: %s\n", r.FilePath)
+		fmt.Fprintf(w, "SIZE: %d\n", r.FileSize)
 		for j, ex := range r.RawExcerpts {
 			score := excerptChunkScoreAt(r.ChunkScores, j)
 			terms := excerptChunkTermCountAt(r.ChunkTermCounts, j)
 			switch {
 			case score > 0 && terms > 0 && formatLine(excerptStartLineAt(r.StartLines, j)) != "":
-				fmt.Printf("EXCERPT %d [%s, Score: %d (%d terms)]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), score, terms, ex)
+				fmt.Fprintf(w, "EXCERPT %d [%s, Score: %d (%d terms)]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), score, terms, ex)
 			case score > 0 && terms > 0:
-				fmt.Printf("EXCERPT %d [Score: %d (%d terms)]: %s\n", j+1, score, terms, ex)
+				fmt.Fprintf(w, "EXCERPT %d [Score: %d (%d terms)]: %s\n", j+1, score, terms, ex)
 			case formatLine(excerptStartLineAt(r.StartLines, j)) != "":
-				fmt.Printf("EXCERPT %d [%s]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), ex)
+				fmt.Fprintf(w, "EXCERPT %d [%s]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), ex)
 			default:
-				fmt.Printf("EXCERPT %d: %s\n", j+1, ex)
+				fmt.Fprintf(w, "EXCERPT %d: %s\n", j+1, ex)
 			}
 		}
-		fmt.Println("---")
+		fmt.Fprintln(w, "---")
 	}
-	return 0
+	if outcome.Truncated {
+		fmt.Fprintf(w, "# truncated: showing %d of %d matching files (use --max-results 0 for all)\n", outcome.Returned, outcome.Matches)
+	}
 }
 
 // runPathOnly executes the search without the TUI and writes distinct matching
@@ -685,6 +777,10 @@ func Run() int {
 	// Exit early on flag validation errors
 	if args.StartDirErr != nil {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.StartDirErr.Error()))
+		return 1
+	}
+	if args.MaxResultsErr != nil {
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.MaxResultsErr.Error()))
 		return 1
 	}
 	if args.MaxFileSizeErr != nil {
@@ -747,35 +843,7 @@ func Run() int {
 		}
 	}
 
-	// Seed model for TUI
-	m := model{
-		results:           []search.SearchResult{},
-		currentPage:       0,
-		pageSize:          1,
-		totalPages:        0,
-		searchTime:        0,
-		quitting:          false,
-		loading:           true,
-		width:             0,
-		height:            0,
-		searchWords:       args.SearchWords,
-		excludeWords:      args.ExcludeWords,
-		includeCode:       args.IncludeCode,
-		strict:            args.Strict,
-		partial:           args.Partial,
-		onlyType:          args.OnlyType,
-		distance:          args.Distance,
-		heavyConcurrency:  args.HeavyConcurrency,
-		fileTimeoutBinary: args.FileTimeoutBinary,
-		filterWorkers:     args.FilterWorkers,
-		startDir:          args.StartDir,
-		pathScope:         args.PathScope,
-		noIgnore:          args.NoIgnore,
-		maxFileSize:       args.MaxFileSize,
-		confirmSelected:   "yes",
-		memUsageText:      "",
-		progressText:      "",
-	}
+	m := newTUIModel(args)
 
 	// Start TUI
 	startWall = time.Now()

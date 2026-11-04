@@ -36,28 +36,11 @@ func (li *lineIndexer) lineOf(off int) int {
 	return lo + 1
 }
 
-// computeExcerptLines anchors each excerpt back to the raw (uncleaned) file content and
-// returns its 1-based start line (the line where the matched terms begin). A value of 0
-// means "unknown" -- callers omit it from machine-readable output.
-//
-// Why anchoring rather than offset arithmetic: excerpts are produced from a cleaned,
-// whitespace-collapsed, newline-stripped copy of the file, so an excerpt's byte offset in
-// the cleaned string does not map to any offset in the raw bytes. The search terms, however,
-// survive cleaning verbatim. So for each excerpt we locate the raw occurrence of its terms
-// where they cluster together (which disambiguates files that repeat a term), and take the
-// line of the earliest matched term in that cluster as the start line.
-//
-// Only meaningful for text/code files whose raw bytes carry stable source lines; callers must
-// not invoke this for binary/extracted formats (PDF, DOCX, email) where source lines don't exist.
-// window bounds how far apart clustered terms may be (typically the search distance).
-func computeExcerptLines(raw string, excerpts []string, terms []string, window int) []int {
-	return computeExcerptLinesPartial(raw, excerpts, terms, window, PartialModeOff)
-}
-
-// computeExcerptLinesPartial anchors excerpts using the requested term matching mode.
-func computeExcerptLinesPartial(raw string, excerpts []string, terms []string, window int, partial PartialMode) []int {
-	out := make([]int, len(excerpts))
-	if raw == "" || len(excerpts) == 0 || len(terms) == 0 {
+// computeExcerptSpanLinesQuery anchors excerpt metadata back to raw source
+// lines. A value of 0 means unknown.
+func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compiledQuery, window int) []int {
+	out := make([]int, len(spans))
+	if raw == "" || len(spans) == 0 || len(query.matchers) == 0 {
 		return out
 	}
 
@@ -74,25 +57,20 @@ func computeExcerptLinesPartial(raw string, excerpts []string, terms []string, w
 	// Precompute occurrence offsets using the same partial-aware matcher as the engine so
 	// anchors line up with matches.
 	type termInfo struct {
-		term    string
+		index   int
 		offsets []int
 	}
-	infos := make([]termInfo, 0, len(terms))
-	for _, t := range terms {
-		tt := strings.TrimSpace(t)
-		if tt == "" {
-			continue
-		}
-		re := buildTermRegexCI(tt, partial)
-		locs := re.FindAllStringSubmatchIndex(raw, -1)
+	infos := make([]termInfo, 0, len(query.matchers))
+	for index, matcher := range query.matchers {
+		locs := matcher.findAll(raw)
 		offs := make([]int, len(locs))
 		for k, l := range locs {
-			offs[k], _ = submatchRange(l)
+			offs[k] = l.start
 		}
 		// A term with no raw occurrences can never be an anchor; skip it here so the
 		// per-excerpt loop below doesn't have to filter empty-offset entries.
 		if len(offs) > 0 {
-			infos = append(infos, termInfo{term: tt, offsets: offs})
+			infos = append(infos, termInfo{index: index, offsets: offs})
 		}
 	}
 
@@ -114,13 +92,17 @@ func computeExcerptLinesPartial(raw string, excerpts []string, terms []string, w
 	// cursor keeps multi-excerpt output in document order: each excerpt prefers an anchor
 	// at or after the previous excerpt's anchor.
 	cursor := 0
-	for i, ex := range excerpts {
+	for i, span := range spans {
 		// Determine which terms appear in this excerpt, and pick the rarest (fewest raw
 		// occurrences) as the anchor -- rarer terms disambiguate position more reliably.
 		var anchor *termInfo
 		present := make([]*termInfo, 0, len(infos))
+		presentTerms := make(map[int]struct{}, len(span.matches))
+		for _, match := range span.matches {
+			presentTerms[match.term] = struct{}{}
+		}
 		for j := range infos {
-			if buildTermRegexCI(infos[j].term, partial).MatchString(ex) {
+			if _, ok := presentTerms[infos[j].index]; ok {
 				present = append(present, &infos[j])
 				if anchor == nil || len(infos[j].offsets) < len(anchor.offsets) {
 					anchor = &infos[j]

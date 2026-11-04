@@ -103,6 +103,8 @@ type model struct {
 	pdfSkipped        int64
 	pdfTruncated      int64
 	filterWorkers     int
+	maxResults        int
+	maxExcerpts       int
 	startDir          string   // --startdir: root directory for file walks
 	pathScope         []string // --pathscope: restrict walks to matching paths
 	noIgnore          bool
@@ -639,6 +641,8 @@ func (m model) newSearchEngine() *search.SearchEngine {
 	se.Partial = m.partial
 	se.NoIgnore = m.noIgnore
 	se.MaxFileSize = m.maxFileSize
+	se.MaxResults = m.maxResults
+	se.MaxExcerpts = m.maxExcerpts
 	// Override default proximity window if provided
 	if m.distance > 0 {
 		se.Distance = m.distance

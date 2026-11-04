@@ -68,3 +68,31 @@ func TestTUIPartialExcerptDoesNotAugmentPresentTerm(t *testing.T) {
 		t.Errorf("TUI augmented excerpt despite partial term already being present:\n%s", view)
 	}
 }
+
+func TestTUIPropagatesMaxResultsAndExcerpts(t *testing.T) {
+	root := t.TempDir()
+	args := parseArguments([]string{
+		"needle",
+		"--startdir", root,
+		"--pathscope", "docs",
+		"--no-ignore",
+		"--max-filesize", "1MiB",
+		"--max-results", "17",
+		"--max-excerpts", "4",
+	})
+	m := newTUIModel(args)
+
+	engine := m.newSearchEngine()
+	if engine.MaxResults != 17 {
+		t.Errorf("MaxResults = %d, want 17", engine.MaxResults)
+	}
+	if engine.MaxExcerpts != 4 {
+		t.Errorf("MaxExcerpts = %d, want 4", engine.MaxExcerpts)
+	}
+	if engine.StartDir != root || !slicesEqual(engine.PathScope, []string{"docs"}) {
+		t.Errorf("search scope = %q / %v, want %q / [docs]", engine.StartDir, engine.PathScope, root)
+	}
+	if !engine.NoIgnore || engine.MaxFileSize != 1024*1024 {
+		t.Errorf("walk options = no-ignore %t, max-file-size %d; want true, 1048576", engine.NoIgnore, engine.MaxFileSize)
+	}
+}

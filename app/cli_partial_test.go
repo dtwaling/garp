@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,55 @@ func TestCLIArgumentsPartial(t *testing.T) {
 	}
 }
 
+func TestCLIArgumentsCanonicalTerms(t *testing.T) {
+	root := t.TempDir()
+	fixture := filepath.Join(root, "service.md")
+
+	args := parseArguments([]string{
+		"ms-**-api",
+		"MS-*-API",
+		"--startdir", root,
+		"--only", "md",
+	})
+	if !slicesEqual(args.SearchWords, []string{"ms-*-api"}) {
+		t.Fatalf("SearchWords = %q, want [ms-*-api]", args.SearchWords)
+	}
+
+	engine := newSilentSearchEngine(args)
+	if !slicesEqual(engine.SearchWords, []string{"ms-*-api"}) {
+		t.Fatalf("engine SearchWords = %q, want [ms-*-api]", engine.SearchWords)
+	}
+
+	out := captureCLIStdout(t, func() int { return runJSON(args) })
+	var result jsonOutput
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("decode JSON output: %v", err)
+	}
+	if !slicesEqual(result.Query.Terms, []string{"ms-*-api"}) {
+		t.Errorf("JSON query terms = %q, want [ms-*-api]", result.Query.Terms)
+	}
+
+	lastExcerptInnerWidth = 0
+	lastContentHeight = 0
+	view := (model{
+		results: []search.SearchResult{{
+			FilePath:     fixture,
+			Score:        len("ms-*-api"),
+			TermCount:    1,
+			MatchedTerms: []string{"ms-*-api"},
+			Excerpts:     []string{"ms-option-api"},
+		}},
+		width:           200,
+		height:          60,
+		searchWords:     args.SearchWords,
+		totalFiles:      1,
+		confirmSelected: "yes",
+	}).View()
+	if !strings.Contains(view, "(1/1 terms)") {
+		t.Errorf("TUI did not use canonical term denominator:\n%s", view)
+	}
+}
+
 func TestRunPlainPartialConfiguresSearchEngine(t *testing.T) {
 	root := t.TempDir()
 	fixture := filepath.Join(root, "deployment.md")
@@ -97,7 +147,12 @@ func TestShowUsageDocumentsPartial(t *testing.T) {
 		showUsage()
 		return 0
 	}))
-	for _, want := range []string{"--partial[=MODE]", "prefix, contains", "deploy*"} {
+	for _, want := range []string{
+		"--partial[=MODE]",
+		"prefix, contains",
+		"Tip: valid query terms support inline * and ?.",
+		"Invalid or over-limit wildcard terms match literally. See README for bounds.",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("usage missing %q:\n%s", want, out)
 		}
