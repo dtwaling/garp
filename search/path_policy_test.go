@@ -308,7 +308,11 @@ func TestPathPolicyAbsoluteThroughSymlinkedParent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation is not generally available on Windows")
 	}
-	base := t.TempDir()
+	tempBase := t.TempDir()
+	base, err := filepath.EvalSymlinks(tempBase)
+	if err != nil {
+		t.Fatalf("canonicalize temp base: %v", err)
+	}
 	logicalRoot := filepath.Join(base, "root")
 	unrelatedPhysicalRoot := filepath.Join(base, "unrelated")
 	linkedParent := filepath.Join(base, "linked-parent")

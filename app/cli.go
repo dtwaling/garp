@@ -731,13 +731,25 @@ func nativePathScope(pathScope []string) []string {
 // buildFileTypes returns the ripgrep-style -g globs for a search: a single
 // --only type when given, otherwise the document (and optionally code) set.
 func buildFileTypes(includeCode bool, onlyType string, onlyTypes []string) []string {
-	if len(onlyTypes) == 0 && onlyType != "" {
-		onlyTypes = []string{onlyType}
-	}
-	if len(onlyTypes) > 0 {
-		return config.OnlyTypesGlobs(onlyTypes)
+	effective := effectiveOnlyTypes(onlyType, onlyTypes)
+	if len(effective) > 0 {
+		return config.OnlyTypesGlobs(effective)
 	}
 	return config.BuildRipgrepFileTypes(includeCode)
+}
+
+func effectiveOnlyTypes(onlyType string, onlyTypes []string) []string {
+	if len(onlyTypes) > 0 {
+		return onlyTypes
+	}
+	if onlyType != "" {
+		return []string{onlyType}
+	}
+	return nil
+}
+
+func positiveGlobCodeEligibility(onlyType string, onlyTypes []string) bool {
+	return len(effectiveOnlyTypes(onlyType, onlyTypes)) == 0
 }
 
 func walkOptions(args *Arguments) search.WalkOptions {
@@ -745,7 +757,7 @@ func walkOptions(args *Arguments) search.WalkOptions {
 		NoIgnore:                    args.NoIgnore,
 		MaxFileSize:                 args.MaxFileSize,
 		UserGlobs:                   args.UserGlobs,
-		PositiveGlobCodeEligibility: len(args.OnlyTypes) == 0,
+		PositiveGlobCodeEligibility: positiveGlobCodeEligibility(args.OnlyType, args.OnlyTypes),
 	}
 }
 
@@ -785,7 +797,7 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 		se.PathScope = args.PathScope
 	}
 	se.UserGlobs = args.UserGlobs
-	se.PositiveGlobCodeEligibility = len(args.OnlyTypes) == 0
+	se.PositiveGlobCodeEligibility = positiveGlobCodeEligibility(args.OnlyType, args.OnlyTypes)
 	se.MaxExcerpts = args.MaxExcerpts
 	se.MaxResults = resolveMaxResults(args)
 	return se

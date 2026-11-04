@@ -54,6 +54,7 @@ type compiledPathPattern struct {
 	active        bool
 	matchAll      bool
 	literalPrefix string
+	parts         []string
 }
 
 // PathPolicy is a path-only policy compiled once for one logical/physical root.
@@ -135,6 +136,10 @@ func compilePathPatternWithAbsolute(
 	if ignoreCase {
 		pattern = strings.ToLower(pattern)
 	}
+	var parts []string
+	if anchored {
+		parts = splitPathScopeParts(pattern)
+	}
 	return compiledPathPattern{
 		pattern:       pattern,
 		ignoreCase:    ignoreCase,
@@ -144,6 +149,7 @@ func compilePathPatternWithAbsolute(
 		active:        active,
 		matchAll:      matchAll,
 		literalPrefix: pathScopeLiteralPrefix(pattern),
+		parts:         parts,
 	}, nil
 }
 
@@ -248,21 +254,17 @@ func (pattern compiledPathPattern) matches(candidate string, isDir bool) bool {
 		ancestorLimit = 0
 	}
 	for end := 1; end <= ancestorLimit; end++ {
-		if anchoredPathPatternMatches(pattern.pattern, strings.Join(parts[:end], "/")) {
+		if pathScopePartsMatch(pattern.parts, parts[:end]) {
 			return true
 		}
 	}
 	if pattern.directory {
 		return false
 	}
-	if anchoredPathPatternMatches(pattern.pattern, candidate) {
+	if pathScopePartsMatch(pattern.parts, parts) {
 		return true
 	}
 	return scopePatternMatchesDirPrefix(pattern.pattern, candidate)
-}
-
-func anchoredPathPatternMatches(pattern, candidate string) bool {
-	return pathScopePartsMatch(splitPathScopeParts(pattern), splitPathScopeParts(candidate))
 }
 
 // CouldMatchDirectory reports whether descending can produce an eligible path.
@@ -315,12 +317,12 @@ func (policy *PathPolicy) exemptsDirectChild(name string) bool {
 				child = strings.ToLower(child)
 			}
 			if matched, _ := path.Match(pattern.pattern, child); matched &&
-				(pattern.directory || !strings.ContainsAny(pattern.pattern, "*?") && !strings.Contains(pattern.pattern, ".")) {
+				pattern.pattern != "**" && !strings.Contains(pattern.pattern, ".") {
 				return true
 			}
 			continue
 		}
-		first := splitPathScopeParts(pattern.pattern)
+		first := pattern.parts
 		if len(first) == 0 || first[0] == "**" {
 			continue
 		}

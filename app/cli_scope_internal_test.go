@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"garp/search"
 )
 
 func TestParseArguments_StartDir_Accepted(t *testing.T) {
@@ -223,6 +225,41 @@ func TestNoIgnoreAndMaxFileSizePropagateToSearchEngines(t *testing.T) {
 	}
 	if defaultCLICount != 1 || defaultTUICount != 1 || len(defaultResults) != 1 {
 		t.Errorf("default-ignore preflight/TUI/results = %d/%d/%d, want 1/1/1", defaultCLICount, defaultTUICount, len(defaultResults))
+	}
+}
+
+func TestLegacyOnlyTypeDisablesPositiveGlobCodeEligibility(t *testing.T) {
+	globs := []search.UserGlob{{Pattern: "*.go"}}
+	args := &Arguments{
+		SearchWords:       []string{"anchor"},
+		OnlyType:          "md",
+		UserGlobs:         globs,
+		HeavyConcurrency:  1,
+		FilterWorkers:     1,
+		FileTimeoutBinary: 1000,
+	}
+	silent := newSilentSearchEngine(args)
+	if silent.PositiveGlobCodeEligibility {
+		t.Fatal("legacy Arguments.OnlyType enabled positive-glob code eligibility")
+	}
+	if walkOptions(args).PositiveGlobCodeEligibility {
+		t.Fatal("legacy Arguments.OnlyType enabled preflight code eligibility")
+	}
+
+	tuiModel := model{
+		searchWords:       []string{"anchor"},
+		onlyType:          "md",
+		userGlobs:         globs,
+		heavyConcurrency:  1,
+		filterWorkers:     1,
+		fileTimeoutBinary: 1000,
+	}
+	tui := tuiModel.newSearchEngine()
+	if tui.PositiveGlobCodeEligibility {
+		t.Fatal("legacy model.onlyType enabled positive-glob code eligibility")
+	}
+	if positiveGlobCodeEligibility(tuiModel.onlyType, tuiModel.onlyTypes) {
+		t.Fatal("legacy model.onlyType enabled TUI preflight code eligibility")
 	}
 }
 

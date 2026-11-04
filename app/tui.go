@@ -671,7 +671,7 @@ func (m model) newSearchEngine() *search.SearchEngine {
 		se.PathScope = m.pathScope
 	}
 	se.UserGlobs = m.userGlobs
-	se.PositiveGlobCodeEligibility = len(m.onlyTypes) == 0
+	se.PositiveGlobCodeEligibility = positiveGlobCodeEligibility(m.onlyType, m.onlyTypes)
 	return se
 }
 
@@ -685,7 +685,7 @@ func (m model) preflightFileCount() (int, error) {
 			NoIgnore:                    m.noIgnore,
 			MaxFileSize:                 m.maxFileSize,
 			UserGlobs:                   m.userGlobs,
-			PositiveGlobCodeEligibility: len(m.onlyTypes) == 0,
+			PositiveGlobCodeEligibility: positiveGlobCodeEligibility(m.onlyType, m.onlyTypes),
 		},
 	)
 }
