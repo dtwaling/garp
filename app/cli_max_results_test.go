@@ -13,14 +13,15 @@ func TestParseArgumentsMaxResults(t *testing.T) {
 		want     int
 		provided bool
 		wantErr  bool
+		parseErr bool
 	}{
 		{name: "positive", argv: []string{"needle", "--max-results", "12"}, want: 12, provided: true},
 		{name: "explicit zero", argv: []string{"needle", "--max-results", "0"}, provided: true},
-		{name: "missing value", argv: []string{"needle", "--max-results"}, provided: true, wantErr: true},
-		{name: "negative value", argv: []string{"needle", "--max-results", "-1"}, provided: true, wantErr: true},
-		{name: "non-integer value", argv: []string{"needle", "--max-results", "many"}, provided: true, wantErr: true},
+		{name: "missing value", argv: []string{"needle", "--max-results"}, provided: true, wantErr: true, parseErr: true},
+		{name: "negative value", argv: []string{"needle", "--max-results", "-1"}, provided: true, wantErr: true, parseErr: true},
+		{name: "non-integer value", argv: []string{"needle", "--max-results", "many"}, provided: true, wantErr: true, parseErr: true},
 		{name: "latest repeated value wins", argv: []string{"needle", "--max-results", "3", "--max-results", "7"}, want: 7, provided: true},
-		{name: "latest valid value clears prior error", argv: []string{"needle", "--max-results", "bad", "--max-results", "5"}, want: 5, provided: true},
+		{name: "later valid value preserves first parse error", argv: []string{"needle", "--max-results", "bad", "--max-results", "5"}, want: 5, provided: true, parseErr: true},
 	}
 
 	for _, tt := range tests {
@@ -37,6 +38,9 @@ func TestParseArgumentsMaxResults(t *testing.T) {
 			}
 			if tt.wantErr && !strings.Contains(args.MaxResultsErr.Error(), "--max-results") {
 				t.Errorf("MaxResultsErr = %q, want --max-results", args.MaxResultsErr)
+			}
+			if (args.ParseErr != nil) != tt.parseErr {
+				t.Errorf("ParseErr = %v, want error %t", args.ParseErr, tt.parseErr)
 			}
 			if len(args.SearchWords) != 1 || args.SearchWords[0] != "needle" {
 				t.Errorf("SearchWords = %q, max-results value was not consumed", args.SearchWords)

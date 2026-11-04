@@ -1,0 +1,215 @@
+package app
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"garp/search"
+)
+
+func TestParseArgumentsStrict(t *testing.T) {
+	t.Run("space and equals value forms", func(t *testing.T) {
+		space := parseArguments([]string{
+			"needle", "--distance", "12", "--workers", "3", "--heavy-concurrency", "2",
+			"--file-timeout-binary", "900", "--max-excerpts", "4",
+		})
+		equals := parseArguments([]string{
+			"needle", "--distance=12", "--workers=3", "--heavy-concurrency=2",
+			"--file-timeout-binary=900", "--max-excerpts=4",
+		})
+		if space.ParseErr != nil || equals.ParseErr != nil {
+			t.Fatalf("ParseErr = %v / %v, want nil", space.ParseErr, equals.ParseErr)
+		}
+		if space.Distance != equals.Distance ||
+			space.FilterWorkers != equals.FilterWorkers ||
+			space.HeavyConcurrency != equals.HeavyConcurrency ||
+			space.FileTimeoutBinary != equals.FileTimeoutBinary ||
+			space.MaxExcerpts != equals.MaxExcerpts {
+			t.Fatalf("space and equals forms differ: %#v / %#v", space, equals)
+		}
+	})
+
+	tests := []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{name: "unknown flag", argv: []string{"needle", "--bogus"}, want: "unknown flag"},
+		{name: "unknown flag after not", argv: []string{"needle", "--not", "--bogus"}, want: "unknown flag"},
+		{name: "missing value", argv: []string{"needle", "--workers"}, want: "--workers"},
+		{name: "empty equals value", argv: []string{"needle", "--only="}, want: "--only"},
+		{name: "empty separated numeric value", argv: []string{"needle", "--workers", ""}, want: "missing value"},
+		{name: "empty separated path value", argv: []string{"needle", "--startdir", ""}, want: "missing value"},
+		{name: "empty separated type value", argv: []string{"needle", "--only", ""}, want: "missing value"},
+		{name: "dash-leading separated value", argv: []string{"needle", "--startdir", "-dir"}, want: "dash-leading"},
+		{name: "boolean attached value", argv: []string{"needle", "--code=true"}, want: "does not accept"},
+		{name: "info attached value", argv: []string{"needle", "--help=true"}, want: "does not accept"},
+		{name: "invalid positive integer", argv: []string{"needle", "--distance=0"}, want: "positive"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := parseArguments(test.argv)
+			if got.ParseErr == nil || !strings.Contains(got.ParseErr.Error(), test.want) {
+				t.Fatalf("ParseErr = %v, want error containing %q", got.ParseErr, test.want)
+			}
+		})
+	}
+
+	t.Run("recognized flags remain active after not", func(t *testing.T) {
+		got := parseArguments([]string{"needle=a", "--not", "excluded=b", "--json", "--code"})
+		if got.ParseErr != nil {
+			t.Fatalf("ParseErr = %v, want nil", got.ParseErr)
+		}
+		if !got.JSONOutput || !got.IncludeCode {
+			t.Fatalf("flags after --not were not parsed: %#v", got)
+		}
+		if !slicesEqual(got.SearchWords, []string{"needle=a"}) {
+			t.Fatalf("SearchWords = %q, want literal equals term", got.SearchWords)
+		}
+		if len(got.ExcludeWords) != 1 || got.ExcludeWords[0] != "excluded=b" {
+			t.Fatalf("ExcludeWords = %q, want [excluded=b]", got.ExcludeWords)
+		}
+	})
+
+	t.Run("dash-leading equals value reaches validator", func(t *testing.T) {
+		got := parseArguments([]string{"needle", "--startdir=-dir"})
+		if got.ParseErr != nil {
+			t.Fatalf("ParseErr = %v, want nil", got.ParseErr)
+		}
+		if got.StartDir != "-dir" {
+			t.Fatalf("StartDir = %q, want -dir", got.StartDir)
+		}
+	})
+
+	t.Run("Run reports parser error first", func(t *testing.T) {
+		missingRoot := filepath.Join(t.TempDir(), "missing")
+		code, stderr := runWithArgsAndStderr(t, []string{"garp", "--bogus", "--startdir", missingRoot})
+		if code != 1 {
+			t.Fatalf("Run() = %d, want 1", code)
+		}
+		if !strings.Contains(stderr, "unknown flag") {
+			t.Fatalf("stderr = %q, want parser error", stderr)
+		}
+		if strings.Contains(stderr, "invalid search root") {
+			t.Fatalf("stderr = %q, root I/O ran before parser error", stderr)
+		}
+	})
+
+	t.Run("first error survives later valid values", func(t *testing.T) {
+		numeric := parseArguments([]string{"needle", "--workers", "bad", "--workers", "3"})
+		if numeric.ParseErr == nil || !strings.Contains(numeric.ParseErr.Error(), "--workers") {
+			t.Fatalf("numeric ParseErr = %v, want first workers error", numeric.ParseErr)
+		}
+		partial := parseArguments([]string{"needle", "--partial=bad", "--partial=prefix"})
+		if partial.ParseErr == nil || !strings.Contains(partial.ParseErr.Error(), "--partial") {
+			t.Fatalf("partial ParseErr = %v, want first partial error", partial.ParseErr)
+		}
+	})
+
+	t.Run("info flags cannot bypass parser errors", func(t *testing.T) {
+		for _, infoFlag := range []string{"--help", "--version"} {
+			for _, argv := range [][]string{
+				{"garp", "--bogus", infoFlag},
+				{"garp", infoFlag, "--bogus"},
+			} {
+				code, stderr := runWithArgsAndStderr(t, argv)
+				if code != 1 {
+					t.Errorf("%v: Run() = %d, want 1", argv[1:], code)
+				}
+				if !strings.Contains(stderr, "unknown flag") {
+					t.Errorf("%v: stderr = %q, want parser error", argv[1:], stderr)
+				}
+			}
+		}
+	})
+
+	t.Run("info flags retain normal behavior", func(t *testing.T) {
+		previousArgs := os.Args
+		defer func() { os.Args = previousArgs }()
+		for _, test := range []struct {
+			flag string
+			want string
+		}{
+			{flag: "--help", want: "USAGE"},
+			{flag: "--version", want: "garp v"},
+		} {
+			os.Args = []string{"garp", test.flag}
+			code := -1
+			stdout := string(captureCLIStdout(t, func() int {
+				code = Run()
+				return code
+			}))
+			if code != 0 {
+				t.Errorf("%s: Run() = %d, want 0", test.flag, code)
+			}
+			if !strings.Contains(stdout, test.want) {
+				t.Errorf("%s: stdout missing %q", test.flag, test.want)
+			}
+		}
+	})
+}
+
+func TestParseArgumentsSeparator(t *testing.T) {
+	got := parseArguments([]string{"term", "--", "-v", "--bogus", "-C3"})
+	if got.ParseErr != nil {
+		t.Fatalf("ParseErr = %v, want nil", got.ParseErr)
+	}
+	want := []string{"term", "-v", "--bogus", "-C3"}
+	if !slicesEqual(got.SearchWords, want) {
+		t.Fatalf("SearchWords = %q, want %q", got.SearchWords, want)
+	}
+
+	excludes := parseArguments([]string{"term", "--not", "first", "--", "--json", "-C3"})
+	if excludes.ParseErr != nil {
+		t.Fatalf("ParseErr = %v, want nil", excludes.ParseErr)
+	}
+	if !slicesEqual(excludes.ExcludeWords, []string{"first", "--json", "-C3"}) {
+		t.Fatalf("ExcludeWords = %q, want literal tokens", excludes.ExcludeWords)
+	}
+	if excludes.JSONOutput {
+		t.Fatal("JSONOutput = true, flag after -- must be literal")
+	}
+}
+
+func TestParseArgumentsContextFlags(t *testing.T) {
+	for _, token := range []string{
+		"-C", "-C3", "-C=3", "--context", "--context=3",
+		"-A", "-A2", "-A=2", "--after-context", "--after-context=2",
+		"-B", "-B2", "-B=2", "--before-context", "--before-context=2",
+	} {
+		t.Run(token, func(t *testing.T) {
+			got := parseArguments([]string{"needle", token, "3"})
+			if got.ParseErr == nil {
+				t.Fatal("ParseErr = nil, want unsupported-context error")
+			}
+			message := got.ParseErr.Error()
+			if !strings.Contains(message, "--distance") || !strings.Contains(message, "--max-excerpts") {
+				t.Fatalf("ParseErr = %q, want context guidance", message)
+			}
+		})
+	}
+}
+
+func TestParseArgumentsPartialContract(t *testing.T) {
+	got := parseArguments([]string{"--partial", "prefix"})
+	if got.ParseErr != nil {
+		t.Fatalf("ParseErr = %v, want nil", got.ParseErr)
+	}
+	if got.Partial != search.PartialModePrefix || !slicesEqual(got.SearchWords, []string{"prefix"}) {
+		t.Fatalf("bare partial consumed its following term: %#v", got)
+	}
+
+	for _, mode := range []string{"off", "none"} {
+		got = parseArguments([]string{"needle", "--partial=" + mode})
+		if got.ParseErr != nil || got.Partial != search.PartialModeOff {
+			t.Fatalf("--partial=%s: Partial = %q, ParseErr = %v", mode, got.Partial, got.ParseErr)
+		}
+	}
+
+	got = parseArguments([]string{"needle", "--partial="})
+	if got.ParseErr == nil || got.PartialErr == nil {
+		t.Fatalf("empty partial mode errors = %v / %v, want both set", got.ParseErr, got.PartialErr)
+	}
+}

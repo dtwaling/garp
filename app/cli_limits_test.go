@@ -30,7 +30,7 @@ func TestParseArgumentsMaxFileSize(t *testing.T) {
 		}
 	})
 
-	t.Run("latest valid value clears prior error", func(t *testing.T) {
+	t.Run("later valid value preserves first parse error", func(t *testing.T) {
 		args := parseArguments([]string{
 			"needle",
 			"--max-filesize", "invalid",
@@ -41,6 +41,9 @@ func TestParseArgumentsMaxFileSize(t *testing.T) {
 		}
 		if args.MaxFileSize != 2*1024*1024 {
 			t.Errorf("MaxFileSize = %d, want %d", args.MaxFileSize, 2*1024*1024)
+		}
+		if args.ParseErr == nil {
+			t.Fatal("ParseErr = nil, want first max-filesize error")
 		}
 	})
 

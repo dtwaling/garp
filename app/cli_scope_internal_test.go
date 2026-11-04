@@ -295,11 +295,11 @@ func TestRunJSON_PathScopeUsesPlatformSeparators(t *testing.T) {
 }
 
 func TestParseArguments_StartDir_WithEquals(t *testing.T) {
-	// Some users may pass --startdir=/path style (equals sign)
-	// Our parser uses next-token style; this test documents that equals-style
-	// falls through as a search word (not supported, by design).
-	// No regression: equals-style was never supported.
 	args := parseArguments([]string{"foo", "--startdir=/home/user/project"})
-	// Should be treated as search word (unrecognized flag)
-	_ = args // just verify it doesn't panic
+	if args.ParseErr != nil {
+		t.Fatalf("ParseErr = %v, want nil", args.ParseErr)
+	}
+	if want := filepath.Clean("/home/user/project"); args.StartDir != want {
+		t.Errorf("StartDir = %q, want %q", args.StartDir, want)
+	}
 }

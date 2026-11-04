@@ -24,10 +24,20 @@ import (
 
 var version = "0.9.2"
 
+type infoRequest uint8
+
+const (
+	infoNone infoRequest = iota
+	infoHelp
+	infoVersion
+)
+
 // Arguments for CLI flags (used to seed TUI)
 type Arguments struct {
 	SearchWords        []string
 	ExcludeWords       []string
+	ParseErr           error
+	infoRequest        infoRequest
 	IncludeCode        bool
 	Strict             bool
 	SmartForms         bool
@@ -72,7 +82,66 @@ type Arguments struct {
 	PathOnly bool
 }
 
-// parseArguments parses command line args
+func splitFlagValue(token string) (name, value string, attached bool) {
+	if index := strings.IndexByte(token, '='); index >= 0 {
+		return token[:index], token[index+1:], true
+	}
+	return token, "", false
+}
+
+func requiredFlagValue(args []string, index int, flag, attachedValue string, attached bool) (string, int, error) {
+	if attached {
+		if attachedValue == "" {
+			return "", index, fmt.Errorf("%s: missing value", flag)
+		}
+		return attachedValue, index, nil
+	}
+	if index+1 >= len(args) {
+		return "", index, fmt.Errorf("%s: missing value", flag)
+	}
+	value := args[index+1]
+	if value == "" {
+		return "", index + 1, fmt.Errorf("%s: missing value", flag)
+	}
+	if strings.HasPrefix(value, "-") {
+		return "", index + 1, fmt.Errorf("%s: missing value before %q; use %s=%s for a dash-leading value", flag, value, flag, value)
+	}
+	return value, index + 1, nil
+}
+
+func isContextFlag(token string) bool {
+	name, _, attached := splitFlagValue(token)
+	switch name {
+	case "-C", "--context", "-A", "--after-context", "-B", "--before-context":
+		return true
+	}
+	if attached || len(token) < 3 {
+		return false
+	}
+	switch token[:2] {
+	case "-C", "-A", "-B":
+		for _, char := range token[2:] {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func positiveInt(flag, value string) (int, error) {
+	number, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s: invalid integer %q", flag, value)
+	}
+	if number < 1 {
+		return 0, fmt.Errorf("%s: value must be positive", flag)
+	}
+	return number, nil
+}
+
+// parseArguments parses command line args.
 func parseArguments(args []string) *Arguments {
 	result := &Arguments{
 		SearchWords:       []string{},
@@ -86,134 +155,177 @@ func parseArguments(args []string) *Arguments {
 	}
 
 	parsingExcludes := false
-	expectDistance := false
-	expectHeavy := false
-	expectTimeout := false
-	expectWorkers := false
-	expectMaxExcerpts := false
-	expectMaxResults := false
-	expectOnly := false
-	expectStartDir := false
-	expectPathScope := false
-	expectMaxFileSize := false
+	optionsEnded := false
 	heavyProvided := false
 
-	for _, a := range args {
-		if expectDistance {
-			if n, err := strconv.Atoi(a); err == nil && n > 0 {
-				result.Distance = n
-			}
-			expectDistance = false
+	setParseError := func(err error) {
+		if err != nil && result.ParseErr == nil {
+			result.ParseErr = err
+		}
+	}
+
+	for index := 0; index < len(args); index++ {
+		token := args[index]
+		if !optionsEnded && token == "--" {
+			optionsEnded = true
 			continue
 		}
-		if expectHeavy {
-			if n, err := strconv.Atoi(a); err == nil && n > 0 {
-				result.HeavyConcurrency = n
-				heavyProvided = true
+		if optionsEnded {
+			if parsingExcludes {
+				result.ExcludeWords = append(result.ExcludeWords, token)
+			} else {
+				result.SearchWords = append(result.SearchWords, token)
 			}
-			expectHeavy = false
 			continue
 		}
-		if expectTimeout {
-			if n, err := strconv.Atoi(a); err == nil && n > 0 {
-				result.FileTimeoutBinary = n
-			}
-			expectTimeout = false
+		if isContextFlag(token) {
+			setParseError(fmt.Errorf("%s is not supported; use --distance and --max-excerpts", token))
 			continue
 		}
-		if expectWorkers {
-			if n, err := strconv.Atoi(a); err == nil && n > 0 {
-				result.FilterWorkers = n
+		if !strings.HasPrefix(token, "-") {
+			if parsingExcludes {
+				result.ExcludeWords = append(result.ExcludeWords, token)
+			} else {
+				result.SearchWords = append(result.SearchWords, token)
 			}
-			expectWorkers = false
 			continue
 		}
-		if expectMaxExcerpts {
-			if n, err := strconv.Atoi(a); err == nil && n > 0 {
-				if n > 50 {
-					n = 50
+
+		flag, attachedValue, attached := splitFlagValue(token)
+		valueFlag := false
+		switch flag {
+		case "--distance", "-distance", "--heavy-concurrency", "--file-timeout-binary",
+			"--workers", "-workers", "--max-excerpts", "--max-results", "--only",
+			"--startdir", "--pathscope", "--max-filesize":
+			valueFlag = true
+		}
+		if valueFlag {
+			value, nextIndex, err := requiredFlagValue(args, index, flag, attachedValue, attached)
+			index = nextIndex
+			if err != nil {
+				switch flag {
+				case "--max-results":
+					result.MaxResultsProvided = true
+					result.MaxResultsErr = err
+				case "--max-filesize":
+					result.MaxFileSize = 0
+					result.MaxFileSizeErr = err
+				case "--startdir":
+					result.StartDirErr = err
+				case "--pathscope":
+					result.PathScopeErr = err
 				}
-				result.MaxExcerpts = n
+				setParseError(err)
+				continue
 			}
-			expectMaxExcerpts = false
+
+			switch flag {
+			case "--distance", "-distance":
+				number, parseErr := positiveInt(flag, value)
+				if parseErr == nil {
+					result.Distance = number
+				}
+				setParseError(parseErr)
+			case "--heavy-concurrency":
+				number, parseErr := positiveInt(flag, value)
+				if parseErr == nil {
+					result.HeavyConcurrency = number
+					heavyProvided = true
+				}
+				setParseError(parseErr)
+			case "--file-timeout-binary":
+				number, parseErr := positiveInt(flag, value)
+				if parseErr == nil {
+					result.FileTimeoutBinary = number
+				}
+				setParseError(parseErr)
+			case "--workers", "-workers":
+				number, parseErr := positiveInt(flag, value)
+				if parseErr == nil {
+					result.FilterWorkers = number
+				}
+				setParseError(parseErr)
+			case "--max-excerpts":
+				number, parseErr := positiveInt(flag, value)
+				if number > 50 {
+					number = 50
+				}
+				if parseErr == nil {
+					result.MaxExcerpts = number
+				}
+				setParseError(parseErr)
+			case "--max-results":
+				result.MaxResultsProvided = true
+				result.MaxResultsErr = nil
+				number, parseErr := strconv.Atoi(value)
+				switch {
+				case parseErr != nil:
+					result.MaxResultsErr = fmt.Errorf("--max-results: invalid integer %q", value)
+				case number < 0:
+					result.MaxResultsErr = fmt.Errorf("--max-results: value must be non-negative")
+				default:
+					result.MaxResults = number
+				}
+				setParseError(result.MaxResultsErr)
+			case "--only":
+				result.OnlyType = strings.TrimPrefix(strings.ToLower(value), ".")
+			case "--startdir":
+				result.StartDirErr = nil
+				cleaned, parseErr := search.ValidateStartDir(value)
+				if parseErr != nil {
+					result.StartDirErr = parseErr
+				} else {
+					result.StartDir = cleaned
+				}
+				setParseError(parseErr)
+			case "--pathscope":
+				result.PathScopeErr = nil
+				segments, parseErr := search.ValidatePathScope(value)
+				if parseErr != nil {
+					result.PathScopeErr = parseErr
+				} else {
+					result.PathScope = segments
+				}
+				setParseError(parseErr)
+			case "--max-filesize":
+				result.MaxFileSize, result.MaxFileSizeErr = search.ParseMaxFileSize(value)
+				setParseError(result.MaxFileSizeErr)
+			}
 			continue
 		}
-		if expectMaxResults {
-			result.MaxResultsErr = nil
-			n, err := strconv.Atoi(a)
-			switch {
-			case err != nil:
-				result.MaxResultsErr = fmt.Errorf("--max-results: invalid integer %q", a)
-			case n < 0:
-				result.MaxResultsErr = fmt.Errorf("--max-results: value must be non-negative")
+
+		if attached {
+			switch flag {
+			case "--code", "--strict", "--not", "--no-ignore", "--smart-forms",
+				"--plain", "--json", "--pathonly", "--help", "-h", "--version", "-v":
+				setParseError(fmt.Errorf("%s does not accept a value", flag))
+			case "--partial":
+				switch attachedValue {
+				case "off", "none":
+					result.Partial = search.PartialModeOff
+				case string(search.PartialModePrefix):
+					result.Partial = search.PartialModePrefix
+				case string(search.PartialModeContains):
+					result.Partial = search.PartialModeContains
+				default:
+					result.PartialErr = fmt.Errorf("invalid --partial mode %q; supported modes: prefix, contains, off, none", attachedValue)
+					setParseError(result.PartialErr)
+				}
 			default:
-				result.MaxResults = n
+				setParseError(fmt.Errorf("unknown flag %q", flag))
 			}
-			expectMaxResults = false
 			continue
 		}
-		if expectOnly {
-			result.OnlyType = strings.TrimPrefix(strings.ToLower(a), ".")
-			expectOnly = false
-			continue
-		}
-		if expectStartDir {
-			cleaned, err := search.ValidateStartDir(a)
-			if err != nil {
-				result.StartDirErr = err
-			} else {
-				result.StartDir = cleaned
-			}
-			expectStartDir = false
-			continue
-		}
-		if expectPathScope {
-			segments, err := search.ValidatePathScope(a)
-			if err != nil {
-				result.PathScopeErr = err
-			} else {
-				result.PathScope = segments
-			}
-			expectPathScope = false
-			continue
-		}
-		if expectMaxFileSize {
-			size, err := search.ParseMaxFileSize(a)
-			result.MaxFileSize = size
-			result.MaxFileSizeErr = err
-			expectMaxFileSize = false
-			continue
-		}
-		switch a {
+
+		switch flag {
 		case "--code":
 			result.IncludeCode = true
 		case "--strict":
 			result.Strict = true
 		case "--not":
 			parsingExcludes = true
-		case "--distance", "-distance":
-			expectDistance = true
-		case "--heavy-concurrency":
-			expectHeavy = true
-		case "--file-timeout-binary":
-			expectTimeout = true
-		case "--workers", "-workers":
-			expectWorkers = true
-		case "--max-excerpts":
-			expectMaxExcerpts = true
-		case "--max-results":
-			result.MaxResultsProvided = true
-			expectMaxResults = true
-		case "--only":
-			expectOnly = true
-		case "--startdir":
-			expectStartDir = true
-		case "--pathscope":
-			expectPathScope = true
 		case "--no-ignore":
 			result.NoIgnore = true
-		case "--max-filesize":
-			expectMaxFileSize = true
 		case "--smart-forms":
 			result.SmartForms = true
 		case "--partial":
@@ -225,39 +337,23 @@ func parseArguments(args []string) *Arguments {
 		case "--pathonly":
 			result.PathOnly = true
 		case "--help", "-h":
-			showUsage()
-			os.Exit(0)
+			if result.infoRequest == infoNone {
+				result.infoRequest = infoHelp
+			}
 		case "--version", "-v":
-			showVersion()
-			os.Exit(0)
+			if result.infoRequest == infoNone {
+				result.infoRequest = infoVersion
+			}
 		default:
-			if strings.HasPrefix(a, "--partial=") {
-				switch strings.TrimPrefix(a, "--partial=") {
-				case "off":
-					result.Partial = search.PartialModeOff
-				case string(search.PartialModePrefix):
-					result.Partial = search.PartialModePrefix
-				case string(search.PartialModeContains):
-					result.Partial = search.PartialModeContains
-				default:
-					result.PartialErr = fmt.Errorf("invalid --partial mode %q; supported modes: prefix, contains, off", strings.TrimPrefix(a, "--partial="))
-				}
-			} else if parsingExcludes {
-				result.ExcludeWords = append(result.ExcludeWords, a)
-			} else {
-				result.SearchWords = append(result.SearchWords, a)
+			switch {
+			case strings.HasPrefix(token, "-"):
+				setParseError(fmt.Errorf("unknown flag %q", token))
+			case parsingExcludes:
+				result.ExcludeWords = append(result.ExcludeWords, token)
+			default:
+				result.SearchWords = append(result.SearchWords, token)
 			}
 		}
-	}
-	if expectMaxFileSize {
-		result.MaxFileSize = 0
-		result.MaxFileSizeErr = fmt.Errorf("--max-filesize: missing value")
-	}
-	if expectMaxResults {
-		result.MaxResultsErr = fmt.Errorf("--max-results: missing value")
-	}
-	if expectStartDir {
-		result.StartDirErr = fmt.Errorf("--startdir: missing value")
 	}
 	result.SearchWords = search.NormalizeQueryTerms(result.SearchWords)
 
@@ -770,6 +866,18 @@ func validateSearchRoot(startDir string) error {
 func Run() int {
 	// Parse args
 	args := parseArguments(os.Args[1:])
+	if args.ParseErr != nil {
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.ParseErr.Error()))
+		return 1
+	}
+	switch args.infoRequest {
+	case infoHelp:
+		showUsage()
+		return 0
+	case infoVersion:
+		showVersion()
+		return 0
+	}
 	if len(args.SearchWords) == 0 {
 		showUsage()
 		return 1
