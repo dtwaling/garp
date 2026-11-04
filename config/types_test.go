@@ -154,6 +154,15 @@ func TestOnlyTypeGlobsDockerfile(t *testing.T) {
 	}
 }
 
+func TestOnlyTypeGlobsOrderedUnion(t *testing.T) {
+	got := OnlyTypesGlobs([]string{"md", "dockerfile", "MD", "txt", "dockerfile"})
+	want := append([]string{"-g", "*.md"}, DockerfileGlobs()...)
+	want = append(want, "-g", "*.txt")
+	if !slices.Equal(got, want) {
+		t.Fatalf("OnlyTypesGlobs() = %q, want %q", got, want)
+	}
+}
+
 func TestShouldSkipDirectory(t *testing.T) {
 	// Directories that must be pruned during the walk.
 	for _, d := range []string{".git", ".svn", "node_modules", "vendor", "__pycache__",

@@ -202,3 +202,22 @@ func OnlyTypeGlobs(onlyType string) []string {
 	}
 	return []string{"-g", "*." + ext}
 }
+
+// OnlyTypesGlobs returns the ordered union for repeated type restrictions.
+func OnlyTypesGlobs(onlyTypes []string) []string {
+	globs := make([]string, 0, len(onlyTypes)*2)
+	seen := make(map[string]struct{}, len(onlyTypes))
+	for _, onlyType := range onlyTypes {
+		typeGlobs := OnlyTypeGlobs(onlyType)
+		for i := 0; i+1 < len(typeGlobs); i += 2 {
+			glob := typeGlobs[i+1]
+			key := strings.ToLower(glob)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			globs = append(globs, "-g", glob)
+		}
+	}
+	return globs
+}

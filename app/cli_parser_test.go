@@ -156,7 +156,7 @@ func TestParseArgumentsSeparator(t *testing.T) {
 	if got.ParseErr != nil {
 		t.Fatalf("ParseErr = %v, want nil", got.ParseErr)
 	}
-	want := []string{"term", "-v", "--bogus", "-C3"}
+	want := []string{"term", "-v", "--bogus", "-c3"}
 	if !slicesEqual(got.SearchWords, want) {
 		t.Fatalf("SearchWords = %q, want %q", got.SearchWords, want)
 	}
@@ -211,5 +211,75 @@ func TestParseArgumentsPartialContract(t *testing.T) {
 	got = parseArguments([]string{"needle", "--partial="})
 	if got.ParseErr == nil || got.PartialErr == nil {
 		t.Fatalf("empty partial mode errors = %v / %v, want both set", got.ParseErr, got.PartialErr)
+	}
+}
+
+func TestParseArgumentsAliases(t *testing.T) {
+	got := parseArguments([]string{
+		"Needle", "-l", "--files-with-matches", "-m", "80", "--max-count=2",
+	})
+	if got.ParseErr != nil {
+		t.Fatalf("ParseErr = %v", got.ParseErr)
+	}
+	if !got.PathOnly {
+		t.Fatal("path-only aliases did not set PathOnly")
+	}
+	if got.MaxExcerpts != 2 {
+		t.Fatalf("MaxExcerpts = %d, want last value 2", got.MaxExcerpts)
+	}
+	if got.SearchWords[0] != "needle" {
+		t.Fatalf("SearchWords = %q, want lowercase default", got.SearchWords)
+	}
+
+	clamped := parseArguments([]string{"needle", "-m=51"})
+	if clamped.ParseErr != nil || clamped.MaxExcerpts != 50 {
+		t.Fatalf("-m=51 = excerpts %d, error %v; want 50, nil", clamped.MaxExcerpts, clamped.ParseErr)
+	}
+	for _, argv := range [][]string{
+		{"needle", "-m", "0"},
+		{"needle", "--max-count=bad"},
+		{"needle", "-l=true"},
+	} {
+		if parsed := parseArguments(argv); parsed.ParseErr == nil {
+			t.Errorf("%q: ParseErr = nil", argv)
+		}
+	}
+}
+
+func TestParseArgumentsOnlyTypes(t *testing.T) {
+	got := parseArguments([]string{
+		"needle", "-t", ".PDF,md", "--type=pdf", "--only", "DockerFile,+custom",
+	})
+	if got.ParseErr != nil {
+		t.Fatalf("ParseErr = %v", got.ParseErr)
+	}
+	want := []string{"pdf", "md", "dockerfile", "+custom"}
+	if !slicesEqual(got.OnlyTypes, want) || got.OnlyType != "pdf" {
+		t.Fatalf("types = %q, singular = %q; want %q, pdf", got.OnlyTypes, got.OnlyType, want)
+	}
+
+	for _, value := range []string{"", "pdf,,md", "..pdf", "c#"} {
+		parsed := parseArguments([]string{"needle", "--type=" + value})
+		if parsed.ParseErr == nil {
+			t.Errorf("--type=%q: ParseErr = nil", value)
+		}
+	}
+}
+
+func TestParseArgumentsCaseMode(t *testing.T) {
+	sensitive := parseArguments([]string{"API", "api", "-i", "-s"})
+	if sensitive.ParseErr != nil || !sensitive.CaseSensitive {
+		t.Fatalf("sensitive parse = %#v", sensitive)
+	}
+	if !slicesEqual(sensitive.SearchWords, []string{"API", "api"}) {
+		t.Fatalf("case-sensitive terms = %q", sensitive.SearchWords)
+	}
+
+	insensitive := parseArguments([]string{"API", "api", "--case-sensitive", "--ignore-case"})
+	if insensitive.ParseErr != nil || insensitive.CaseSensitive {
+		t.Fatalf("insensitive parse = %#v", insensitive)
+	}
+	if !slicesEqual(insensitive.SearchWords, []string{"api"}) {
+		t.Fatalf("case-insensitive terms = %q", insensitive.SearchWords)
 	}
 }

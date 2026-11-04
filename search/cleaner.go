@@ -1028,6 +1028,11 @@ func HighlightTermsPartial(text string, searchTerms []string, partial PartialMod
 	return highlightTermsQuery(text, compileQuery(searchTerms, partial))
 }
 
+// HighlightTermsWithOptions highlights terms with explicit matching behavior.
+func HighlightTermsWithOptions(text string, searchTerms []string, partial PartialMode, options QueryOptions) string {
+	return highlightTermsQuery(text, compileQueryWithOptions(searchTerms, partial, options))
+}
+
 func highlightTermsQuery(text string, query compiledQuery) string {
 	var ranges []matchRange
 	for _, matcher := range query.matchers {

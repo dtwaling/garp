@@ -94,8 +94,11 @@ type model struct {
 	excludeWords      []string
 	includeCode       bool
 	strict            bool
+	caseSensitive     bool
+	smartForms        bool
 	partial           search.PartialMode
 	onlyType          string
+	onlyTypes         []string
 	distance          int
 	heavyConcurrency  int
 	fileTimeoutBinary int
@@ -116,6 +119,20 @@ type model struct {
 
 	// Background progress (optional)
 	progressText string // e.g., "⏳ Processing..."
+}
+
+func (m model) targetDescription() string {
+	if len(m.onlyTypes) > 0 {
+		types := make([]string, len(m.onlyTypes))
+		for i, onlyType := range m.onlyTypes {
+			types[i] = "." + onlyType
+		}
+		return "only " + strings.Join(types, ", ")
+	}
+	if m.onlyType != "" {
+		return "only ." + m.onlyType
+	}
+	return config.GetFileTypeDescription(m.includeCode)
 }
 
 func (m model) Init() tea.Cmd {
@@ -352,12 +369,7 @@ func (m model) View() string {
 	}
 
 	// Target description (aligned)
-	var targetDesc string
-	if m.onlyType != "" {
-		targetDesc = "only ." + m.onlyType
-	} else {
-		targetDesc = config.GetFileTypeDescription(m.includeCode)
-	}
+	targetDesc := m.targetDescription()
 	targetPrefix := "📁 Target:    "
 	targetStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
 	// Append extension excludes (e.g., .pdf) to keep header truthful, condensed with emoji
@@ -368,7 +380,7 @@ func (m model) View() string {
 		}
 	}
 	suffix := ""
-	if m.onlyType == "" && len(extEx) > 0 {
+	if len(m.onlyTypes) == 0 && m.onlyType == "" && len(extEx) > 0 {
 		var shown []string
 		for i, x := range extEx {
 			if i < 4 {
@@ -487,9 +499,10 @@ func (m model) View() string {
 				}
 				if totalLen < 400 {
 					// Find missing terms with the engine's active matching semantics.
+					options := search.QueryOptions{CaseSensitive: m.caseSensitive, SmartForms: m.smartForms}
 					missing := make([]string, 0, len(result.MatchedTerms))
 					for _, term := range result.MatchedTerms {
-						if search.FindTermIndexCI(excerpt, term, m.partial) == nil {
+						if search.FindTermIndex(excerpt, term, m.partial, options) == nil {
 							missing = append(missing, term)
 						}
 					}
@@ -501,7 +514,7 @@ func (m model) View() string {
 							if len(extra) >= budget {
 								break
 							}
-							loc := search.FindTermIndexCI(result.CleanContent, term, m.partial)
+							loc := search.FindTermIndex(result.CleanContent, term, m.partial, options)
 							if loc != nil {
 								start := loc[0] - 120
 								if start < 0 {
@@ -519,7 +532,7 @@ func (m model) View() string {
 							}
 						}
 						if extra != "" {
-							extra = search.HighlightTermsPartial(extra, m.searchWords, m.partial)
+							extra = search.HighlightTermsWithOptions(extra, m.searchWords, m.partial, options)
 							excerpt = excerpt + "\n" + extra
 						}
 					}
@@ -626,7 +639,7 @@ func (m model) View() string {
 }
 
 func (m model) newSearchEngine() *search.SearchEngine {
-	fileTypes := buildFileTypes(m.includeCode, m.onlyType)
+	fileTypes := buildFileTypes(m.includeCode, m.onlyType, m.onlyTypes)
 	se := search.NewSearchEngineWithWorkers(
 		m.searchWords,
 		m.excludeWords,
@@ -639,6 +652,8 @@ func (m model) newSearchEngine() *search.SearchEngine {
 	se.Silent = true
 	se.Strict = m.strict
 	se.Partial = m.partial
+	se.CaseSensitive = m.caseSensitive
+	se.SmartForms = m.smartForms
 	se.NoIgnore = m.noIgnore
 	se.MaxFileSize = m.maxFileSize
 	se.MaxResults = m.maxResults
@@ -658,7 +673,7 @@ func (m model) newSearchEngine() *search.SearchEngine {
 }
 
 func (m model) preflightFileCount() (int, error) {
-	fileTypes := buildFileTypes(m.includeCode, m.onlyType)
+	fileTypes := buildFileTypes(m.includeCode, m.onlyType, m.onlyTypes)
 	return search.GetDocumentFileCountWithOptions(
 		fileTypes,
 		m.startDir,

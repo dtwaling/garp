@@ -171,6 +171,29 @@ func TestJSONTraversalOptionsOmissionAndPresence(t *testing.T) {
 	}
 }
 
+func TestJSONOnlyTypes(t *testing.T) {
+	one := buildJSONOutput(parseArguments([]string{"Needle", "--type", "PDF"}), search.ExecutionResult{})
+	if one.Query.OnlyType != "pdf" || one.Query.OnlyTypes != nil || one.Query.Terms[0] != "needle" {
+		t.Fatalf("single-type query = %#v", one.Query)
+	}
+
+	many := buildJSONOutput(parseArguments([]string{"Needle", "-s", "-t", "PDF,md,pdf"}), search.ExecutionResult{})
+	if many.Query.OnlyType != "pdf" || !slicesEqual(many.Query.OnlyTypes, []string{"pdf", "md"}) {
+		t.Fatalf("multi-type query = %#v", many.Query)
+	}
+	if !many.Query.CaseSensitive || many.Query.Terms[0] != "Needle" {
+		t.Fatalf("case query = %#v", many.Query)
+	}
+
+	unicodeDefault := buildJSONOutput(
+		parseArguments([]string{"\u0130", "API", "--type", "txt"}),
+		search.ExecutionResult{},
+	)
+	if !slicesEqual(unicodeDefault.Query.Terms, []string{"\u0130", "api"}) {
+		t.Fatalf("Unicode default query terms = %q", unicodeDefault.Query.Terms)
+	}
+}
+
 func TestJSONMaxResultsMetadata(t *testing.T) {
 	root := buildOutputLimitFixture(t, 52)
 	tests := []struct {

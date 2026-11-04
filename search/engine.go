@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -146,6 +145,8 @@ type SearchEngine struct {
 	IncludeCode       bool
 	Strict            bool
 	Partial           PartialMode
+	CaseSensitive     bool
+	SmartForms        bool
 	PathOnly          bool
 	Registry          *ExtractorRegistry
 	Distance          int
@@ -186,7 +187,7 @@ type SearchEngine struct {
 // NewSearchEngine creates a new search engine instance
 func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, includeCode bool, heavyConcurrency int, fileTimeoutBinary int) *SearchEngine {
 	return &SearchEngine{
-		SearchWords:       NormalizeQueryTerms(searchWords),
+		SearchWords:       append([]string(nil), searchWords...),
 		ExcludeWords:      excludeWords,
 		FileTypes:         fileTypes,
 		IncludeCode:       includeCode,
@@ -197,6 +198,13 @@ func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, inc
 		FilterWorkers:     2,
 		FileTimeoutBinary: time.Duration(fileTimeoutBinary) * time.Millisecond,
 		MaxExcerpts:       1,
+	}
+}
+
+func (se *SearchEngine) queryOptions() QueryOptions {
+	return QueryOptions{
+		CaseSensitive: se.CaseSensitive,
+		SmartForms:    se.SmartForms,
 	}
 }
 
@@ -218,7 +226,7 @@ func NewSearchEngineWithWorkers(searchWords, excludeWords []string, fileTypes []
 
 // DiscoverCandidates finds files containing the first search word
 func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error) {
-	return se.discoverCandidates(compileQuery(se.SearchWords, se.Partial), fileCount)
+	return se.discoverCandidates(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), fileCount)
 }
 
 func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int) ([]string, int, error) {
@@ -251,7 +259,7 @@ func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int) (
 
 // FilterCandidates filters candidates for all words and excludes
 func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, startTime time.Time) ([]candidateMatch, error) {
-	return se.filterCandidates(compileQuery(se.SearchWords, se.Partial), candidateFiles, total, startTime)
+	return se.filterCandidates(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), candidateFiles, total, startTime)
 }
 
 func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []string, total int, startTime time.Time) ([]candidateMatch, error) {
@@ -307,8 +315,10 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 		match := candidateMatch{filePath: filePath}
 		// Check for excluded extensions
 		ext := filepath.Ext(filePath)
-		if slices.Contains(extExcludes, ext) {
-			return false
+		for _, excluded := range extExcludes {
+			if strings.EqualFold(excluded, ext) {
+				return false
+			}
 		}
 
 		// Check if file contains all search words
@@ -507,7 +517,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 					return false
 				}
 				// Compute exclude words from extracted text (cleaned)
-				hasExcludeWords = CheckTextContainsExcludeWords(CleanContent(out), wordExcludes)
+				hasExcludeWords = CheckTextContainsExcludeWordsWithOptions(CleanContent(out), wordExcludes, se.queryOptions())
 			} else {
 				if !se.Silent {
 					fmt.Printf("Warning: No extractor for %s\n", ext)
@@ -515,7 +525,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 				return false
 			}
 		} else if len(wordExcludes) > 0 {
-			ok2, err := checkFileContainsExcludeWords(filePath, wordExcludes, maxBytes)
+			ok2, err := checkFileContainsExcludeWordsWithOptions(filePath, wordExcludes, maxBytes, se.queryOptions())
 			if err != nil {
 				if !se.Silent {
 					fmt.Printf("Warning: Error checking exclude words in %s: %v\n", filePath, err)
@@ -704,7 +714,7 @@ func (se *SearchEngine) buildPathOnlyResults(matchingFiles []candidateMatch) []S
 
 // ExtractAndBuildResults extracts content and builds search results
 func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) ([]SearchResult, error) {
-	outcome, err := se.extractAndBuildResultsDetailed(compileQuery(se.SearchWords, se.Partial), matchingFiles)
+	outcome, err := se.extractAndBuildResultsDetailed(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), matchingFiles)
 	return outcome.Results, err
 }
 
@@ -944,7 +954,7 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 // result metadata adjusted for Stage 3 failures that were actually observed.
 func (se *SearchEngine) ExecuteDetailed() (ExecutionResult, error) {
 	startTime := time.Now()
-	query := compileQuery(se.SearchWords, se.Partial)
+	query := compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions())
 	if len(query.terms) == 0 {
 		return ExecutionResult{}, nil
 	}

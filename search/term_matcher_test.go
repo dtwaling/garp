@@ -13,7 +13,7 @@ func TestNormalizeQueryTerms(t *testing.T) {
 		"***OptionApi**",
 		"*optionapi*",
 	})
-	want := []string{"ms-*-api", "*OptionApi*"}
+	want := []string{"ms-*-api", "*optionapi*"}
 	if len(got) != len(want) {
 		t.Fatalf("NormalizeQueryTerms() = %q, want %q", got, want)
 	}
@@ -21,6 +21,42 @@ func TestNormalizeQueryTerms(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("NormalizeQueryTerms()[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestCaseSensitiveNormalizeQueryTerms(t *testing.T) {
+	got := NormalizeQueryTermsWithOptions(
+		[]string{" API ", "api", "API", "É*API", "é*api"},
+		QueryOptions{CaseSensitive: true},
+	)
+	want := []string{"API", "api", "É*API", "é*api"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("case-sensitive terms = %q, want %q", got, want)
+	}
+}
+
+func TestCaseSensitiveTermMatcherSuffixContract(t *testing.T) {
+	exact := compileTermMatcherWithOptions("Deploy", PartialModeOff, QueryOptions{CaseSensitive: true})
+	for _, rejected := range []string{"deploy", "Deploys", "DeployES", "Deployed"} {
+		if exact.matches(rejected) {
+			t.Errorf("exact matcher unexpectedly matched %q", rejected)
+		}
+	}
+	if !exact.matches("Deploy") {
+		t.Fatal("exact matcher rejected exact-case stem")
+	}
+
+	smart := compileTermMatcherWithOptions("Deploy", PartialModeOff, QueryOptions{
+		CaseSensitive: true,
+		SmartForms:    true,
+	})
+	for _, accepted := range []string{"DeployED", "DeployIng", "DeployATION"} {
+		if !smart.matches(accepted) {
+			t.Errorf("smart matcher rejected mixed-case suffix %q", accepted)
+		}
+	}
+	if smart.matches("deployED") {
+		t.Fatal("smart matcher folded the exact-case stem")
 	}
 }
 
@@ -503,7 +539,7 @@ func TestTermMatcherPrefixSkipsLongInternalWordRun(t *testing.T) {
 
 func TestNormalizeQueryTermsUsesUnicodeCaseFold(t *testing.T) {
 	got := NormalizeQueryTerms([]string{"MS-**-API", "ms-*-api", "É*API", "é*api"})
-	want := []string{"MS-*-API", "É*API"}
+	want := []string{"ms-*-api", "é*api"}
 	if len(got) != len(want) {
 		t.Fatalf("NormalizeQueryTerms() = %q, want %q", got, want)
 	}
@@ -514,6 +550,20 @@ func TestNormalizeQueryTermsUsesUnicodeCaseFold(t *testing.T) {
 	}
 	if !compileTermMatcher("service", PartialModeOff, true).matches("SERVICES") {
 		t.Error("case folding did not include a legacy inflection suffix")
+	}
+}
+
+func TestNormalizeQueryTermsKeepsLowercaseInsideSimpleFoldOrbit(t *testing.T) {
+	const dottedCapitalI = "\u0130"
+	got := NormalizeQueryTerms([]string{dottedCapitalI, "API"})
+	want := []string{dottedCapitalI, "api"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("NormalizeQueryTerms() = %q, want %q", got, want)
+	}
+
+	query := compileQuery([]string{dottedCapitalI}, PartialModeOff)
+	if len(query.matchers) != 1 || !query.matchers[0].matches(dottedCapitalI) {
+		t.Fatal("default matcher lost U+0130 during normalization")
 	}
 }
 
@@ -626,7 +676,8 @@ func TestTermMatcherPreservesInvalidUTF8Bytes(t *testing.T) {
 
 	duplicate := string([]byte{0xff, 'a', '*', '?', 'B'})
 	normalized := NormalizeQueryTerms([]string{term, duplicate})
-	if len(normalized) != 1 || normalized[0] != canonical {
+	normalizedCanonical := string([]byte{0xff, 'a', '*', '?', 'b'})
+	if len(normalized) != 1 || normalized[0] != normalizedCanonical {
 		t.Fatalf("normalized invalid UTF-8 terms = %v", normalized)
 	}
 }
@@ -673,8 +724,7 @@ func TestTermMatcherOffDetectionIncludesInflectionSuffix(t *testing.T) {
 		t.Fatal("suffix match crossing a chunk boundary was not detected")
 	}
 
-	t.Setenv("GARP_SMART_FORMS", "1")
-	smart := compileTermMatcher("loc", PartialModeOff, true)
+	smart := compileTermMatcherWithOptions("loc", PartialModeOff, QueryOptions{SmartForms: true})
 	if smart.detectionBytes != len("location") {
 		t.Fatalf("smart detectionBytes = %d, want %d", smart.detectionBytes, len("location"))
 	}

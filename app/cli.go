@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,7 @@ type Arguments struct {
 	IncludeCode        bool
 	Strict             bool
 	SmartForms         bool
+	CaseSensitive      bool
 	Distance           int
 	HeavyConcurrency   int
 	FilterWorkers      int
@@ -50,6 +52,7 @@ type Arguments struct {
 	MaxResultsProvided bool
 	MaxResultsErr      error // non-nil if --max-results validation failed
 	OnlyType           string
+	OnlyTypes          []string
 	Partial            search.PartialMode
 	PartialErr         error // non-nil if --partial validation failed
 
@@ -141,6 +144,27 @@ func positiveInt(flag, value string) (int, error) {
 	return number, nil
 }
 
+var onlyTypePattern = regexp.MustCompile(`^[a-z0-9_+-]+$`)
+
+func appendOnlyTypes(current []string, flag, value string) ([]string, error) {
+	seen := make(map[string]struct{}, len(current))
+	for _, onlyType := range current {
+		seen[onlyType] = struct{}{}
+	}
+	for _, segment := range strings.Split(value, ",") {
+		normalized := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(segment), "."))
+		if normalized == "" || !onlyTypePattern.MatchString(normalized) {
+			return current, fmt.Errorf("%s: invalid file type %q", flag, segment)
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		current = append(current, normalized)
+	}
+	return current, nil
+}
+
 // parseArguments parses command line args.
 func parseArguments(args []string) *Arguments {
 	result := &Arguments{
@@ -195,7 +219,8 @@ func parseArguments(args []string) *Arguments {
 		valueFlag := false
 		switch flag {
 		case "--distance", "-distance", "--heavy-concurrency", "--file-timeout-binary",
-			"--workers", "-workers", "--max-excerpts", "--max-results", "--only",
+			"--workers", "-workers", "--max-excerpts", "-m", "--max-count", "--max-results",
+			"--only", "-t", "--type",
 			"--startdir", "--pathscope", "--max-filesize":
 			valueFlag = true
 		}
@@ -245,7 +270,7 @@ func parseArguments(args []string) *Arguments {
 					result.FilterWorkers = number
 				}
 				setParseError(parseErr)
-			case "--max-excerpts":
+			case "--max-excerpts", "-m", "--max-count":
 				number, parseErr := positiveInt(flag, value)
 				if number > 50 {
 					number = 50
@@ -267,8 +292,13 @@ func parseArguments(args []string) *Arguments {
 					result.MaxResults = number
 				}
 				setParseError(result.MaxResultsErr)
-			case "--only":
-				result.OnlyType = strings.TrimPrefix(strings.ToLower(value), ".")
+			case "--only", "-t", "--type":
+				var parseErr error
+				result.OnlyTypes, parseErr = appendOnlyTypes(result.OnlyTypes, flag, value)
+				if len(result.OnlyTypes) > 0 {
+					result.OnlyType = result.OnlyTypes[0]
+				}
+				setParseError(parseErr)
 			case "--startdir":
 				result.StartDirErr = nil
 				cleaned, parseErr := search.ValidateStartDir(value)
@@ -297,7 +327,9 @@ func parseArguments(args []string) *Arguments {
 		if attached {
 			switch flag {
 			case "--code", "--strict", "--not", "--no-ignore", "--smart-forms",
-				"--plain", "--json", "--pathonly", "--help", "-h", "--version", "-v":
+				"--plain", "--json", "--pathonly", "-l", "--files-with-matches",
+				"-i", "--ignore-case", "-s", "--case-sensitive",
+				"--help", "-h", "--version", "-v":
 				setParseError(fmt.Errorf("%s does not accept a value", flag))
 			case "--partial":
 				switch attachedValue {
@@ -328,13 +360,17 @@ func parseArguments(args []string) *Arguments {
 			result.NoIgnore = true
 		case "--smart-forms":
 			result.SmartForms = true
+		case "-i", "--ignore-case":
+			result.CaseSensitive = false
+		case "-s", "--case-sensitive":
+			result.CaseSensitive = true
 		case "--partial":
 			result.Partial = search.PartialModePrefix
 		case "--plain":
 			result.PlainOutput = true
 		case "--json":
 			result.JSONOutput = true
-		case "--pathonly":
+		case "--pathonly", "-l", "--files-with-matches":
 			result.PathOnly = true
 		case "--help", "-h":
 			if result.infoRequest == infoNone {
@@ -355,7 +391,10 @@ func parseArguments(args []string) *Arguments {
 			}
 		}
 	}
-	result.SearchWords = search.NormalizeQueryTerms(result.SearchWords)
+	result.SearchWords = search.NormalizeQueryTermsWithOptions(result.SearchWords, search.QueryOptions{
+		CaseSensitive: result.CaseSensitive,
+		SmartForms:    result.SmartForms,
+	})
 
 	// Auto-derive HeavyConcurrency when not explicitly provided: base on workers and available RAM
 	if !heavyProvided {
@@ -439,8 +478,11 @@ func newTUIModel(args *Arguments) model {
 		excludeWords:      args.ExcludeWords,
 		includeCode:       args.IncludeCode,
 		strict:            args.Strict,
+		caseSensitive:     args.CaseSensitive,
+		smartForms:        args.SmartForms,
 		partial:           args.Partial,
 		onlyType:          args.OnlyType,
+		onlyTypes:         args.OnlyTypes,
 		distance:          args.Distance,
 		heavyConcurrency:  args.HeavyConcurrency,
 		fileTimeoutBinary: args.FileTimeoutBinary,
@@ -607,16 +649,18 @@ type jsonOutput struct {
 
 // jsonQuery echoes the search parameters back to the caller so the response is self-describing.
 type jsonQuery struct {
-	Terms       []string `json:"terms"`
-	Strict      bool     `json:"strict,omitempty"`
-	Excludes    []string `json:"excludes,omitempty"`
-	Partial     string   `json:"partial,omitempty"`
-	StartDir    string   `json:"start_dir,omitempty"`
-	PathScope   []string `json:"path_scope,omitempty"`
-	OnlyType    string   `json:"only_type,omitempty"`
-	Code        bool     `json:"include_code"`
-	NoIgnore    bool     `json:"no_ignore,omitempty"`
-	MaxFileSize int64    `json:"max_filesize,omitempty"`
+	Terms         []string `json:"terms"`
+	Strict        bool     `json:"strict,omitempty"`
+	Excludes      []string `json:"excludes,omitempty"`
+	Partial       string   `json:"partial,omitempty"`
+	StartDir      string   `json:"start_dir,omitempty"`
+	PathScope     []string `json:"path_scope,omitempty"`
+	OnlyType      string   `json:"only_type,omitempty"`
+	OnlyTypes     []string `json:"only_types,omitempty"`
+	CaseSensitive bool     `json:"case_sensitive,omitempty"`
+	Code          bool     `json:"include_code"`
+	NoIgnore      bool     `json:"no_ignore,omitempty"`
+	MaxFileSize   int64    `json:"max_filesize,omitempty"`
 }
 
 func nativePathScope(pathScope []string) []string {
@@ -632,9 +676,12 @@ func nativePathScope(pathScope []string) []string {
 
 // buildFileTypes returns the ripgrep-style -g globs for a search: a single
 // --only type when given, otherwise the document (and optionally code) set.
-func buildFileTypes(includeCode bool, onlyType string) []string {
-	if onlyType != "" {
-		return config.OnlyTypeGlobs(onlyType)
+func buildFileTypes(includeCode bool, onlyType string, onlyTypes []string) []string {
+	if len(onlyTypes) == 0 && onlyType != "" {
+		onlyTypes = []string{onlyType}
+	}
+	if len(onlyTypes) > 0 {
+		return config.OnlyTypesGlobs(onlyTypes)
 	}
 	return config.BuildRipgrepFileTypes(includeCode)
 }
@@ -647,14 +694,14 @@ func walkOptions(args *Arguments) search.WalkOptions {
 }
 
 func preflightFileCount(args *Arguments) (int, error) {
-	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
+	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType, args.OnlyTypes)
 	return search.GetDocumentFileCountWithOptions(fileTypes, args.StartDir, args.PathScope, walkOptions(args))
 }
 
 // newSilentSearchEngine configures a silent SearchEngine for non-TUI CLI modes
 // (--json, --plain, --pathonly).
 func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
-	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
+	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType, args.OnlyTypes)
 	se := search.NewSearchEngineWithWorkers(
 		args.SearchWords,
 		args.ExcludeWords,
@@ -667,6 +714,8 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 	se.Silent = true
 	se.Strict = args.Strict
 	se.Partial = args.Partial
+	se.CaseSensitive = args.CaseSensitive
+	se.SmartForms = args.SmartForms
 	se.PathOnly = args.PathOnly
 	se.NoIgnore = args.NoIgnore
 	se.MaxFileSize = args.MaxFileSize
@@ -712,21 +761,25 @@ func runJSON(args *Arguments) int {
 func buildJSONOutput(args *Arguments, outcome search.ExecutionResult) jsonOutput {
 	out := jsonOutput{
 		Query: jsonQuery{
-			Terms:       args.SearchWords,
-			Strict:      args.Strict,
-			Excludes:    args.ExcludeWords,
-			Partial:     string(args.Partial),
-			StartDir:    args.StartDir,
-			PathScope:   nativePathScope(args.PathScope),
-			OnlyType:    args.OnlyType,
-			Code:        args.IncludeCode,
-			NoIgnore:    args.NoIgnore,
-			MaxFileSize: args.MaxFileSize,
+			Terms:         args.SearchWords,
+			Strict:        args.Strict,
+			Excludes:      args.ExcludeWords,
+			Partial:       string(args.Partial),
+			StartDir:      args.StartDir,
+			PathScope:     nativePathScope(args.PathScope),
+			OnlyType:      args.OnlyType,
+			CaseSensitive: args.CaseSensitive,
+			Code:          args.IncludeCode,
+			NoIgnore:      args.NoIgnore,
+			MaxFileSize:   args.MaxFileSize,
 		},
 		Matches:   outcome.Matches,
 		Returned:  outcome.Returned,
 		Truncated: outcome.Truncated,
 		Results:   make([]jsonResult, 0, outcome.Returned),
+	}
+	if len(args.OnlyTypes) >= 2 {
+		out.Query.OnlyTypes = append([]string(nil), args.OnlyTypes...)
 	}
 
 	for _, r := range outcome.Results {
@@ -907,11 +960,6 @@ func Run() int {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+err.Error()))
 		return 1
 	}
-	// Hook for matching layer: advertise smart-forms via environment (consumed by matching)
-	if args.SmartForms {
-		_ = os.Setenv("GARP_SMART_FORMS", "1")
-	}
-
 	// Path-only output mode: emit distinct matching file paths (one per line) and exit.
 	// Checked before --json and --plain so --pathonly always returns only paths.
 	if args.PathOnly {

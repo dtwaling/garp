@@ -135,20 +135,13 @@ func maybePaceForMemory() {
 	}
 }
 
-// CheckTextContainsAllWords checks if extracted text contains all search words
-// in any order, within a distance window (in characters) between the earliest
-// and latest matched term positions.
-func smartFormsEnabled() bool {
-	return strings.EqualFold(os.Getenv("GARP_SMART_FORMS"), "1")
-}
-
 func buildTermRegexLower(word string, mode PartialMode) *regexp.Regexp {
 	base := strings.ToLower(strings.TrimSpace(word))
 	if base == "" {
 		// never matches; safe fallback
 		return getWordRegex(`a\A`)
 	}
-	return compileTermMatcher(base, mode, false).compatibilityRegex()
+	return compileTermMatcher(base, mode, true).compatibilityRegex()
 }
 
 func buildTermRegexCI(word string, mode PartialMode) *regexp.Regexp {
@@ -163,6 +156,15 @@ func buildTermRegexCI(word string, mode PartialMode) *regexp.Regexp {
 // FindTermIndexCI returns the exact matched byte range without delimiters.
 func FindTermIndexCI(text, term string, mode PartialMode) []int {
 	found, ok := compileTermMatcher(term, mode, true).find(text, 0)
+	if ok {
+		return []int{found.start, found.end}
+	}
+	return nil
+}
+
+// FindTermIndex returns the exact matched byte range for explicit query options.
+func FindTermIndex(text, term string, mode PartialMode, options QueryOptions) []int {
+	found, ok := compileTermMatcherWithOptions(term, mode, options).find(text, 0)
 	if ok {
 		return []int{found.start, found.end}
 	}
@@ -218,20 +220,37 @@ func CheckTextContainsRankedWordsPartial(text string, words []string, distance i
 
 // CheckTextContainsExcludeWords checks if extracted text contains any exclude words
 func CheckTextContainsExcludeWords(text string, excludeWords []string) bool {
+	return CheckTextContainsExcludeWordsWithOptions(text, excludeWords, QueryOptions{})
+}
+
+// CheckTextContainsExcludeWordsWithOptions applies the active query case mode.
+func CheckTextContainsExcludeWordsWithOptions(text string, excludeWords []string, options QueryOptions) bool {
 	if len(excludeWords) == 0 {
 		return false
 	}
-
-	contentStr := strings.ToLower(text)
-
-	// Check each exclude word
 	for _, word := range excludeWords {
-		if containsWholeWord(contentStr, strings.ToLower(word)) {
+		if containsLiteralExcludeWord(text, word, options.CaseSensitive) {
 			return true
 		}
 	}
 
 	return false
+}
+
+func containsLiteralExcludeWord(text, word string, caseSensitive bool) bool {
+	word = strings.TrimSpace(word)
+	if word == "" {
+		return false
+	}
+	literal := regexp.QuoteMeta(word)
+	if !caseSensitive && isWordByte(word[len(word)-1]) {
+		literal += `(?:es|s)?`
+	}
+	if !caseSensitive {
+		literal = `(?i:` + literal + `)`
+	}
+	pattern := `(?:^|[^a-zA-Z0-9_])(?:` + literal + `)(?:$|[^a-zA-Z0-9_])`
+	return getWordRegex(pattern).MatchString(text)
 }
 
 // FileInfo represents information about a file
@@ -742,15 +761,19 @@ func asciiPlainTermHasAcceptedEnd(buf []byte, end int, matcher termMatcher) bool
 		return true
 	}
 
-	if asciiSuffixEndsAtBoundary(buf, end, "es", matcher.caseInsensitive) ||
-		asciiSuffixEndsAtBoundary(buf, end, "s", matcher.caseInsensitive) {
+	if !matcher.caseInsensitive && !matcher.smartForms {
+		return false
+	}
+	suffixInsensitive := matcher.caseInsensitive || matcher.smartForms
+	if asciiSuffixEndsAtBoundary(buf, end, "es", suffixInsensitive) ||
+		asciiSuffixEndsAtBoundary(buf, end, "s", suffixInsensitive) {
 		return true
 	}
 	if !matcher.smartForms {
 		return false
 	}
 	for _, suffix := range [...]string{"ed", "ing", "al", "tion", "ation"} {
-		if asciiSuffixEndsAtBoundary(buf, end, suffix, matcher.caseInsensitive) {
+		if asciiSuffixEndsAtBoundary(buf, end, suffix, suffixInsensitive) {
 			return true
 		}
 	}
@@ -1493,6 +1516,10 @@ func CheckFileContainsExcludeWords(filePath string, excludeWords []string) (bool
 }
 
 func checkFileContainsExcludeWords(filePath string, excludeWords []string, maxBytes int64) (bool, error) {
+	return checkFileContainsExcludeWordsWithOptions(filePath, excludeWords, maxBytes, QueryOptions{})
+}
+
+func checkFileContainsExcludeWordsWithOptions(filePath string, excludeWords []string, maxBytes int64, options QueryOptions) (bool, error) {
 	if len(excludeWords) == 0 {
 		return false, nil
 	}
@@ -1501,11 +1528,8 @@ func checkFileContainsExcludeWords(filePath string, excludeWords []string, maxBy
 	if err != nil {
 		return false, err
 	}
-	contentStr := strings.ToLower(content)
-
-	// Check each exclude word
 	for _, word := range excludeWords {
-		if containsWholeWord(contentStr, strings.ToLower(word)) {
+		if containsLiteralExcludeWord(content, word, options.CaseSensitive) {
 			return true, nil
 		}
 	}

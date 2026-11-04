@@ -69,6 +69,32 @@ func TestTUIPartialExcerptDoesNotAugmentPresentTerm(t *testing.T) {
 	}
 }
 
+func TestTUITargetDescriptionShowsOrderedTypeUnion(t *testing.T) {
+	lastExcerptInnerWidth = 0
+	lastContentHeight = 0
+
+	m := model{
+		width:       200,
+		height:      60,
+		loading:     true,
+		searchWords: []string{"needle"},
+		onlyType:    "pdf",
+		onlyTypes:   []string{"pdf", "md", "dockerfile"},
+	}
+	const want = "only .pdf, .md, .dockerfile"
+	if got := m.targetDescription(); got != want {
+		t.Fatalf("targetDescription() = %q, want %q", got, want)
+	}
+	if view := m.View(); !strings.Contains(view, want) {
+		t.Fatalf("TUI target header missing %q:\n%s", want, view)
+	}
+
+	singular := model{onlyType: "pdf"}
+	if got := singular.targetDescription(); got != "only .pdf" {
+		t.Fatalf("singular targetDescription() = %q", got)
+	}
+}
+
 func TestTUIPropagatesMaxResultsAndExcerpts(t *testing.T) {
 	root := t.TempDir()
 	args := parseArguments([]string{
