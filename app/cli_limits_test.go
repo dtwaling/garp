@@ -20,13 +20,13 @@ func TestParseArgumentsMaxFileSize(t *testing.T) {
 		}
 	})
 
-	t.Run("following flag is invalid value", func(t *testing.T) {
+	t.Run("following flag is not consumed", func(t *testing.T) {
 		args := parseArguments([]string{"needle", "--max-filesize", "--no-ignore"})
 		if args.MaxFileSizeErr == nil {
 			t.Fatal("MaxFileSizeErr = nil, want invalid-value error")
 		}
-		if args.NoIgnore {
-			t.Error("NoIgnore = true, want following flag consumed as max-filesize value")
+		if !args.NoIgnore {
+			t.Error("NoIgnore = false, following flag was consumed as max-filesize value")
 		}
 	})
 

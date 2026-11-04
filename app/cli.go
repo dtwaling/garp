@@ -92,7 +92,7 @@ func splitFlagValue(token string) (name, value string, attached bool) {
 	return token, "", false
 }
 
-func requiredFlagValue(args []string, index int, flag, attachedValue string, attached bool) (string, int, error) {
+func requiredFlagValue(args []string, index int, flag, attachedValue string, attached, suggestEquals, numeric bool) (string, int, error) {
 	if attached {
 		if attachedValue == "" {
 			return "", index, fmt.Errorf("%s: missing value", flag)
@@ -107,9 +107,45 @@ func requiredFlagValue(args []string, index int, flag, attachedValue string, att
 		return "", index + 1, fmt.Errorf("%s: missing value", flag)
 	}
 	if strings.HasPrefix(value, "-") {
-		return "", index + 1, fmt.Errorf("%s: missing value before %q; use %s=%s for a dash-leading value", flag, value, flag, value)
+		if numeric && isNegativeInteger(value) {
+			return value, index + 1, nil
+		}
+		if suggestEquals {
+			return "", index, fmt.Errorf("%s: missing value before %q; use %s=%s for a dash-leading value", flag, value, flag, value)
+		}
+		return "", index, fmt.Errorf("%s: missing value before %q", flag, value)
 	}
 	return value, index + 1, nil
+}
+
+func isNegativeInteger(value string) bool {
+	if len(value) < 2 || value[0] != '-' {
+		return false
+	}
+	for i := 1; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isStringValueFlag(flag string) bool {
+	switch flag {
+	case "--only", "-t", "--type", "--startdir", "--pathscope":
+		return true
+	}
+	return false
+}
+
+func isNumericValueFlag(flag string) bool {
+	switch flag {
+	case "--distance", "-distance", "--heavy-concurrency", "--file-timeout-binary",
+		"--workers", "-workers", "--max-excerpts", "-m", "--max-count",
+		"--max-results", "--max-filesize":
+		return true
+	}
+	return false
 }
 
 func isContextFlag(token string) bool {
@@ -225,7 +261,15 @@ func parseArguments(args []string) *Arguments {
 			valueFlag = true
 		}
 		if valueFlag {
-			value, nextIndex, err := requiredFlagValue(args, index, flag, attachedValue, attached)
+			value, nextIndex, err := requiredFlagValue(
+				args,
+				index,
+				flag,
+				attachedValue,
+				attached,
+				isStringValueFlag(flag),
+				isNumericValueFlag(flag),
+			)
 			index = nextIndex
 			if err != nil {
 				switch flag {

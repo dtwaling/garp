@@ -83,6 +83,47 @@ func TestParseArgumentsStrict(t *testing.T) {
 		}
 	})
 
+	t.Run("separated negative integers reach numeric validators", func(t *testing.T) {
+		for _, flag := range []string{
+			"--distance",
+			"-distance",
+			"--heavy-concurrency",
+			"--file-timeout-binary",
+			"--workers",
+			"-workers",
+			"--max-excerpts",
+			"-m",
+			"--max-count",
+			"--max-results",
+			"--max-filesize",
+		} {
+			separated := parseArguments([]string{"needle", flag, "-1"})
+			attached := parseArguments([]string{"needle", flag + "=-1"})
+			if separated.ParseErr == nil || attached.ParseErr == nil {
+				t.Errorf("%s: errors = %v / %v, want both", flag, separated.ParseErr, attached.ParseErr)
+				continue
+			}
+			if separated.ParseErr.Error() != attached.ParseErr.Error() {
+				t.Errorf("%s: separated error %q, attached error %q", flag, separated.ParseErr, attached.ParseErr)
+			}
+		}
+	})
+
+	t.Run("non-numeric dash token remains a flag", func(t *testing.T) {
+		arbitrary := parseArguments([]string{"needle", "--workers", "-oops"})
+		if arbitrary.ParseErr == nil || !strings.Contains(arbitrary.ParseErr.Error(), "missing value") {
+			t.Fatalf("arbitrary dash token error = %v", arbitrary.ParseErr)
+		}
+
+		actualFlag := parseArguments([]string{"needle", "--workers", "--json"})
+		if actualFlag.ParseErr == nil || !strings.Contains(actualFlag.ParseErr.Error(), "missing value") {
+			t.Fatalf("actual flag error = %v", actualFlag.ParseErr)
+		}
+		if !actualFlag.JSONOutput {
+			t.Fatal("--json was consumed as the --workers value")
+		}
+	})
+
 	t.Run("Run reports parser error first", func(t *testing.T) {
 		missingRoot := filepath.Join(t.TempDir(), "missing")
 		code, stderr := runWithArgsAndStderr(t, []string{"garp", "--bogus", "--startdir", missingRoot})

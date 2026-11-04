@@ -83,8 +83,11 @@ func TestCaseSensitiveExclusionsStayLiteralWholeWords(t *testing.T) {
 			t.Errorf("case-sensitive exclusion for %q = %t, want %t", text, got, want)
 		}
 	}
-	if !CheckTextContainsExcludeWordsWithOptions("Needle BLOCK wild*", []string{"BLOCK", "wild*"}, sensitiveSmart) {
-		t.Fatal("exact-case literal exclusions did not match")
+	if !CheckTextContainsExcludeWordsWithOptions("Needle BLOCK", []string{"BLOCK"}, sensitiveSmart) {
+		t.Fatal("exact-case exclusion did not match")
+	}
+	if CheckTextContainsExcludeWordsWithOptions("Needle wild*", []string{"wild*"}, sensitiveSmart) {
+		t.Fatal("legacy word boundaries unexpectedly matched a trailing-punctuation exclusion")
 	}
 	for name, text := range map[string]string{
 		"case mismatch":        "Needle block",
@@ -103,11 +106,37 @@ func TestCaseSensitiveExclusionsStayLiteralWholeWords(t *testing.T) {
 			t.Errorf("case-insensitive compatibility exclusion rejected %q", text)
 		}
 	}
-	if !CheckTextContainsExcludeWordsWithOptions("Needle block WILD*", []string{"BLOCK", "wild*"}, insensitive) {
-		t.Fatal("case-insensitive literal exclusions did not match")
+	for name, test := range map[string]struct {
+		text    string
+		exclude string
+	}{
+		"legacy trailing punctuation": {text: "Needle WILD*", exclude: "wild*"},
+		"wildcard expansion":          {text: "Needle wildcard", exclude: "wild*"},
+		"smart form expansion":        {text: "Needle blocked", exclude: "BLOCK"},
+	} {
+		if CheckTextContainsExcludeWordsWithOptions(test.text, []string{test.exclude}, insensitive) {
+			t.Errorf("%s unexpectedly matched %q with %q", name, test.text, test.exclude)
+		}
 	}
-	if CheckTextContainsExcludeWordsWithOptions("Needle blocked wildcard", []string{"BLOCK", "wild*"}, insensitive) {
-		t.Fatal("smart or wildcard expansion leaked into exclusions")
+}
+
+func TestCaseInsensitiveExclusionsPreserveLegacyWordBoundaries(t *testing.T) {
+	for _, tt := range []struct {
+		text    string
+		exclude string
+	}{
+		{text: "(test), passed", exclude: "test"},
+		{text: "bob@spam.com", exclude: "@spam.com"},
+		{text: "message from bob@spam.com!", exclude: "@SPAM.COM"},
+	} {
+		if !CheckTextContainsExcludeWords(tt.text, []string{tt.exclude}) {
+			t.Errorf("legacy exclusion %q did not match %q", tt.exclude, tt.text)
+		}
+	}
+	for _, text := range []string{"contest", "testament"} {
+		if CheckTextContainsExcludeWords(text, []string{"test"}) {
+			t.Errorf("whole-word exclusion matched %q", text)
+		}
 	}
 }
 

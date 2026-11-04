@@ -249,7 +249,7 @@ func containsLiteralExcludeWord(text, word string, caseSensitive bool) bool {
 	if !caseSensitive {
 		literal = `(?i:` + literal + `)`
 	}
-	pattern := `(?:^|[^a-zA-Z0-9_])(?:` + literal + `)(?:$|[^a-zA-Z0-9_])`
+	pattern := `\b(?:` + literal + `)\b`
 	return getWordRegex(pattern).MatchString(text)
 }
 
