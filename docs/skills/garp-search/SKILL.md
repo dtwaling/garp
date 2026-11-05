@@ -5,10 +5,10 @@ description: Use when searching a codebase or docs for terms that must appear ne
 
 # garp -- proximity content search
 
-`garp` finds files where search terms co-occur within a character window -- text, code, and binary documents (PDF, DOCX, ODT, RTF, eml/mbox/msg). Single pure-Go binary, identical behavior on Windows and Linux/macOS: run `garp` from PATH, else the repo binary (`bin/garp`; `garp.exe` on Windows). Forward slashes work in paths on every OS. Quote paths containing spaces; path wildcards are rejected.
+`garp` finds files where search terms co-occur within a character window -- text, code, and binary documents (PDF, DOCX, ODT, RTF, eml/mbox/msg). Single pure-Go binary, identical behavior on Windows and Linux/macOS: run `garp` from PATH, else the repo binary (`bin/garp`; `garp.exe` on Windows). Forward slashes work in paths on every OS. Quote paths containing spaces; `--startdir` paths reject wildcards.
 
 Invariants:
-- **Always pass `--json`** (preferred), **`--pathonly`** (when only matching file paths are needed), **or `--plain`** in agent sessions. Without one of these, garp launches the interactive TUI, which blocks a PTY and errors out without one.
+- **Always pass `--json`** (preferred), **`-l`** (when only matching file paths are needed), **or `--plain`** in agent sessions. Without one of these, garp launches the interactive TUI, which blocks a PTY and errors out without one.
 - Errors go to stderr: check the exit code before parsing stdout, and zero-check the top-level `matches` integer before iterating `results`.
 - Tuning flags (`--workers`, `--heavy-concurrency`, `--file-timeout-binary`) have safe defaults; leave them.
 
@@ -23,28 +23,27 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 | prefix/partial identifier matching (`deploy*`, `--partial`) | full regex syntax needed |
 | PDF / DOCX / ODT / RTF / eml / mbox / msg content | quick one-shot in a terminal |
 | monster files: ranked excerpt + `start_line` -> one targeted read, no paging | |
-| prune the walk to chosen subdirs (`--pathscope` never descends elsewhere: .venv, node_modules) | |
+| prune the walk to chosen subdirs (`-g` / `--iglob`) | |
 
 ## Flags that matter
 
 - `--startdir <dir>`: search roots (default: cwd). Use one comma-separated value for a multi-repository search; specify the flag once. An existing directory name that contains a comma stays intact.
-- `--pathscope 'a/,b/'`: comma-separated path patterns. Prefix with `!` to exclude. It intersects with positive globs. Bare `name` matches basenames at any depth. `name/`, `./name`, and patterns that contain `/` are root-anchored. `*` and `?` stay within one segment; `**` crosses segments.
-- `-g` / `--glob <pattern>`: repeatable case-sensitive path glob. `--iglob` is case-insensitive. Prefix a pattern with `!` to exclude it.
-- `--code`: include source files, including Dockerfile/Containerfile names. `-t` / `--type` / `--only <ext>` restricts file types. Repeat the flag or use comma-separated values. A type restriction overrides `--code`.
+- `-g <pattern>` is case-sensitive and `--iglob <pattern>` is case-insensitive; both are repeatable, positive globs form one union, and commas are literal. Prefix a pattern with `!` to exclude it. Bare `name` matches basenames at any depth. `name/`, `./name`, and patterns that contain `/` are root-anchored. `*` and `?` stay within one segment; `**` crosses segments.
+- `--code`: include source files, including Dockerfile/Containerfile names. `-t <ext>` restricts file types. Repeat the flag or use comma-separated values. A type restriction overrides `--code`.
 - `--distance N`: proximity window in characters (default 5000). Same call/block in code ~100-300; same paragraph/section in docs ~1000-2000.
-- `-m` / `--max-count` / `--max-excerpts N`: proximity excerpts per file (default 1, max 50), not raw matching lines.
+- `-m N`: proximity excerpts per file (default 1, max 50), not raw matching lines.
 - `--partial[=prefix|contains]`: boundary-aware prefix (default) or raw substring. Per-term inline glob instead: append `*` to one term (`deploy*`; quote it in shells). `--smart-forms`: match word forms (plurals, -ing, -ed, -tion).
-- `-i` / `--ignore-case` and `-s` / `--case-sensitive`: the last case flag wins.
+- `-i` and `-s`: select case-insensitive or case-sensitive matching; the last case flag wins.
 - `--strict`: require every term in the window (3+ term searches are ranked by default).
-- `-l` / `--files-with-matches` / `--pathonly`: skip excerpt extraction and emit one distinct matching file path per line in ranked order. Zero matches produce empty stdout.
+- `-l`: skip excerpt extraction and emit one distinct matching file path per line in ranked order. Zero matches produce empty stdout.
 - `--not <tokens...>`: exclusions after the flag; `.ext` excludes a file type, bare words exclude whole words.
 
 Value flags accept both `--flag value` and `--flag=value`. Use `--` to stop
-flag parsing. The listed aliases follow rg conventions, but garp is not a
+flag parsing. These short flags follow rg conventions, but garp is not a
 drop-in rg replacement. Context flags such as `-C`, `-A`, and `-B` are not
-supported; use `--distance` and `--max-excerpts`.
+supported; use `--distance` and `-m`.
 
-On all platforms, an absolute pathscope or user-glob pattern must overlap an
+On all platforms, an absolute `-g` or `--iglob` pattern must overlap an
 effective start root. Examples are `/repo/src/**` on POSIX and `C:/repo/src/**`
 on Windows. A pattern can select inside the root, or an ancestor pattern can
 cover the root. If no root intersects it, validation fails before search. Use
@@ -57,7 +56,7 @@ One-shot find -> pinpoint -> targeted read: each result carries the file, a rank
 
 - Sort order: score, matched-term count, path-term count, boundary quality, tighter span, top-quality chunk count, ranking-root-relative path, supplied root order, then canonical path. `matched_terms` lists the terms that actually hit.
 - Each excerpt: `text` (context-padded, newlines collapsed) plus 1-based `start_line` = line of the earliest matched term in that chunk, and per-chunk `score`/`term_count`. Present for text/code; omitted for extracted formats (PDF, DOCX, email).
-- Chunks within a file are a ranked subset, best-first: with `--max-excerpts N > 1` every quality tier can seed a chunk, so a strong cluster no longer hides the file's other clusters. Every chunk is >=90% new content (bounded overlap).
+- Chunks within a file are a ranked subset, best-first: with `-m N` where `N > 1`, every quality tier can seed a chunk, so a strong cluster no longer hides the file's other clusters. Every chunk is >=90% new content (bounded overlap).
 - Act on results by reading the file at `start_line` (with margin) instead of re-searching or paging through reads.
 - `query.start_dir` is the first reported root. `query.start_dirs` appears only for two or more reported roots. A nested supplied root can become traversal-only to prevent data loss; results remain under its reported ancestor. Both fields are omitted when `--startdir` is absent.
 - `query.only_type` remains the singular compatibility field. `query.only_types` appears only for two or more distinct types. `query.case_sensitive` appears only when enabled.
@@ -67,4 +66,4 @@ One-shot find -> pinpoint -> targeted read: each result carries the file, a rank
   "excerpts": [ { "text": "...", "start_line": 42, "score": 14, "term_count": 2 } ] } ]
 ```
 
-Example: locate deployment base-image notes -> `garp AMI parent base --startdir <repo> --only md --distance 200 --json`. Note: extracted PDF text can normalize tokens (e.g. `RHC03-2516` -> `RHC 03-2516`); if an expected hit misses, retry with looser or split terms.
+Example: locate deployment base-image notes -> `garp AMI parent base --startdir <repo> -t md --distance 200 --json`. Note: extracted PDF text can normalize tokens (e.g. `RHC03-2516` -> `RHC 03-2516`); if an expected hit misses, retry with looser or split terms.
