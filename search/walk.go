@@ -29,6 +29,74 @@ func (options WalkOptions) TextMaxBytes() int64 {
 
 type candidateVisitor func(logicalPath string, info os.FileInfo) error
 
+type preparedRootTraversal struct {
+	root           StartRoot
+	policy         *PathPolicy
+	noIgnore       bool
+	rootChain      ignoreChain
+	directoryCache map[string]cachedTraversalDirectory
+}
+
+type cachedTraversalDirectory struct {
+	chain     ignoreChain
+	reachable bool
+}
+
+func prepareRootTraversal(root StartRoot, pathScope []string, userGlobs []UserGlob, noIgnore bool) (preparedRootTraversal, error) {
+	policy, err := CompilePathPolicy(pathScope, userGlobs, root.LogicalPath, root.PhysicalPath)
+	if err != nil {
+		return preparedRootTraversal{}, err
+	}
+	traversal := preparedRootTraversal{
+		root:     root,
+		policy:   policy,
+		noIgnore: noIgnore,
+	}
+	if !noIgnore {
+		traversal.rootChain = initialIgnoreChain(root.PhysicalPath)
+	}
+	traversal.directoryCache = map[string]cachedTraversalDirectory{
+		canonicalPathKey("."): {chain: traversal.rootChain, reachable: true},
+	}
+	return traversal, nil
+}
+
+// decideTraversalDirectory is the single directory-admission contract used by
+// real walks and provenance inference.
+func decideTraversalDirectory(
+	traversal preparedRootTraversal,
+	logicalPath, physicalPath, name string,
+	depth int,
+	chain ignoreChain,
+) (ignoreChain, bool) {
+	linked, linkErr := isDescendantLink(physicalPath)
+	if linkErr != nil || linked {
+		return ignoreChain{}, false
+	}
+	if config.ShouldSkipDirectory(name) {
+		return ignoreChain{}, false
+	}
+
+	childChain := chain
+	if !traversal.noIgnore {
+		switch {
+		case hasRepositoryBoundary(physicalPath):
+			childChain = initialIgnoreChain(physicalPath)
+		case depth == 0 && traversal.policy.exemptsDirectChild(name):
+			childChain = chain.withoutPathScopeContainerExcludes(physicalPath).withLocalFiles(physicalPath)
+		default:
+			if ignoredByRules(chain.rules, physicalPath, true) {
+				return ignoreChain{}, false
+			}
+			childChain = chain.withLocalFiles(physicalPath)
+		}
+	}
+	if !traversal.policy.CouldMatchDirectory(logicalPath) {
+		return ignoreChain{}, false
+	}
+	return childChain, true
+}
+
 func candidateSizeEligible(path string, size int64, options WalkOptions) bool {
 	if options.MaxFileSize > 0 {
 		return size <= options.MaxFileSize
@@ -44,24 +112,32 @@ func walkCandidates(
 	options WalkOptions,
 	visit candidateVisitor,
 ) error {
+	raw := []string{walkRoot}
 	if walkRoot == "" {
-		walkRoot = "."
+		raw = nil
 	}
-
-	logicalRoot, physicalRoot, err := resolveWalkRoot(walkRoot)
+	roots, err := PrepareStartRoots(raw, true)
 	if err != nil {
 		return err
 	}
+	return walkPreparedCandidates(fileTypes, roots[0], pathScope, options, visit)
+}
 
+func walkPreparedCandidates(
+	fileTypes []string,
+	root StartRoot,
+	pathScope []string,
+	options WalkOptions,
+	visit candidateVisitor,
+) error {
+	logicalRoot := root.LogicalPath
+	physicalRoot := root.PhysicalPath
 	matcher := newFileTypeMatcher(fileTypes)
-	policy, err := CompilePathPolicy(pathScope, options.UserGlobs, logicalRoot, physicalRoot)
+	traversal, err := prepareRootTraversal(root, pathScope, options.UserGlobs, options.NoIgnore)
 	if err != nil {
 		return err
 	}
-	rootChain := ignoreChain{}
-	if !options.NoIgnore {
-		rootChain = initialIgnoreChain(physicalRoot)
-	}
+	policy := traversal.policy
 
 	var walkDirectory func(logicalDir, physicalDir string, depth int, chain ignoreChain) error
 	walkDirectory = func(logicalDir, physicalDir string, depth int, chain ignoreChain) error {
@@ -79,32 +155,16 @@ func walkCandidates(
 			logicalPath := filepath.Join(logicalDir, entry.Name())
 			physicalPath := filepath.Join(physicalDir, entry.Name())
 
-			linked, linkErr := isDescendantLink(physicalPath)
-			if linkErr != nil || linked {
-				continue
-			}
-
 			if entry.IsDir() {
-				nestedRepository := !options.NoIgnore && hasRepositoryBoundary(physicalPath)
-				if config.ShouldSkipDirectory(entry.Name()) {
-					continue
-				}
-
-				childChain := chain
-				if !options.NoIgnore {
-					switch {
-					case nestedRepository:
-						childChain = initialIgnoreChain(physicalPath)
-					case depth == 0 && policy.exemptsDirectChild(entry.Name()):
-						childChain = chain.withoutPathScopeContainerExcludes(physicalPath).withLocalFiles(physicalPath)
-					default:
-						if ignoredByRules(chain.rules, physicalPath, true) {
-							continue
-						}
-						childChain = chain.withLocalFiles(physicalPath)
-					}
-				}
-				if !policy.CouldMatchDirectory(logicalPath) {
+				childChain, descend := decideTraversalDirectory(
+					traversal,
+					logicalPath,
+					physicalPath,
+					entry.Name(),
+					depth,
+					chain,
+				)
+				if !descend {
 					continue
 				}
 				if err := walkDirectory(logicalPath, physicalPath, depth+1, childChain); err != nil {
@@ -113,6 +173,10 @@ func walkCandidates(
 				continue
 			}
 
+			linked, linkErr := isDescendantLink(physicalPath)
+			if linkErr != nil || linked {
+				continue
+			}
 			if entry.Type() != 0 {
 				continue
 			}
@@ -146,7 +210,7 @@ func walkCandidates(
 		return nil
 	}
 
-	return walkDirectory(logicalRoot, physicalRoot, 0, rootChain)
+	return walkDirectory(logicalRoot, physicalRoot, 0, traversal.rootChain)
 }
 
 func mustRelativePath(root, filename string) string {

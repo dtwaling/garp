@@ -58,8 +58,11 @@ type Arguments struct {
 
 	// StartDir: base directory for file walks (--startdir flag).
 	// Empty string means use the current working directory.
-	StartDir    string
-	StartDirErr error // non-nil if validation failed
+	StartDir         string
+	StartDirs        []string
+	StartRoots       []search.StartRoot
+	StartDirProvided bool
+	StartDirErr      error // non-nil if validation failed
 
 	// PathScope: list of simple glob patterns to restrict file walks (--pathscope flag).
 	// Empty slice means no restriction.
@@ -350,7 +353,11 @@ func parseArguments(args []string) *Arguments {
 				if parseErr != nil {
 					result.StartDirErr = parseErr
 				} else {
-					result.StartDir = cleaned
+					result.StartDirs = append(result.StartDirs, value)
+					if !result.StartDirProvided {
+						result.StartDir = firstStartDirCompatibility(cleaned)
+					}
+					result.StartDirProvided = true
 				}
 				setParseError(parseErr)
 			case "--pathscope":
@@ -503,6 +510,15 @@ func parseArguments(args []string) *Arguments {
 	return result
 }
 
+func firstStartDirCompatibility(value string) string {
+	first := strings.TrimSpace(strings.SplitN(value, ",", 2)[0])
+	if len(first) >= 2 && ((first[0] == '"' && first[len(first)-1] == '"') ||
+		(first[0] == '\'' && first[len(first)-1] == '\'')) {
+		first = strings.TrimSpace(first[1 : len(first)-1])
+	}
+	return filepath.Clean(first)
+}
+
 func resolveMaxResults(args *Arguments) int {
 	if args.MaxResultsProvided {
 		return args.MaxResults
@@ -543,6 +559,7 @@ func newTUIModel(args *Arguments) model {
 		maxResults:        resolveMaxResults(args),
 		maxExcerpts:       args.MaxExcerpts,
 		startDir:          args.StartDir,
+		startRoots:        args.StartRoots,
 		pathScope:         args.PathScope,
 		userGlobs:         args.UserGlobs,
 		noIgnore:          args.NoIgnore,
@@ -763,7 +780,32 @@ func walkOptions(args *Arguments) search.WalkOptions {
 
 func preflightFileCount(args *Arguments) (int, error) {
 	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType, args.OnlyTypes)
-	return search.GetDocumentFileCountWithOptions(fileTypes, args.StartDir, args.PathScope, walkOptions(args))
+	roots := args.StartRoots
+	if len(roots) == 0 {
+		raw := args.StartDirs
+		if len(raw) == 0 && args.StartDir != "" {
+			raw = []string{args.StartDir}
+		}
+		var err error
+		retainNested := search.RetainNestedStartRoots(args.PathScope, args.UserGlobs)
+		roots, err = search.PrepareStartRoots(
+			raw,
+			search.PreserveNestedStartRoots(args.PathScope, args.UserGlobs),
+		)
+		if err != nil {
+			return 0, err
+		}
+		roots = search.ApplyStartRootOptions(
+			roots,
+			retainNested,
+			search.StartRootOptions{
+				NoIgnore:  args.NoIgnore,
+				PathScope: args.PathScope,
+				UserGlobs: args.UserGlobs,
+			},
+		)
+	}
+	return search.GetDocumentFileCountForRoots(fileTypes, roots, args.PathScope, walkOptions(args))
 }
 
 // newSilentSearchEngine configures a silent SearchEngine for non-TUI CLI modes
@@ -793,6 +835,7 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 	if args.StartDir != "" {
 		se.StartDir = args.StartDir
 	}
+	se.StartRoots = args.StartRoots
 	if len(args.PathScope) > 0 {
 		se.PathScope = args.PathScope
 	}
@@ -967,24 +1010,6 @@ func runPathOnly(args *Arguments) int {
 	return 0
 }
 
-func validateSearchRoot(startDir string) error {
-	root := startDir
-	if root == "" {
-		root = "."
-	}
-	info, err := os.Stat(root)
-	if err != nil {
-		return fmt.Errorf("invalid search root %q: %w", root, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("invalid search root %q: not a directory", root)
-	}
-	if _, err := os.ReadDir(root); err != nil {
-		return fmt.Errorf("invalid search root %q: read directory: %w", root, err)
-	}
-	return nil
-}
-
 // Run parses CLI arguments and starts the TUI. Returns a process exit code.
 func Run() int {
 	// Parse args
@@ -1026,9 +1051,38 @@ func Run() int {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.PartialErr.Error()))
 		return 1
 	}
-	if err := validateSearchRoot(args.StartDir); err != nil {
+	rawRoots := args.StartDirs
+	if !args.StartDirProvided {
+		rawRoots = nil
+	}
+	retainNested := search.RetainNestedStartRoots(args.PathScope, args.UserGlobs)
+	roots, err := search.PrepareStartRoots(
+		rawRoots,
+		search.PreserveNestedStartRoots(args.PathScope, args.UserGlobs),
+	)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+err.Error()))
 		return 1
+	}
+	roots = search.ApplyStartRootOptions(
+		roots,
+		retainNested,
+		search.StartRootOptions{
+			NoIgnore:  args.NoIgnore,
+			PathScope: args.PathScope,
+			UserGlobs: args.UserGlobs,
+		},
+	)
+	if err := search.ValidateRootPolicies(roots, args.PathScope, args.UserGlobs); err != nil {
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+err.Error()))
+		return 1
+	}
+	args.StartRoots = roots
+	if args.StartDirProvided {
+		reportedRoots := search.ReportedStartRoots(roots)
+		if len(reportedRoots) > 0 {
+			args.StartDir = reportedRoots[0].SuppliedPath
+		}
 	}
 	// Path-only output mode: emit distinct matching file paths (one per line) and exit.
 	// Checked before --json and --plain so --pathonly always returns only paths.

@@ -11,6 +11,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func canonicalPathKey(path string) string {
+	return canonicalPathKeyForPlatform(path, true)
+}
+
 // resolveWalkRoot returns the caller-facing root and its resolved filesystem
 // target. CreateFile follows an explicit symlink or junction by default.
 func resolveWalkRoot(root string) (logicalRoot, physicalRoot string, err error) {

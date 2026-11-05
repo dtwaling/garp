@@ -108,7 +108,8 @@ type model struct {
 	filterWorkers     int
 	maxResults        int
 	maxExcerpts       int
-	startDir          string   // --startdir: root directory for file walks
+	startDir          string // --startdir: root directory for file walks
+	startRoots        []search.StartRoot
 	pathScope         []string // --pathscope: restrict walks to matching paths
 	userGlobs         []search.UserGlob
 	noIgnore          bool
@@ -667,6 +668,7 @@ func (m model) newSearchEngine() *search.SearchEngine {
 	if m.startDir != "" {
 		se.StartDir = m.startDir
 	}
+	se.StartRoots = m.startRoots
 	if len(m.pathScope) > 0 {
 		se.PathScope = m.pathScope
 	}
@@ -677,9 +679,34 @@ func (m model) newSearchEngine() *search.SearchEngine {
 
 func (m model) preflightFileCount() (int, error) {
 	fileTypes := buildFileTypes(m.includeCode, m.onlyType, m.onlyTypes)
-	return search.GetDocumentFileCountWithOptions(
+	roots := m.startRoots
+	if len(roots) == 0 {
+		raw := []string{m.startDir}
+		if m.startDir == "" {
+			raw = nil
+		}
+		var err error
+		retainNested := search.RetainNestedStartRoots(m.pathScope, m.userGlobs)
+		roots, err = search.PrepareStartRoots(
+			raw,
+			search.PreserveNestedStartRoots(m.pathScope, m.userGlobs),
+		)
+		if err != nil {
+			return 0, err
+		}
+		roots = search.ApplyStartRootOptions(
+			roots,
+			retainNested,
+			search.StartRootOptions{
+				NoIgnore:  m.noIgnore,
+				PathScope: m.pathScope,
+				UserGlobs: m.userGlobs,
+			},
+		)
+	}
+	return search.GetDocumentFileCountForRoots(
 		fileTypes,
-		m.startDir,
+		roots,
 		m.pathScope,
 		search.WalkOptions{
 			NoIgnore:                    m.noIgnore,
@@ -763,6 +790,7 @@ func (m model) runSearch() tea.Cmd {
 		return innerWidth * contentHeight
 	}
 	total, _ := m.preflightFileCount()
+	se.PreflightCount = total
 
 	// Emit initial progress and then run the search
 	return tea.Batch(

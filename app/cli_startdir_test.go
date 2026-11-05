@@ -1,12 +1,15 @@
 package app
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"garp/search"
 )
 
 func TestRunRejectsInvalidStartDirBeforeEveryMode(t *testing.T) {
@@ -85,6 +88,105 @@ func TestRunRejectsInvalidStartDirBeforeEveryMode(t *testing.T) {
 	}
 }
 
+func TestParseArgumentsStartDirs(t *testing.T) {
+	args := parseArguments([]string{
+		"needle",
+		"--startdir", "first, second",
+		"--startdir=third",
+	})
+	if args.ParseErr != nil {
+		t.Fatal(args.ParseErr)
+	}
+	if !args.StartDirProvided {
+		t.Fatal("StartDirProvided = false")
+	}
+	if len(args.StartDirs) != 2 || args.StartDirs[0] != "first, second" || args.StartDirs[1] != "third" {
+		t.Fatalf("StartDirs = %q", args.StartDirs)
+	}
+	if args.StartDir != filepath.Clean("first") {
+		t.Fatalf("StartDir = %q, want first compatibility value", args.StartDir)
+	}
+}
+
+func TestRunRejectsAbsolutePolicyOutsideAllStartDirs(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "*.txt")
+	code, stderr := runWithArgsAndStderr(t, []string{
+		"garp", "needle", "--json",
+		"--startdir", root,
+		"--pathscope", outside,
+	})
+	if code != 1 {
+		t.Fatalf("Run() exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "outside every search root") {
+		t.Fatalf("stderr = %q, want containment error", stderr)
+	}
+}
+
+func TestStartDirJSONPreservesRelativeReportedRoot(t *testing.T) {
+	base := t.TempDir()
+	parent := filepath.Join(base, "workspace")
+	child := filepath.Join(parent, "child")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(parent, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(parent, "c", "ignored"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, ".ignore"), []byte("ignored/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(originalDirectory)
+
+	for _, test := range []struct {
+		name      string
+		raw       string
+		want      string
+		pathScope string
+	}{
+		{name: "single relative root", raw: filepath.Join("workspace", "."), want: "workspace"},
+		{name: "child then parent", raw: "workspace/child,workspace", want: "workspace"},
+		{name: "parent then child", raw: "workspace,workspace/child", want: "workspace"},
+		{name: "exemption parent then child", raw: "workspace,workspace/c", want: "workspace", pathScope: "ignored"},
+		{name: "exemption child then parent", raw: "workspace/c,workspace", want: "workspace", pathScope: "ignored"},
+		{
+			name:      "three-level child order",
+			raw:       "workspace/c/ignored,workspace/c,workspace",
+			want:      "workspace",
+			pathScope: "ignored,!zzz",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			originalArgs := os.Args
+			os.Args = []string{"garp", "missing-needle", "--json", "--startdir", test.raw}
+			if test.pathScope != "" {
+				os.Args = append(os.Args, "--pathscope", test.pathScope)
+			}
+			defer func() { os.Args = originalArgs }()
+
+			output := captureCLIStdout(t, Run)
+			var decoded jsonOutput
+			if err := json.Unmarshal(output, &decoded); err != nil {
+				t.Fatalf("decode JSON: %v\n%s", err, output)
+			}
+			if decoded.Query.StartDir != filepath.Clean(test.want) {
+				t.Fatalf("query.start_dir = %q, want relative %q", decoded.Query.StartDir, filepath.Clean(test.want))
+			}
+		})
+	}
+}
+
 func TestRunRejectsMaxFileSizeErrorBeforeEveryMode(t *testing.T) {
 	modes := []string{"--json", "--plain", "--pathonly", ""}
 	for _, mode := range modes {
@@ -109,7 +211,7 @@ func TestRunRejectsMaxFileSizeErrorBeforeEveryMode(t *testing.T) {
 	}
 }
 
-func TestStartDirValidateSearchRootRejectsInvalidRoots(t *testing.T) {
+func TestStartDirPrepareStartRootsRejectsInvalidRoots(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "file.txt")
 	if err := os.WriteFile(file, []byte("fixture"), 0o644); err != nil {
@@ -121,8 +223,8 @@ func TestStartDirValidateSearchRootRejectsInvalidRoots(t *testing.T) {
 		"file":    file,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := validateSearchRoot(path); err == nil {
-				t.Fatalf("validateSearchRoot(%q) error = nil, want rejection", path)
+			if _, err := search.PrepareStartRoots([]string{path}, false); err == nil {
+				t.Fatalf("PrepareStartRoots(%q) error = nil, want rejection", path)
 			}
 		})
 	}
@@ -132,8 +234,8 @@ func TestStartDirValidateSearchRootRejectsInvalidRoots(t *testing.T) {
 		if err := os.Symlink(filepath.Join(root, "missing-target"), link); err != nil {
 			t.Skipf("cannot create symlink: %v", err)
 		}
-		if err := validateSearchRoot(link); err == nil {
-			t.Fatal("validateSearchRoot(broken link) error = nil, want rejection")
+		if _, err := search.PrepareStartRoots([]string{link}, false); err == nil {
+			t.Fatal("PrepareStartRoots(broken link) error = nil, want rejection")
 		}
 	})
 
@@ -142,8 +244,8 @@ func TestStartDirValidateSearchRootRejectsInvalidRoots(t *testing.T) {
 		if err := os.Symlink(file, link); err != nil {
 			t.Skipf("cannot create symlink: %v", err)
 		}
-		if err := validateSearchRoot(link); err == nil {
-			t.Fatal("validateSearchRoot(file-target link) error = nil, want rejection")
+		if _, err := search.PrepareStartRoots([]string{link}, false); err == nil {
+			t.Fatal("PrepareStartRoots(file-target link) error = nil, want rejection")
 		}
 	})
 
@@ -162,8 +264,8 @@ func TestStartDirValidateSearchRootRejectsInvalidRoots(t *testing.T) {
 		if _, err := os.ReadDir(unreadable); err == nil {
 			t.Skip("current user can still read permission-free directory")
 		}
-		if err := validateSearchRoot(unreadable); err == nil {
-			t.Fatal("validateSearchRoot(unreadable directory) error = nil, want rejection")
+		if _, err := search.PrepareStartRoots([]string{unreadable}, false); err == nil {
+			t.Fatal("PrepareStartRoots(unreadable directory) error = nil, want rejection")
 		}
 	})
 }

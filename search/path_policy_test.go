@@ -334,3 +334,17 @@ func TestPathPolicyAbsoluteThroughSymlinkedParent(t *testing.T) {
 		t.Error("absolute pattern did not resolve its symlinked parent before containment")
 	}
 }
+
+func TestPathPolicyBasenameDoesNotMatchExplicitRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "ignored")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := CompilePathPolicy([]string{"ignored"}, nil, root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.MatchesFile(filepath.Join(root, "match.txt")) {
+		t.Fatal("basename pathscope implicitly matched the explicit root itself")
+	}
+}

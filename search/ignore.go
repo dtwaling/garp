@@ -40,6 +40,33 @@ type ignoreChain struct {
 	nextPrecedence int
 }
 
+func ignoreChainsEquivalent(left, right ignoreChain) bool {
+	if len(left.rules) != len(right.rules) {
+		return false
+	}
+	for index := range left.rules {
+		a := left.rules[index]
+		b := right.rules[index]
+		if !sameFilePath(a.sourceDir, b.sourceDir) ||
+			a.lineOrder != b.lineOrder ||
+			a.pattern != b.pattern ||
+			a.negated != b.negated ||
+			a.directoryOnly != b.directoryOnly ||
+			a.caseInsensitive != b.caseInsensitive ||
+			a.windowsPaths != b.windowsPaths {
+			return false
+		}
+		switch {
+		case a.matcher == nil && b.matcher == nil:
+		case a.matcher == nil || b.matcher == nil:
+			return false
+		case a.matcher.String() != b.matcher.String():
+			return false
+		}
+	}
+	return true
+}
+
 // initialIgnoreRules builds the ignore chain inherited by walkRoot.
 func initialIgnoreRules(walkRoot string) []ignoreRule {
 	return initialIgnoreChain(walkRoot).rules

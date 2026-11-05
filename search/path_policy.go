@@ -131,11 +131,11 @@ func compilePathPatternWithAbsolute(
 	} else {
 		pattern, rootRelative = normalizeRelativePathPattern(pattern)
 	}
-	matchAll := pattern == "."
 	anchored := absolute || rootRelative || directory || strings.Contains(pattern, "/")
 	if ignoreCase {
 		pattern = strings.ToLower(pattern)
 	}
+	matchAll := pattern == "."
 	var parts []string
 	if anchored {
 		parts = splitPathScopeParts(pattern)
@@ -331,6 +331,36 @@ func (policy *PathPolicy) exemptsDirectChild(name string) bool {
 			child = strings.ToLower(child)
 		}
 		if matched, _ := path.Match(first[0], child); matched {
+			return true
+		}
+	}
+	return false
+}
+
+func pathScopeCanExemptDirectChild(pathScope []string) bool {
+	for _, raw := range pathScope {
+		raw = stripMatchingQuotes(strings.TrimSpace(raw))
+		if raw == "" || strings.HasPrefix(raw, "!") {
+			continue
+		}
+		pattern := strings.ReplaceAll(raw, `\`, "/")
+		directory := strings.HasSuffix(pattern, "/")
+		pattern = strings.TrimSuffix(pattern, "/")
+		native := filepath.FromSlash(pattern)
+		absolute := filepath.IsAbs(native)
+		rootRelative := false
+		if !absolute {
+			pattern, rootRelative = normalizeRelativePathPattern(pattern)
+		}
+		anchored := absolute || rootRelative || directory || strings.Contains(pattern, "/")
+		if !anchored {
+			if pattern != "**" && !strings.Contains(pattern, ".") {
+				return true
+			}
+			continue
+		}
+		parts := splitPathScopeParts(pattern)
+		if len(parts) > 0 && parts[0] != "**" {
 			return true
 		}
 	}

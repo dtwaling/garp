@@ -388,6 +388,22 @@ func GetDocumentFileCountWithOptions(fileTypes []string, walkRoot string, pathSc
 	return count, nil
 }
 
+// GetDocumentFileCountForRoots counts the canonical union of candidates from
+// prepared roots using the same traversal policy as discovery.
+func GetDocumentFileCountForRoots(fileTypes []string, roots []StartRoot, pathScope []string, options WalkOptions) (int, error) {
+	seen := make(map[string]struct{})
+	for _, root := range roots {
+		err := walkPreparedCandidates(fileTypes, root, pathScope, options, func(path string, _ os.FileInfo) error {
+			seen[canonicalCandidateKey(root, path)] = struct{}{}
+			return nil
+		})
+		if err != nil {
+			return 0, err
+		}
+	}
+	return len(seen), nil
+}
+
 // FindFilesWithFirstWord finds all files containing the first search word (pure Go).
 // walkRoot specifies the directory to search from; use "" or "." for the current directory.
 // pathScope, if non-empty, restricts results to files whose relative path matches at least
@@ -673,6 +689,18 @@ func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes 
 }
 
 func findFilesWithFirstWordProgressQueryWithOptions(query compiledQuery, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
+	raw := []string{walkRoot}
+	if walkRoot == "" {
+		raw = nil
+	}
+	roots, err := PrepareStartRoots(raw, true)
+	if err != nil {
+		return nil, err
+	}
+	return findFilesWithFirstWordProgressQueryWithRoot(query, fileTypes, workers, onProgress, roots[0], pathScope, options)
+}
+
+func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes []string, workers int, onProgress func(processed, total int, path string), root StartRoot, pathScope []string, options WalkOptions) ([]string, error) {
 	// Emit initial progress with unknown total
 	if onProgress != nil {
 		onProgress(0, 0, "")
@@ -791,7 +819,7 @@ func findFilesWithFirstWordProgressQueryWithOptions(query compiledQuery, fileTyp
 	processed := 0
 
 	// Walk and stream paths to workers
-	walkErr := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
+	walkErr := walkPreparedCandidates(fileTypes, root, pathScope, options, func(path string, _ os.FileInfo) error {
 		ext := strings.ToLower(filepath.Ext(path))
 
 		processed++

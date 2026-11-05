@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 )
 
+func canonicalPathKey(path string) string {
+	return canonicalPathKeyForPlatform(path, false)
+}
+
 // resolveWalkRoot returns the caller-facing root and its resolved filesystem
 // target. The logical root stays unchanged when the explicit root is a link.
 func resolveWalkRoot(root string) (logicalRoot, physicalRoot string, err error) {
