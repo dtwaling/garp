@@ -28,7 +28,7 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 ## Flags that matter
 
 - `--startdir <dir>`: search root (default: cwd). Repeat it or use comma-separated paths for a multi-repository search. An existing directory name that contains a comma stays intact.
-- `--pathscope 'a/,b/'`: comma-separated path patterns. Prefix with `!` to exclude. It intersects with positive globs. `*` stays in one path segment; `**` crosses segments.
+- `--pathscope 'a/,b/'`: comma-separated path patterns. Prefix with `!` to exclude. It intersects with positive globs. Bare `name` matches basenames at any depth. `name/`, `./name`, and patterns that contain `/` are root-anchored. `*` and `?` stay within one segment; `**` crosses segments.
 - `-g` / `--glob <pattern>`: repeatable case-sensitive path glob. `--iglob` is case-insensitive. Prefix a pattern with `!` to exclude it.
 - `--code`: include source files, including Dockerfile/Containerfile names. `-t` / `--type` / `--only <ext>` restricts file types. Repeat the flag or use comma-separated values. A type restriction overrides `--code`.
 - `--distance N`: proximity window in characters (default 5000). Same call/block in code ~100-300; same paragraph/section in docs ~1000-2000.
@@ -44,6 +44,13 @@ flag parsing. The listed aliases follow rg conventions, but garp is not a
 drop-in rg replacement. Context flags such as `-C`, `-A`, and `-B` are not
 supported; use `--distance` and `--max-excerpts`.
 
+On all platforms, an absolute pathscope or user-glob pattern must overlap an
+effective start root. Examples are `/repo/src/**` on POSIX and `C:/repo/src/**`
+on Windows. A pattern can select inside the root, or an ancestor pattern can
+cover the root. If no root intersects it, validation fails before search. Use
+`./src` for explicit root-relative matching. On Windows, a non-absolute leading
+slash is root-relative.
+
 ## Output shape (`--json`)
 
 One-shot find -> pinpoint -> targeted read: each result carries the file, a ranked excerpt, and the line of the earliest matched term.
@@ -52,7 +59,7 @@ One-shot find -> pinpoint -> targeted read: each result carries the file, a rank
 - Each excerpt: `text` (context-padded, newlines collapsed) plus 1-based `start_line` = line of the earliest matched term in that chunk, and per-chunk `score`/`term_count`. Present for text/code; omitted for extracted formats (PDF, DOCX, email).
 - Chunks within a file are a ranked subset, best-first: with `--max-excerpts N > 1` every quality tier can seed a chunk, so a strong cluster no longer hides the file's other clusters. Every chunk is >=90% new content (bounded overlap).
 - Act on results by reading the file at `start_line` (with margin) instead of re-searching or paging through reads.
-- `query.start_dir` is the first reported root. `query.start_dirs` appears only for two or more reported roots. A nested supplied root can fold into its reported ancestor even when garp still walks it to prevent data loss. Result paths remain under the reported ancestor. Both fields are omitted when `--startdir` is absent.
+- `query.start_dir` is the first reported root. `query.start_dirs` appears only for two or more reported roots. A nested supplied root can become traversal-only to prevent data loss; results remain under its reported ancestor. Both fields are omitted when `--startdir` is absent.
 - `query.only_type` remains the singular compatibility field. `query.only_types` appears only for two or more distinct types. `query.case_sensitive` appears only when enabled.
 
 ```jsonc

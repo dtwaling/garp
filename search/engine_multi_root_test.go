@@ -885,9 +885,15 @@ func TestMultiRootCountDiscoveryParity(t *testing.T) {
 	}
 	options := WalkOptions{UserGlobs: []UserGlob{{Pattern: "*.txt"}}}
 	pathScope := []string{"**/*.txt"}
-	count, err := GetDocumentFileCountForRoots(nil, roots, pathScope, options)
+	countKeyTracking := 0
+	count, err := getDocumentFileCountForRoots(nil, roots, pathScope, options, func() {
+		countKeyTracking++
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if countKeyTracking != 1 {
+		t.Fatalf("preflight key tracking = %d, want 1 for overlapping roots", countKeyTracking)
 	}
 	engine := NewSearchEngine([]string{"needle"}, nil, nil, false, 1, 1000)
 	engine.StartRoots = roots
@@ -895,6 +901,17 @@ func TestMultiRootCountDiscoveryParity(t *testing.T) {
 	engine.UserGlobs = options.UserGlobs
 	engine.Silent = true
 	engine.PathOnly = true
+	progressKeyTracking := 0
+	engine.onProgressKeyTracking = func() {
+		progressKeyTracking++
+	}
+	candidatesWithoutProgress, _, err := engine.DiscoverCandidates(count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidatesWithoutProgress) != count || progressKeyTracking != 0 {
+		t.Fatalf("nil-progress candidates/key tracking = %d/%d, want %d/0", len(candidatesWithoutProgress), progressKeyTracking, count)
+	}
 	var progress []struct{ processed, total int }
 	engine.OnProgress = func(stage string, processed, total int, _ string) {
 		if stage == "discovery" && processed > 0 {
@@ -908,6 +925,9 @@ func TestMultiRootCountDiscoveryParity(t *testing.T) {
 	if len(candidates) != count {
 		t.Fatalf("discovery candidates = %d, want preflight count %d", len(candidates), count)
 	}
+	if progressKeyTracking != 1 {
+		t.Fatalf("progress key tracking = %d, want 1 for overlapping roots", progressKeyTracking)
+	}
 	if len(progress) != count || progress[len(progress)-1].processed != count || progress[len(progress)-1].total != count {
 		t.Fatalf("deduplicated progress = %+v, want %d events ending at %d/%d", progress, count, count, count)
 	}
@@ -918,5 +938,65 @@ func TestMultiRootCountDiscoveryParity(t *testing.T) {
 	}
 	if count != 2 || len(results) != count {
 		t.Fatalf("count/results = %d/%d, want 2/2", count, len(results))
+	}
+}
+
+func TestNonOverlappingRootsAvoidCountAndProgressKeyTracking(t *testing.T) {
+	first := t.TempDir()
+	second := t.TempDir()
+	writeMultiRootFixture(t, filepath.Join(first, "one.txt"), "needle")
+	writeMultiRootFixture(t, filepath.Join(second, "two.txt"), "needle")
+
+	for _, test := range []struct {
+		name string
+		raw  []string
+		want int
+	}{
+		{name: "single root", raw: []string{first}, want: 1},
+		{name: "non-overlapping roots", raw: []string{first, second}, want: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			roots, err := PrepareStartRoots(test.raw, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			countKeyTracking := 0
+			count, err := getDocumentFileCountForRoots([]string{"-g", "*.txt"}, roots, nil, WalkOptions{}, func() {
+				countKeyTracking++
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if count != test.want || countKeyTracking != 0 {
+				t.Fatalf("count/key tracking = %d/%d, want %d/0", count, countKeyTracking, test.want)
+			}
+
+			engine := NewSearchEngine([]string{"needle"}, nil, []string{"-g", "*.txt"}, false, 1, 1000)
+			engine.StartRoots = roots
+			engine.Silent = true
+			progressKeyTracking := 0
+			engine.onProgressKeyTracking = func() {
+				progressKeyTracking++
+			}
+			progressEvents := 0
+			engine.OnProgress = func(stage string, processed, total int, _ string) {
+				if stage == "discovery" && processed > 0 {
+					progressEvents++
+					if total != count {
+						t.Errorf("progress total = %d, want %d", total, count)
+					}
+				}
+			}
+			candidates, _, err := engine.DiscoverCandidates(count)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(candidates) != test.want || progressEvents != test.want || progressKeyTracking != 0 {
+				t.Fatalf(
+					"candidates/progress/key tracking = %d/%d/%d, want %d/%d/0",
+					len(candidates), progressEvents, progressKeyTracking, test.want, test.want,
+				)
+			}
+		})
 	}
 }

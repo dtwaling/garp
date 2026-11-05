@@ -143,7 +143,7 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `--code` | off | Include code files (.go, .py, .js, .ts, ...) |
 | `--distance N` | 5000 | Proximity window in characters |
 | `--startdir <path>` | cwd | Search root. Repeat the flag or use comma-separated paths for multiple roots. An existing directory name that contains a comma stays intact. |
-| `--pathscope <patterns>` | (all) | Comma-separated path patterns. Prefix with `!` to exclude. The scope intersects with positive globs. `*` stays in one segment; `**` crosses segments. |
+| `--pathscope <patterns>` | (all) | Comma-separated path patterns. Prefix with `!` to exclude. The scope intersects with positive globs. See path pattern rules below. |
 | `-g`, `--glob <pattern>` | (all) | Repeatable case-sensitive path glob. Prefix with `!` to exclude. |
 | `--iglob <pattern>` | (all) | Repeatable case-insensitive path glob. Prefix with `!` to exclude. |
 | `-t`, `--type`, `--only <type>` | (all) | Restrict file types. Repeat the flag or use comma-separated values. |
@@ -169,6 +169,19 @@ Value flags accept space and equals forms, such as `--startdir repo` and
 `-A`, and `-B` are not supported; use `--distance` and `--max-excerpts`.
 The listed aliases are compatible with rg conventions. garp is not a drop-in
 rg replacement.
+
+### Path pattern rules
+
+A bare `name` matches a basename at any depth. `name/`, `./name`, and any
+pattern that contains `/` are anchored to the search root. `*` and `?` stay
+within one path segment; `**` crosses segments.
+
+On all platforms, an absolute pathscope or user-glob pattern must overlap an
+effective `--startdir`. Examples are `/repo/src/**` on POSIX and
+`C:/repo/src/**` on Windows. A pattern can select a path inside the root, or an
+ancestor pattern can cover the root. If no root intersects it, validation fails
+before search. Use `./src` for explicit root-relative matching. On Windows, a
+leading slash that is not an absolute path is root-relative.
 
 ### Partial word matching and inline globs
 
@@ -246,12 +259,12 @@ filtering unrelated results.
 ```
 
 `query.start_dir` contains the first reported root. `query.start_dirs` appears
-only when at least two reported roots remain. A nested supplied root can fold
-into its reported ancestor even when garp still walks it to prevent data loss.
-Result paths remain under the reported ancestor. Both fields are omitted when
-`--startdir` is not supplied. `query.only_type` remains present for one or more
-selected types. `query.only_types` appears only for two or more distinct types.
-`query.case_sensitive` appears only when case-sensitive mode is active.
+only when at least two reported roots remain. A nested supplied root can become
+traversal-only to prevent data loss; results remain under its reported ancestor.
+Both fields are omitted when `--startdir` is not supplied. `query.only_type`
+remains present for one or more selected types. `query.only_types` appears only
+for two or more distinct types. `query.case_sensitive` appears only when
+case-sensitive mode is active.
 
 Each result includes ranked-match metadata. `score` is the sum of the lengths
 of the distinct matched query terms, `term_count` is their count, and
@@ -458,10 +471,9 @@ one secondary term, and the best clusters rank by term-length rarity score.
 Pass `--strict` to require all terms for any search size.
 
 **Does `--pathscope` filter results or restrict the walk?**
-It restricts the walk. Directories outside the scope are pruned at directory-entry
-time -- garp never descends into them and never visits a single file inside them.
-This makes it efficient with large trees: pass `--pathscope 'src/,docs/'` and
-`.venv`, `node_modules`, or any other noise tree is skipped entirely.
+It filters results and can restrict the walk. Anchored positive prefixes such as
+`src/` and `docs/` support direct pruning of unrelated branches. A bare basename
+pattern such as `docs` can match at any depth, so it can require full traversal.
 
 **Is it cross-platform?**
 Pure Go -- works on Linux, macOS, Windows. The TUI requires an ANSI-compatible terminal.

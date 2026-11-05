@@ -322,6 +322,18 @@ func strictPathDescendant(parent, child string) bool {
 	return !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
+func preparedPhysicalRootsOverlap(roots []StartRoot) bool {
+	for left := 0; left < len(roots); left++ {
+		for right := left + 1; right < len(roots); right++ {
+			if strictPathDescendant(roots[left].PhysicalPath, roots[right].PhysicalPath) ||
+				strictPathDescendant(roots[right].PhysicalPath, roots[left].PhysicalPath) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // RetainNestedStartRoots reports whether a relative path-anchored policy needs
 // each supplied root to retain its own matching context.
 func RetainNestedStartRoots(pathScope []string, userGlobs []UserGlob) bool {

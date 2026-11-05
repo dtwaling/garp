@@ -203,6 +203,9 @@ type SearchEngine struct {
 
 	// Optional progress callback (nil if unused)
 	OnProgress ProgressFunc
+
+	// Test observer for overlap-only progress key tracking.
+	onProgressKeyTracking func()
 }
 
 // NewSearchEngine creates a new search engine instance
@@ -285,23 +288,34 @@ func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int, r
 	}
 	candidates := make([]discoveredCandidate, 0, 128)
 	candidateIndex := make(map[string]int)
-	progressSeen := make(map[string]struct{})
+	trackProgressKeys := se.OnProgress != nil && preparedPhysicalRootsOverlap(roots)
+	var progressSeen map[string]struct{}
+	if trackProgressKeys {
+		progressSeen = make(map[string]struct{})
+		if se.onProgressKeyTracking != nil {
+			se.onProgressKeyTracking()
+		}
+	}
 	processed := 0
 	for _, root := range roots {
-		candidateFiles, err := findFilesWithFirstWordProgressQueryWithRoot(query, se.FileTypes, se.FilterWorkers, func(rootProcessed, _ int, path string) {
-			if rootProcessed == 0 {
-				return
-			}
-			key := canonicalCandidateKey(root, path)
-			if _, exists := progressSeen[key]; exists {
-				return
-			}
-			progressSeen[key] = struct{}{}
-			processed++
-			if se.OnProgress != nil {
+		var onProgress func(int, int, string)
+		if se.OnProgress != nil {
+			onProgress = func(rootProcessed, _ int, path string) {
+				if rootProcessed == 0 {
+					return
+				}
+				if trackProgressKeys {
+					key := canonicalCandidateKey(root, path)
+					if _, exists := progressSeen[key]; exists {
+						return
+					}
+					progressSeen[key] = struct{}{}
+				}
+				processed++
 				se.OnProgress("discovery", processed, fileCount, path)
 			}
-		}, root, se.PathScope, se.walkOptions())
+		}
+		candidateFiles, err := findFilesWithFirstWordProgressQueryWithRoot(query, se.FileTypes, se.FilterWorkers, onProgress, root, se.PathScope, se.walkOptions())
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to find files with first word: %w", err)
 		}

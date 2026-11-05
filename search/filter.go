@@ -392,15 +392,34 @@ func GetDocumentFileCountWithOptions(fileTypes []string, walkRoot string, pathSc
 // GetDocumentFileCountForRoots counts the canonical union of candidates from
 // prepared roots using the same traversal policy as discovery.
 func GetDocumentFileCountForRoots(fileTypes []string, roots []StartRoot, pathScope []string, options WalkOptions) (int, error) {
-	seen := make(map[string]struct{})
+	return getDocumentFileCountForRoots(fileTypes, roots, pathScope, options, nil)
+}
+
+func getDocumentFileCountForRoots(fileTypes []string, roots []StartRoot, pathScope []string, options WalkOptions, onKeyTracking func()) (int, error) {
+	overlap := preparedPhysicalRootsOverlap(roots)
+	count := 0
+	var seen map[string]struct{}
+	if overlap {
+		seen = make(map[string]struct{})
+		if onKeyTracking != nil {
+			onKeyTracking()
+		}
+	}
 	for _, root := range roots {
 		err := walkPreparedCandidates(fileTypes, root, pathScope, options, func(path string, _ os.FileInfo) error {
-			seen[canonicalCandidateKey(root, path)] = struct{}{}
+			if overlap {
+				seen[canonicalCandidateKey(root, path)] = struct{}{}
+			} else {
+				count++
+			}
 			return nil
 		})
 		if err != nil {
 			return 0, err
 		}
+	}
+	if !overlap {
+		return count, nil
 	}
 	return len(seen), nil
 }
