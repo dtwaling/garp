@@ -265,8 +265,8 @@ Every output mode uses the same seven ranking tiers:
 4. `BoundaryQuality`, descending
 5. match span length, ascending
 6. `TopQualityChunks`, descending
-7. file path, ascending: slash-normalized, case-insensitive byte order, then
-   exact byte order
+7. ranking-root-relative path, ascending: slash-normalized, case-insensitive
+   byte order, then exact byte order; supplied root order; canonical path
 
 `PathMatchCount` is the number of distinct query terms represented in the
 path relative to the search root. `BoundaryQuality` rewards terms that match

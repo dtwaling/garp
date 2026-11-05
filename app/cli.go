@@ -606,7 +606,7 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("  --max-results N         Maximum matching files; 0 = unlimited."))
 	fmt.Println(infoStyle.Render("                          Defaults: --json 50, --plain 50, --pathonly 0, TUI 0."))
 	fmt.Println(infoStyle.Render("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted)"))
-	fmt.Println(infoStyle.Render("  --workers N             Stage 2 text filter workers (default 2)"))
+	fmt.Println(infoStyle.Render("  --workers N             Stage 2 text filter workers (default 4)"))
 	fmt.Println(infoStyle.Render("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000)"))
 	fmt.Println(infoStyle.Render("  --smart-forms           Enable smart word forms (s, es, ed, ing, al, tion/ation)"))
 	fmt.Println(infoStyle.Render("  -t, --type, --only TYPE Restrict file types; repeat or use comma-separated values"))

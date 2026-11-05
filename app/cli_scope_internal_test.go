@@ -6,6 +6,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -295,6 +296,17 @@ func TestShowUsageDocumentsFlagsAndCompatibilityLimits(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("usage missing %q:\n%s", want, out)
 		}
+	}
+	defaultWorkers := parseArguments([]string{"needle"}).FilterWorkers
+	if defaultWorkers != 4 {
+		t.Fatalf("parser default workers = %d, want 4", defaultWorkers)
+	}
+	workersHelp := fmt.Sprintf(
+		"--workers N             Stage 2 text filter workers (default %d)",
+		defaultWorkers,
+	)
+	if !strings.Contains(out, workersHelp) {
+		t.Errorf("usage worker default differs from parser default; missing %q:\n%s", workersHelp, out)
 	}
 }
 
