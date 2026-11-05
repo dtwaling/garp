@@ -98,12 +98,12 @@ var pathScopeRejectedChars = []string{
 //   - Dots (.) in segments are treated as part of a directory or filename --
 //     file extension filtering belongs to --not / --only, not --pathscope.
 //     The CLI help directs users accordingly, but garp always runs the search.
-//   - Empty segments (from trailing commas etc.) are silently skipped.
+//   - Empty segments and parent traversal segments are rejected.
 //
-// Returns the parsed segments, or nil if input is empty (feature disabled).
+// Returns validated normalized segments.
 func ValidatePathScope(raw string) ([]string, error) {
 	if raw == "" {
-		return nil, nil
+		return nil, fmt.Errorf("--pathscope: value must not be empty")
 	}
 	raw = stripMatchingQuotes(strings.TrimSpace(raw))
 	parts := strings.Split(raw, ",")
@@ -112,7 +112,7 @@ func ValidatePathScope(raw string) ([]string, error) {
 		seg := stripMatchingQuotes(strings.TrimSpace(p))
 		seg = strings.ReplaceAll(seg, "\\", "/")
 		if seg == "" {
-			continue
+			return nil, fmt.Errorf("--pathscope: empty comma-separated segment")
 		}
 		// Reject regex and injection chars
 		for _, ch := range pathScopeRejectedChars {
@@ -124,12 +124,25 @@ func ValidatePathScope(raw string) ([]string, error) {
 				)
 			}
 		}
+		pattern := strings.TrimPrefix(seg, "!")
+		if pattern == "" {
+			return nil, fmt.Errorf("--pathscope: negation must include a pattern")
+		}
+		if isBareSlashPattern(pattern) {
+			return nil, fmt.Errorf("--pathscope: segment %q has no pattern before its directory marker", seg)
+		}
+		for _, component := range strings.Split(pattern, "/") {
+			if component == ".." {
+				return nil, fmt.Errorf("--pathscope: segment %q contains parent traversal", seg)
+			}
+		}
 		result = append(result, seg)
 	}
-	if len(result) == 0 {
-		return nil, nil
-	}
 	return result, nil
+}
+
+func isBareSlashPattern(pattern string) bool {
+	return strings.Trim(pattern, "/") == ""
 }
 
 func stripMatchingQuotes(s string) string {

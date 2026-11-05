@@ -37,6 +37,7 @@ garp mutex changed --code
 garp bank wire update --not .txt test
 garp approval crypto gemini --smart-forms
 garp report earnings --only pdf
+garp auth migration -s -t md -t pdf -g '!archive/**' -l
 
 # Partial word matching
 garp deploy service --partial             # boundary-aware prefix: deployment, deploy_service
@@ -49,6 +50,7 @@ garp pitch onset midi --strict        # enforce all terms with strict AND
 
 # Scope search to specific directories (prunes the walk -- never descends outside scope)
 garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/,tests/' --code
+garp deployment owner --startdir 'repo-a,repo-b' -g 'docs/**' --json
 
 # Machine-readable output for scripts and MCP/agent callers
 garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/' --code --json
@@ -140,23 +142,46 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 |------|---------|-------------|
 | `--code` | off | Include code files (.go, .py, .js, .ts, ...) |
 | `--distance N` | 5000 | Proximity window in characters |
-| `--startdir <path>` | cwd | Base directory to search from |
-| `--pathscope <patterns>` | (all) | Comma-separated directory patterns. Prunes the walk -- directories outside scope are never descended into. Trailing slash optional: `audio2midi/` and `audio2midi` both work. |
-| `--only <type>` | (all) | Search only one file type, e.g. `--only pdf` |
+| `--startdir <path>` | cwd | Search roots as one comma-separated value. Specify the flag once. An existing directory name that contains a comma stays intact. |
+| `--pathscope <patterns>` | (all) | Comma-separated path patterns in one flag occurrence. Prefix with `!` to exclude. Use repeatable `-g` for additional path globs. The scope intersects with positive globs. See path pattern rules below. |
+| `-g`, `--glob <pattern>` | (all) | Repeatable case-sensitive path glob. Prefix with `!` to exclude. |
+| `--iglob <pattern>` | (all) | Repeatable case-insensitive path glob. Prefix with `!` to exclude. |
+| `-t`, `--type`, `--only <type>` | (all) | Restrict file types. Repeat the flag or use comma-separated values. |
 | `--smart-forms` | off | Match word forms (plurals, -ing, -ed, -tion) |
-| `--partial[=MODE]` | off | Enable partial word matching. Bare `--partial` defaults to `prefix`; modes: `prefix`, `contains`, `off` |
+| `--partial[=MODE]` | off | Enable partial matching. Bare form selects `prefix`; modes are `prefix`, `contains`, `off`, and `none`. |
+| `-i`, `--ignore-case` | on | Match terms without case sensitivity. The last case flag wins. |
+| `-s`, `--case-sensitive` | off | Match terms with case sensitivity through discovery, exclusions, ranking, and excerpts. |
 | `--not <excl...>` | (none) | Tokens after this flag are exclusions. Dot-prefixed = extension exclude (`.pdf`); others = word exclude |
 | `--strict` | off | Require every search term in the proximity window, including searches with three or more terms |
-| `--pathonly` | off | Skip TUI; emit only distinct matching file paths (one per line, ranked order) to stdout |
+| `-l`, `--files-with-matches`, `--pathonly` | off | Skip TUI; emit only distinct matching file paths in ranked order. |
 | `--json` | off | Skip TUI; emit structured JSON to stdout. Preferred for MCP/agent callers |
 | `--plain` | off | Skip TUI; emit plain line-oriented text to stdout. Useful for shell scripts |
-| `--max-excerpts N` | 1 | Maximum excerpts per matching file (maximum 50) |
+| `-m`, `--max-count`, `--max-excerpts N` | 1 | Maximum proximity excerpts per file, not raw matching lines. Maximum 50. |
 | `--max-results N` | JSON/plain: 50; path-only/TUI: 0 | Maximum matching files to return. An explicit `0` means unlimited |
 | `--workers N` | 4 | Stage 2 filter worker count |
 | `--heavy-concurrency N` | auto | Concurrent heavy (binary) extractions |
 | `--file-timeout-binary N` | 1000 | Timeout in ms for binary extraction |
 | `--help`, `-h` | | Show help |
 | `--version`, `-v` | | Show version |
+
+Value flags accept space and equals forms, such as `--startdir repo` and
+`--startdir=repo`. Use `--` to stop flag parsing. Context flags such as `-C`,
+`-A`, and `-B` are not supported; use `--distance` and `--max-excerpts`.
+The listed aliases are compatible with rg conventions. garp is not a drop-in
+rg replacement.
+
+### Path pattern rules
+
+A bare `name` matches a basename at any depth. `name/`, `./name`, and any
+pattern that contains `/` are anchored to the search root. `*` and `?` stay
+within one path segment; `**` crosses segments.
+
+On all platforms, an absolute pathscope or user-glob pattern must overlap an
+effective `--startdir`. Examples are `/repo/src/**` on POSIX and
+`C:/repo/src/**` on Windows. A pattern can select a path inside the root, or an
+ancestor pattern can cover the root. If no root intersects it, validation fails
+before search. Use `./src` for explicit root-relative matching. On Windows, a
+leading slash that is not an absolute path is root-relative.
 
 ### Partial word matching and inline globs
 
@@ -206,6 +231,7 @@ filtering unrelated results.
   "query": {
     "terms": ["pitch", "frequency"],
     "start_dir": "/path/to/dir",
+    "start_dirs": ["/path/to/dir", "/other/repo"],
     "path_scope": ["audio2midi/", "docs/"],
     "include_code": true
   },
@@ -232,6 +258,14 @@ filtering unrelated results.
 }
 ```
 
+`query.start_dir` contains the first reported root. `query.start_dirs` appears
+only when at least two reported roots remain. A nested supplied root can become
+traversal-only to prevent data loss; results remain under its reported ancestor.
+Both fields are omitted when `--startdir` is not supplied. `query.only_type`
+remains present for one or more selected types. `query.only_types` appears only
+for two or more distinct types. `query.case_sensitive` appears only when
+case-sensitive mode is active.
+
 Each result includes ranked-match metadata. `score` is the sum of the lengths
 of the distinct matched query terms, `term_count` is their count, and
 `matched_terms` lists them in query order.
@@ -244,8 +278,8 @@ Every output mode uses the same seven ranking tiers:
 4. `BoundaryQuality`, descending
 5. match span length, ascending
 6. `TopQualityChunks`, descending
-7. file path, ascending: slash-normalized, case-insensitive byte order, then
-   exact byte order
+7. ranking-root-relative path, ascending: slash-normalized, case-insensitive
+   byte order, then exact byte order; supplied root order; canonical path
 
 `PathMatchCount` is the number of distinct query terms represented in the
 path relative to the search root. `BoundaryQuality` rewards terms that match
@@ -437,10 +471,9 @@ one secondary term, and the best clusters rank by term-length rarity score.
 Pass `--strict` to require all terms for any search size.
 
 **Does `--pathscope` filter results or restrict the walk?**
-It restricts the walk. Directories outside the scope are pruned at directory-entry
-time -- garp never descends into them and never visits a single file inside them.
-This makes it efficient with large trees: pass `--pathscope 'src/,docs/'` and
-`.venv`, `node_modules`, or any other noise tree is skipped entirely.
+It filters results and can restrict the walk. Anchored positive prefixes such as
+`src/` and `docs/` support direct pruning of unrelated branches. A bare basename
+pattern such as `docs` can match at any depth, so it can require full traversal.
 
 **Is it cross-platform?**
 Pure Go -- works on Linux, macOS, Windows. The TUI requires an ANSI-compatible terminal.

@@ -4,8 +4,6 @@ import "testing"
 
 func TestSmartFormsDiscovery(t *testing.T) {
 	t.Run("smart forms enabled", func(t *testing.T) {
-		t.Setenv("GARP_SMART_FORMS", "1")
-
 		for _, tt := range []struct {
 			name string
 			buf  string
@@ -25,7 +23,8 @@ func TestSmartFormsDiscovery(t *testing.T) {
 			{name: "contains mode remains unaffected", buf: "deployment", word: "deploy", mode: PartialModeContains, want: true},
 		} {
 			t.Run(tt.name, func(t *testing.T) {
-				got := asciiIndexPartialCI([]byte(tt.buf), []byte(tt.word), tt.mode) >= 0
+				matcher := compileTermMatcherWithOptions(tt.word, tt.mode, QueryOptions{SmartForms: true})
+				got := discoveryMatchIndex([]byte(tt.buf), matcher, 0) >= 0
 				if got != tt.want {
 					t.Errorf("asciiIndexPartialCI(%q, %q, %q) found = %t, want %t", tt.buf, tt.word, tt.mode, got, tt.want)
 				}
@@ -34,7 +33,6 @@ func TestSmartFormsDiscovery(t *testing.T) {
 	})
 
 	t.Run("smart forms disabled preserves legacy suffixes", func(t *testing.T) {
-		t.Setenv("GARP_SMART_FORMS", "")
 		if got := asciiIndexPartialCI([]byte("deployed"), []byte("deploy"), PartialModeOff) >= 0; got {
 			t.Error("asciiIndexPartialCI found deployed with smart forms disabled, want false")
 		}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -168,6 +169,93 @@ func TestJSONTraversalOptionsOmissionAndPresence(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestJSONOnlyTypes(t *testing.T) {
+	one := buildJSONOutput(parseArguments([]string{"Needle", "--type", "PDF"}), search.ExecutionResult{})
+	if one.Query.OnlyType != "pdf" || one.Query.OnlyTypes != nil || one.Query.Terms[0] != "needle" {
+		t.Fatalf("single-type query = %#v", one.Query)
+	}
+
+	many := buildJSONOutput(parseArguments([]string{"Needle", "-s", "-t", "PDF,md,pdf"}), search.ExecutionResult{})
+	if many.Query.OnlyType != "pdf" || !slicesEqual(many.Query.OnlyTypes, []string{"pdf", "md"}) {
+		t.Fatalf("multi-type query = %#v", many.Query)
+	}
+	if !many.Query.CaseSensitive || many.Query.Terms[0] != "Needle" {
+		t.Fatalf("case query = %#v", many.Query)
+	}
+
+	unicodeDefault := buildJSONOutput(
+		parseArguments([]string{"\u0130", "API", "--type", "txt"}),
+		search.ExecutionResult{},
+	)
+	if !slicesEqual(unicodeDefault.Query.Terms, []string{"\u0130", "api"}) {
+		t.Fatalf("Unicode default query terms = %q", unicodeDefault.Query.Terms)
+	}
+}
+
+func TestNewSilentSearchEnginePropagation(t *testing.T) {
+	root := t.TempDir()
+	args := parseArguments([]string{
+		"Needle", "--startdir", root, "-t", "md,pdf",
+		"--glob", "docs/**", "--iglob", "*.MD",
+		"-s", "--smart-forms", "--pathonly",
+	})
+	roots, err := search.PrepareStartRootsWithOptions(args.StartDirs, search.StartRootOptions{
+		PathScope: args.PathScope, UserGlobs: args.UserGlobs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args.StartRoots = roots
+	engine := newSilentSearchEngine(args)
+	if !reflect.DeepEqual(engine.StartRoots, roots) ||
+		!reflect.DeepEqual(engine.UserGlobs, args.UserGlobs) ||
+		!engine.CaseSensitive || !engine.SmartForms || !engine.PathOnly ||
+		!slicesEqual(engine.FileTypes, buildFileTypes(false, "md", []string{"md", "pdf"})) {
+		t.Fatalf("silent engine did not preserve arguments: %#v", engine)
+	}
+}
+
+func TestJSONStartDirsCompatibilityAndOmission(t *testing.T) {
+	base := t.TempDir()
+	first := filepath.Join(base, "first")
+	second := filepath.Join(base, "second")
+	for _, root := range []string{first, second} {
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	args := parseArguments([]string{
+		"needle", "--startdir", first + "," + second,
+	})
+	roots, err := search.PrepareStartRoots(args.StartDirs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args.StartRoots = roots
+	out := buildJSONOutput(args, search.ExecutionResult{})
+	if out.Query.StartDir != first || !slicesEqual(out.Query.StartDirs, []string{first, second}) {
+		t.Fatalf("multi-root query = %#v", out.Query)
+	}
+
+	single := parseArguments([]string{"needle", "--startdir", first})
+	single.StartRoots, err = search.PrepareStartRoots(single.StartDirs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := buildJSONOutput(single, search.ExecutionResult{}).Query; got.StartDir != first || got.StartDirs != nil {
+		t.Fatalf("single-root query = %#v", got)
+	}
+
+	omitted := buildJSONOutput(parseArguments([]string{"needle"}), search.ExecutionResult{})
+	raw, err := json.Marshal(omitted.Query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "start_dir") {
+		t.Fatalf("default query leaked start fields: %s", raw)
 	}
 }
 

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -69,6 +70,32 @@ func TestTUIPartialExcerptDoesNotAugmentPresentTerm(t *testing.T) {
 	}
 }
 
+func TestTUITargetDescriptionShowsOrderedTypeUnion(t *testing.T) {
+	lastExcerptInnerWidth = 0
+	lastContentHeight = 0
+
+	m := model{
+		width:       200,
+		height:      60,
+		loading:     true,
+		searchWords: []string{"needle"},
+		onlyType:    "pdf",
+		onlyTypes:   []string{"pdf", "md", "dockerfile"},
+	}
+	const want = "only .pdf, .md, .dockerfile"
+	if got := m.targetDescription(); got != want {
+		t.Fatalf("targetDescription() = %q, want %q", got, want)
+	}
+	if view := m.View(); !strings.Contains(view, want) {
+		t.Fatalf("TUI target header missing %q:\n%s", want, view)
+	}
+
+	singular := model{onlyType: "pdf"}
+	if got := singular.targetDescription(); got != "only .pdf" {
+		t.Fatalf("singular targetDescription() = %q", got)
+	}
+}
+
 func TestTUIPropagatesMaxResultsAndExcerpts(t *testing.T) {
 	root := t.TempDir()
 	args := parseArguments([]string{
@@ -94,5 +121,30 @@ func TestTUIPropagatesMaxResultsAndExcerpts(t *testing.T) {
 	}
 	if !engine.NoIgnore || engine.MaxFileSize != 1024*1024 {
 		t.Errorf("walk options = no-ignore %t, max-file-size %d; want true, 1048576", engine.NoIgnore, engine.MaxFileSize)
+	}
+}
+
+func TestTUIEnginePropagation(t *testing.T) {
+	root := t.TempDir()
+	args := parseArguments([]string{
+		"Needle", "--startdir", root, "-t", "md,pdf",
+		"--glob", "docs/**", "--iglob", "*.MD",
+		"-s", "--smart-forms",
+	})
+	roots, err := search.PrepareStartRootsWithOptions(args.StartDirs, search.StartRootOptions{
+		PathScope: args.PathScope, UserGlobs: args.UserGlobs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args.StartRoots = roots
+	m := newTUIModel(args)
+	engine := m.newSearchEngine()
+	if !reflect.DeepEqual(m.startRoots, roots) ||
+		!reflect.DeepEqual(engine.StartRoots, roots) ||
+		!reflect.DeepEqual(engine.UserGlobs, args.UserGlobs) ||
+		!engine.CaseSensitive || !engine.SmartForms ||
+		!slicesEqual(engine.FileTypes, buildFileTypes(false, "md", []string{"md", "pdf"})) {
+		t.Fatalf("TUI engine did not preserve arguments: %#v", engine)
 	}
 }

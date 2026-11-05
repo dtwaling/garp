@@ -40,6 +40,33 @@ type ignoreChain struct {
 	nextPrecedence int
 }
 
+func ignoreChainsEquivalent(left, right ignoreChain) bool {
+	if len(left.rules) != len(right.rules) {
+		return false
+	}
+	for index := range left.rules {
+		a := left.rules[index]
+		b := right.rules[index]
+		if !sameFilePath(a.sourceDir, b.sourceDir) ||
+			a.lineOrder != b.lineOrder ||
+			a.pattern != b.pattern ||
+			a.negated != b.negated ||
+			a.directoryOnly != b.directoryOnly ||
+			a.caseInsensitive != b.caseInsensitive ||
+			a.windowsPaths != b.windowsPaths {
+			return false
+		}
+		switch {
+		case a.matcher == nil && b.matcher == nil:
+		case a.matcher == nil || b.matcher == nil:
+			return false
+		case a.matcher.String() != b.matcher.String():
+			return false
+		}
+	}
+	return true
+}
+
 // initialIgnoreRules builds the ignore chain inherited by walkRoot.
 func initialIgnoreRules(walkRoot string) []ignoreRule {
 	return initialIgnoreChain(walkRoot).rules
@@ -146,24 +173,6 @@ func hasUnescapedIgnoreWildcard(pattern string) bool {
 func hasRepositoryBoundary(directory string) bool {
 	info, err := os.Stat(filepath.Join(directory, ".git"))
 	return err == nil && (info.IsDir() || info.Mode().IsRegular())
-}
-
-func pathScopeExemptsDirectChild(name string, normScope []string) bool {
-	for _, pattern := range normScope {
-		if pattern == "" {
-			continue
-		}
-		hasSlash := strings.Contains(pattern, "/")
-		parts := splitPathScopeParts(pattern)
-		if len(parts) == 0 || parts[0] == "**" || (!hasSlash && strings.Contains(parts[0], ".")) {
-			continue
-		}
-		first, child := normalizePathScopeMatchPair(parts[0], name)
-		if matched, err := path.Match(first, child); err == nil && matched {
-			return true
-		}
-	}
-	return false
 }
 
 func findRepositoryRoot(start string) (string, bool) {

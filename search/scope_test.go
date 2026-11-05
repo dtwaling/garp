@@ -141,12 +141,8 @@ func TestValidateStartDir_RelativePath(t *testing.T) {
 // --- ValidatePathScope tests ---
 
 func TestValidatePathScope_Empty(t *testing.T) {
-	got, err := search.ValidatePathScope("")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("expected nil for empty input, got %v", got)
+	if _, err := search.ValidatePathScope(""); err == nil {
+		t.Fatal("expected empty pathscope rejection")
 	}
 }
 
@@ -346,13 +342,26 @@ func TestValidatePathScope_StarWildcardAllowed(t *testing.T) {
 	}
 }
 
-func TestValidatePathScope_SkipsEmptySegments(t *testing.T) {
-	// trailing comma or double-comma should not produce empty segments
-	got, err := search.ValidatePathScope("*/backend/*,")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestValidatePathScope_RejectsEmptySegments(t *testing.T) {
+	for _, value := range []string{"*/backend/*,", ",tests/*", "docs/*,,tests/*"} {
+		if _, err := search.ValidatePathScope(value); err == nil {
+			t.Errorf("ValidatePathScope(%q) accepted an empty segment", value)
+		}
 	}
-	if len(got) != 1 {
-		t.Fatalf("expected 1 segment (trailing comma skipped), got %v", got)
+}
+
+func TestValidatePathScope_RejectsTraversalSegments(t *testing.T) {
+	for _, value := range []string{"../secret", "docs/../secret", "!../secret"} {
+		if _, err := search.ValidatePathScope(value); err == nil {
+			t.Errorf("ValidatePathScope(%q) accepted parent traversal", value)
+		}
+	}
+}
+
+func TestValidatePathScope_RejectsBareDirectoryMarkers(t *testing.T) {
+	for _, value := range []string{"/", `\`, "//", "!/"} {
+		if _, err := search.ValidatePathScope(value); err == nil {
+			t.Errorf("ValidatePathScope(%q) accepted a bare directory marker", value)
+		}
 	}
 }

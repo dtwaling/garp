@@ -185,6 +185,41 @@ func TestPathScopeExemptionWildcardFirstSegment(t *testing.T) {
 	}
 }
 
+func TestPathScopeExemptionBareWildcardDirectChild(t *testing.T) {
+	tests := []struct {
+		scope string
+		want  []string
+	}{
+		{scope: "Team*", want: []string{"Team1/main.md", "TeamA/main.md", "TeamLong/main.md"}},
+		{scope: "Team?", want: []string{"Team1/main.md", "TeamA/main.md"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.scope, func(t *testing.T) {
+			root := t.TempDir()
+			writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "Team1/\nTeamA/\nTeamLong/\n")
+			for _, relative := range []string{"Team1/main.md", "TeamA/main.md", "TeamLong/main.md"} {
+				writeWalkFixture(t, root, relative, "anchor")
+			}
+
+			got := collectCandidates(t, root, []string{"-g", "*.md"}, []string{tt.scope}, WalkOptions{})
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("candidates = %v, want bare wildcard direct-child exemptions %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNegativeBareWildcardDoesNotExemptIgnoredChild(t *testing.T) {
+	root := t.TempDir()
+	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "TeamA/\n")
+	writeWalkFixture(t, root, "TeamA/main.md", "anchor")
+
+	got := collectCandidates(t, root, []string{"-g", "*.md"}, []string{"!Team*"}, WalkOptions{})
+	if len(got) != 0 {
+		t.Fatalf("candidates = %v, want negative bare wildcard to preserve ignore pruning", got)
+	}
+}
+
 func TestPathScopeExemptionPreservesWhitelistChain(t *testing.T) {
 	root := t.TempDir()
 	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "*\n!*/\n!*.go\n")
@@ -218,6 +253,23 @@ func TestPathScopeExemptionNonExemptPatternsDoNotBypassParentIgnore(t *testing.T
 				t.Fatalf("candidates = %v, want ignored child to remain pruned", got)
 			}
 		})
+	}
+}
+
+func TestNegativePathScopeDoesNotExemptIgnoredContainer(t *testing.T) {
+	root := t.TempDir()
+	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "RepoA/\n")
+	writeWalkFixture(t, root, "RepoA/main.md", "anchor")
+
+	got := collectCandidates(
+		t,
+		root,
+		[]string{"-g", "*.md"},
+		[]string{"!RepoA/**"},
+		WalkOptions{},
+	)
+	if len(got) != 0 {
+		t.Fatalf("candidates = %v, want ignored container to remain pruned", got)
 	}
 }
 

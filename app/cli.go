@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -24,13 +25,24 @@ import (
 
 var version = "0.9.2"
 
+type infoRequest uint8
+
+const (
+	infoNone infoRequest = iota
+	infoHelp
+	infoVersion
+)
+
 // Arguments for CLI flags (used to seed TUI)
 type Arguments struct {
 	SearchWords        []string
 	ExcludeWords       []string
+	ParseErr           error
+	infoRequest        infoRequest
 	IncludeCode        bool
 	Strict             bool
 	SmartForms         bool
+	CaseSensitive      bool
 	Distance           int
 	HeavyConcurrency   int
 	FilterWorkers      int
@@ -40,18 +52,23 @@ type Arguments struct {
 	MaxResultsProvided bool
 	MaxResultsErr      error // non-nil if --max-results validation failed
 	OnlyType           string
+	OnlyTypes          []string
 	Partial            search.PartialMode
 	PartialErr         error // non-nil if --partial validation failed
 
 	// StartDir: base directory for file walks (--startdir flag).
 	// Empty string means use the current working directory.
-	StartDir    string
-	StartDirErr error // non-nil if validation failed
+	StartDir         string
+	StartDirs        []string
+	StartRoots       []search.StartRoot
+	StartDirProvided bool
+	StartDirErr      error // non-nil if validation failed
 
 	// PathScope: list of simple glob patterns to restrict file walks (--pathscope flag).
 	// Empty slice means no restriction.
 	PathScope    []string
 	PathScopeErr error // non-nil if validation failed
+	UserGlobs    []search.UserGlob
 
 	// NoIgnore disables repository ignore-file evaluation.
 	NoIgnore bool
@@ -72,7 +89,134 @@ type Arguments struct {
 	PathOnly bool
 }
 
-// parseArguments parses command line args
+func splitFlagValue(token string) (name, value string, attached bool) {
+	if index := strings.IndexByte(token, '='); index >= 0 {
+		return token[:index], token[index+1:], true
+	}
+	return token, "", false
+}
+
+func requiredFlagValue(args []string, index int, flag, attachedValue string, attached, suggestEquals, numeric bool) (string, int, error) {
+	if attached {
+		if attachedValue == "" {
+			return "", index, fmt.Errorf("%s: missing value", flag)
+		}
+		return attachedValue, index, nil
+	}
+	if index+1 >= len(args) {
+		return "", index, fmt.Errorf("%s: missing value", flag)
+	}
+	value := args[index+1]
+	if value == "" {
+		return "", index + 1, fmt.Errorf("%s: missing value", flag)
+	}
+	if strings.HasPrefix(value, "-") {
+		if numeric && isNegativeInteger(value) {
+			return value, index + 1, nil
+		}
+		if suggestEquals {
+			return "", index, fmt.Errorf("%s: missing value before %q; use %s=%s for a dash-leading value", flag, value, flag, value)
+		}
+		return "", index, fmt.Errorf("%s: missing value before %q", flag, value)
+	}
+	return value, index + 1, nil
+}
+
+func isNegativeInteger(value string) bool {
+	if len(value) < 2 || value[0] != '-' {
+		return false
+	}
+	for i := 1; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isStringValueFlag(flag string) bool {
+	switch flag {
+	case "--only", "-t", "--type", "--startdir", "--pathscope", "-g", "--glob", "--iglob":
+		return true
+	}
+	return false
+}
+
+func isNumericValueFlag(flag string) bool {
+	switch flag {
+	case "--distance", "-distance", "--heavy-concurrency", "--file-timeout-binary",
+		"--workers", "-workers", "--max-excerpts", "-m", "--max-count",
+		"--max-results", "--max-filesize":
+		return true
+	}
+	return false
+}
+
+func isContextFlag(token string) bool {
+	name, _, attached := splitFlagValue(token)
+	switch name {
+	case "-C", "--context", "-A", "--after-context", "-B", "--before-context":
+		return true
+	}
+	if attached || len(token) < 3 {
+		return false
+	}
+	switch token[:2] {
+	case "-C", "-A", "-B":
+		for _, char := range token[2:] {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func positiveInt(flag, value string) (int, error) {
+	number, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s: invalid integer %q", flag, value)
+	}
+	if number < 1 {
+		return 0, fmt.Errorf("%s: value must be positive", flag)
+	}
+	return number, nil
+}
+
+var onlyTypePattern = regexp.MustCompile(`^[a-z0-9_+-]+$`)
+
+func appendOnlyTypes(current []string, flag, value string) ([]string, error) {
+	seen := make(map[string]struct{}, len(current))
+	for _, onlyType := range current {
+		seen[onlyType] = struct{}{}
+	}
+	for _, segment := range strings.Split(value, ",") {
+		normalized := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(segment), "."))
+		if normalized == "" || !onlyTypePattern.MatchString(normalized) {
+			return current, fmt.Errorf("%s: invalid file type %q", flag, segment)
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		current = append(current, normalized)
+	}
+	return current, nil
+}
+
+func repeatedRootPolicyFlagError(flag string) error {
+	switch flag {
+	case "--startdir":
+		return fmt.Errorf("%s may only be specified once; use comma-separated paths in one %s value", flag, flag)
+	case "--pathscope":
+		return fmt.Errorf("%s may only be specified once; use comma-separated patterns in one %s value or repeat -g for additional path globs", flag, flag)
+	default:
+		return nil
+	}
+}
+
+// parseArguments parses command line args.
 func parseArguments(args []string) *Arguments {
 	result := &Arguments{
 		SearchWords:       []string{},
@@ -86,180 +230,257 @@ func parseArguments(args []string) *Arguments {
 	}
 
 	parsingExcludes := false
-	expectDistance := false
-	expectHeavy := false
-	expectTimeout := false
-	expectWorkers := false
-	expectMaxExcerpts := false
-	expectMaxResults := false
-	expectOnly := false
-	expectStartDir := false
-	expectPathScope := false
-	expectMaxFileSize := false
+	optionsEnded := false
 	heavyProvided := false
+	startDirSeen := false
+	pathScopeSeen := false
 
-	for _, a := range args {
-		if expectDistance {
-			if n, err := strconv.Atoi(a); err == nil && n > 0 {
-				result.Distance = n
-			}
-			expectDistance = false
+	setParseError := func(err error) {
+		if err != nil && result.ParseErr == nil {
+			result.ParseErr = err
+		}
+	}
+
+	for index := 0; index < len(args); index++ {
+		token := args[index]
+		if !optionsEnded && token == "--" {
+			optionsEnded = true
 			continue
 		}
-		if expectHeavy {
-			if n, err := strconv.Atoi(a); err == nil && n > 0 {
-				result.HeavyConcurrency = n
-				heavyProvided = true
+		if optionsEnded {
+			if parsingExcludes {
+				result.ExcludeWords = append(result.ExcludeWords, token)
+			} else {
+				result.SearchWords = append(result.SearchWords, token)
 			}
-			expectHeavy = false
 			continue
 		}
-		if expectTimeout {
-			if n, err := strconv.Atoi(a); err == nil && n > 0 {
-				result.FileTimeoutBinary = n
-			}
-			expectTimeout = false
+		if isContextFlag(token) {
+			setParseError(fmt.Errorf("%s is not supported; use --distance and --max-excerpts", token))
 			continue
 		}
-		if expectWorkers {
-			if n, err := strconv.Atoi(a); err == nil && n > 0 {
-				result.FilterWorkers = n
+		if !strings.HasPrefix(token, "-") {
+			if parsingExcludes {
+				result.ExcludeWords = append(result.ExcludeWords, token)
+			} else {
+				result.SearchWords = append(result.SearchWords, token)
 			}
-			expectWorkers = false
 			continue
 		}
-		if expectMaxExcerpts {
-			if n, err := strconv.Atoi(a); err == nil && n > 0 {
-				if n > 50 {
-					n = 50
+
+		flag, attachedValue, attached := splitFlagValue(token)
+		valueFlag := false
+		switch flag {
+		case "--distance", "-distance", "--heavy-concurrency", "--file-timeout-binary",
+			"--workers", "-workers", "--max-excerpts", "-m", "--max-count", "--max-results",
+			"--only", "-t", "--type",
+			"--startdir", "--pathscope", "-g", "--glob", "--iglob", "--max-filesize":
+			valueFlag = true
+		}
+		if valueFlag {
+			repeatedRootPolicyFlag := false
+			switch flag {
+			case "--startdir":
+				repeatedRootPolicyFlag = startDirSeen
+				startDirSeen = true
+			case "--pathscope":
+				repeatedRootPolicyFlag = pathScopeSeen
+				pathScopeSeen = true
+			}
+			value, nextIndex, err := requiredFlagValue(
+				args,
+				index,
+				flag,
+				attachedValue,
+				attached,
+				isStringValueFlag(flag),
+				isNumericValueFlag(flag),
+			)
+			index = nextIndex
+			if repeatedRootPolicyFlag {
+				setParseError(repeatedRootPolicyFlagError(flag))
+				continue
+			}
+			if err != nil {
+				switch flag {
+				case "--max-results":
+					result.MaxResultsProvided = true
+					result.MaxResultsErr = err
+				case "--max-filesize":
+					result.MaxFileSize = 0
+					result.MaxFileSizeErr = err
+				case "--startdir":
+					result.StartDirErr = err
+				case "--pathscope":
+					result.PathScopeErr = err
 				}
-				result.MaxExcerpts = n
+				setParseError(err)
+				continue
 			}
-			expectMaxExcerpts = false
-			continue
-		}
-		if expectMaxResults {
-			result.MaxResultsErr = nil
-			n, err := strconv.Atoi(a)
-			switch {
-			case err != nil:
-				result.MaxResultsErr = fmt.Errorf("--max-results: invalid integer %q", a)
-			case n < 0:
-				result.MaxResultsErr = fmt.Errorf("--max-results: value must be non-negative")
-			default:
-				result.MaxResults = n
+
+			switch flag {
+			case "--distance", "-distance":
+				number, parseErr := positiveInt(flag, value)
+				if parseErr == nil {
+					result.Distance = number
+				}
+				setParseError(parseErr)
+			case "--heavy-concurrency":
+				number, parseErr := positiveInt(flag, value)
+				if parseErr == nil {
+					result.HeavyConcurrency = number
+					heavyProvided = true
+				}
+				setParseError(parseErr)
+			case "--file-timeout-binary":
+				number, parseErr := positiveInt(flag, value)
+				if parseErr == nil {
+					result.FileTimeoutBinary = number
+				}
+				setParseError(parseErr)
+			case "--workers", "-workers":
+				number, parseErr := positiveInt(flag, value)
+				if parseErr == nil {
+					result.FilterWorkers = number
+				}
+				setParseError(parseErr)
+			case "--max-excerpts", "-m", "--max-count":
+				number, parseErr := positiveInt(flag, value)
+				if number > 50 {
+					number = 50
+				}
+				if parseErr == nil {
+					result.MaxExcerpts = number
+				}
+				setParseError(parseErr)
+			case "--max-results":
+				result.MaxResultsProvided = true
+				result.MaxResultsErr = nil
+				number, parseErr := strconv.Atoi(value)
+				switch {
+				case parseErr != nil:
+					result.MaxResultsErr = fmt.Errorf("--max-results: invalid integer %q", value)
+				case number < 0:
+					result.MaxResultsErr = fmt.Errorf("--max-results: value must be non-negative")
+				default:
+					result.MaxResults = number
+				}
+				setParseError(result.MaxResultsErr)
+			case "--only", "-t", "--type":
+				var parseErr error
+				result.OnlyTypes, parseErr = appendOnlyTypes(result.OnlyTypes, flag, value)
+				if len(result.OnlyTypes) > 0 {
+					result.OnlyType = result.OnlyTypes[0]
+				}
+				setParseError(parseErr)
+			case "--startdir":
+				result.StartDirErr = nil
+				cleaned, parseErr := search.ValidateStartDir(value)
+				if parseErr != nil {
+					result.StartDirErr = parseErr
+				} else {
+					result.StartDirs = append(result.StartDirs, value)
+					if !result.StartDirProvided {
+						result.StartDir = firstStartDirCompatibility(cleaned)
+					}
+					result.StartDirProvided = true
+				}
+				setParseError(parseErr)
+			case "--pathscope":
+				result.PathScopeErr = nil
+				segments, parseErr := search.ValidatePathScope(value)
+				if parseErr != nil {
+					result.PathScopeErr = parseErr
+				} else {
+					result.PathScope = segments
+				}
+				setParseError(parseErr)
+			case "-g", "--glob", "--iglob":
+				glob, parseErr := search.ValidateUserGlob(value, flag == "--iglob")
+				if parseErr == nil {
+					result.UserGlobs = append(result.UserGlobs, glob)
+				} else {
+					parseErr = fmt.Errorf("%s: %w", flag, parseErr)
+				}
+				setParseError(parseErr)
+			case "--max-filesize":
+				result.MaxFileSize, result.MaxFileSizeErr = search.ParseMaxFileSize(value)
+				setParseError(result.MaxFileSizeErr)
 			}
-			expectMaxResults = false
 			continue
 		}
-		if expectOnly {
-			result.OnlyType = strings.TrimPrefix(strings.ToLower(a), ".")
-			expectOnly = false
-			continue
-		}
-		if expectStartDir {
-			cleaned, err := search.ValidateStartDir(a)
-			if err != nil {
-				result.StartDirErr = err
-			} else {
-				result.StartDir = cleaned
-			}
-			expectStartDir = false
-			continue
-		}
-		if expectPathScope {
-			segments, err := search.ValidatePathScope(a)
-			if err != nil {
-				result.PathScopeErr = err
-			} else {
-				result.PathScope = segments
-			}
-			expectPathScope = false
-			continue
-		}
-		if expectMaxFileSize {
-			size, err := search.ParseMaxFileSize(a)
-			result.MaxFileSize = size
-			result.MaxFileSizeErr = err
-			expectMaxFileSize = false
-			continue
-		}
-		switch a {
-		case "--code":
-			result.IncludeCode = true
-		case "--strict":
-			result.Strict = true
-		case "--not":
-			parsingExcludes = true
-		case "--distance", "-distance":
-			expectDistance = true
-		case "--heavy-concurrency":
-			expectHeavy = true
-		case "--file-timeout-binary":
-			expectTimeout = true
-		case "--workers", "-workers":
-			expectWorkers = true
-		case "--max-excerpts":
-			expectMaxExcerpts = true
-		case "--max-results":
-			result.MaxResultsProvided = true
-			expectMaxResults = true
-		case "--only":
-			expectOnly = true
-		case "--startdir":
-			expectStartDir = true
-		case "--pathscope":
-			expectPathScope = true
-		case "--no-ignore":
-			result.NoIgnore = true
-		case "--max-filesize":
-			expectMaxFileSize = true
-		case "--smart-forms":
-			result.SmartForms = true
-		case "--partial":
-			result.Partial = search.PartialModePrefix
-		case "--plain":
-			result.PlainOutput = true
-		case "--json":
-			result.JSONOutput = true
-		case "--pathonly":
-			result.PathOnly = true
-		case "--help", "-h":
-			showUsage()
-			os.Exit(0)
-		case "--version", "-v":
-			showVersion()
-			os.Exit(0)
-		default:
-			if strings.HasPrefix(a, "--partial=") {
-				switch strings.TrimPrefix(a, "--partial=") {
-				case "off":
+
+		if attached {
+			switch flag {
+			case "--code", "--strict", "--not", "--no-ignore", "--smart-forms",
+				"--plain", "--json", "--pathonly", "-l", "--files-with-matches",
+				"-i", "--ignore-case", "-s", "--case-sensitive",
+				"--help", "-h", "--version", "-v":
+				setParseError(fmt.Errorf("%s does not accept a value", flag))
+			case "--partial":
+				switch attachedValue {
+				case "off", "none":
 					result.Partial = search.PartialModeOff
 				case string(search.PartialModePrefix):
 					result.Partial = search.PartialModePrefix
 				case string(search.PartialModeContains):
 					result.Partial = search.PartialModeContains
 				default:
-					result.PartialErr = fmt.Errorf("invalid --partial mode %q; supported modes: prefix, contains, off", strings.TrimPrefix(a, "--partial="))
+					result.PartialErr = fmt.Errorf("invalid --partial mode %q; supported modes: prefix, contains, off, none", attachedValue)
+					setParseError(result.PartialErr)
 				}
-			} else if parsingExcludes {
-				result.ExcludeWords = append(result.ExcludeWords, a)
-			} else {
-				result.SearchWords = append(result.SearchWords, a)
+			default:
+				setParseError(fmt.Errorf("unknown flag %q", flag))
+			}
+			continue
+		}
+
+		switch flag {
+		case "--code":
+			result.IncludeCode = true
+		case "--strict":
+			result.Strict = true
+		case "--not":
+			parsingExcludes = true
+		case "--no-ignore":
+			result.NoIgnore = true
+		case "--smart-forms":
+			result.SmartForms = true
+		case "-i", "--ignore-case":
+			result.CaseSensitive = false
+		case "-s", "--case-sensitive":
+			result.CaseSensitive = true
+		case "--partial":
+			result.Partial = search.PartialModePrefix
+		case "--plain":
+			result.PlainOutput = true
+		case "--json":
+			result.JSONOutput = true
+		case "--pathonly", "-l", "--files-with-matches":
+			result.PathOnly = true
+		case "--help", "-h":
+			if result.infoRequest == infoNone {
+				result.infoRequest = infoHelp
+			}
+		case "--version", "-v":
+			if result.infoRequest == infoNone {
+				result.infoRequest = infoVersion
+			}
+		default:
+			switch {
+			case strings.HasPrefix(token, "-"):
+				setParseError(fmt.Errorf("unknown flag %q", token))
+			case parsingExcludes:
+				result.ExcludeWords = append(result.ExcludeWords, token)
+			default:
+				result.SearchWords = append(result.SearchWords, token)
 			}
 		}
 	}
-	if expectMaxFileSize {
-		result.MaxFileSize = 0
-		result.MaxFileSizeErr = fmt.Errorf("--max-filesize: missing value")
-	}
-	if expectMaxResults {
-		result.MaxResultsErr = fmt.Errorf("--max-results: missing value")
-	}
-	if expectStartDir {
-		result.StartDirErr = fmt.Errorf("--startdir: missing value")
-	}
-	result.SearchWords = search.NormalizeQueryTerms(result.SearchWords)
+	result.SearchWords = search.NormalizeQueryTermsWithOptions(result.SearchWords, search.QueryOptions{
+		CaseSensitive: result.CaseSensitive,
+		SmartForms:    result.SmartForms,
+	})
 
 	// Auto-derive HeavyConcurrency when not explicitly provided: base on workers and available RAM
 	if !heavyProvided {
@@ -315,6 +536,15 @@ func parseArguments(args []string) *Arguments {
 	return result
 }
 
+func firstStartDirCompatibility(value string) string {
+	first := strings.TrimSpace(strings.SplitN(value, ",", 2)[0])
+	if len(first) >= 2 && ((first[0] == '"' && first[len(first)-1] == '"') ||
+		(first[0] == '\'' && first[len(first)-1] == '\'')) {
+		first = strings.TrimSpace(first[1 : len(first)-1])
+	}
+	return filepath.Clean(first)
+}
+
 func resolveMaxResults(args *Arguments) int {
 	if args.MaxResultsProvided {
 		return args.MaxResults
@@ -343,8 +573,11 @@ func newTUIModel(args *Arguments) model {
 		excludeWords:      args.ExcludeWords,
 		includeCode:       args.IncludeCode,
 		strict:            args.Strict,
+		caseSensitive:     args.CaseSensitive,
+		smartForms:        args.SmartForms,
 		partial:           args.Partial,
 		onlyType:          args.OnlyType,
+		onlyTypes:         args.OnlyTypes,
 		distance:          args.Distance,
 		heavyConcurrency:  args.HeavyConcurrency,
 		fileTimeoutBinary: args.FileTimeoutBinary,
@@ -352,7 +585,9 @@ func newTUIModel(args *Arguments) model {
 		maxResults:        resolveMaxResults(args),
 		maxExcerpts:       args.MaxExcerpts,
 		startDir:          args.StartDir,
+		startRoots:        args.StartRoots,
 		pathScope:         args.PathScope,
+		userGlobs:         args.UserGlobs,
 		noIgnore:          args.NoIgnore,
 		maxFileSize:       args.MaxFileSize,
 		confirmSelected:   "yes",
@@ -378,46 +613,61 @@ func showUsage() {
 
 	// Usage
 	fmt.Println(subHeaderStyle.Render("USAGE"))
-	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--max-results N]\n[--startdir PATH] [--pathscope PATTERNS] [--no-ignore] [--max-filesize SIZE]\n[--pathonly] [--plain] [--json] [--heavy-concurrency N] [--workers N]\n[--file-timeout-binary N] <word1> <word2> ...\n[--not <exclude1> <exclude2> ...]", 100)))
+	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--max-results N]\n[--startdir PATH] [--pathscope PATTERNS] [--no-ignore] [--max-filesize SIZE]\n[-g PATTERN] [-t TYPE] [-i|-s] [-l] [--plain] [--json] <word1> <word2> ...\n[--not <exclude1> <exclude2> ...] [-- <literal> ...]", 100)))
 	fmt.Println()
 
 	// Flags
 	fmt.Println(subHeaderStyle.Render("FLAGS"))
 	fmt.Println(infoStyle.Render("  --code                  Include code files in the search"))
 	fmt.Println(infoStyle.Render("  --strict                Require all search terms to match"))
+	fmt.Println(infoStyle.Render("  -i, --ignore-case       Match terms without case sensitivity (default)"))
+	fmt.Println(infoStyle.Render("  -s, --case-sensitive    Match terms with case sensitivity; last case flag wins"))
 	fmt.Println(infoStyle.Render("  --partial[=MODE]        Enable partial word matching (prefix, contains)."))
-	fmt.Println(infoStyle.Render("                          Default mode: prefix. When omitted: whole-word."))
+	fmt.Println(infoStyle.Render("                          Bare form selects prefix; off and none select whole-word matching."))
 	fmt.Println(infoStyle.Render("                          Tip: valid query terms support inline * and ?."))
 	fmt.Println(infoStyle.Render("                          Invalid or over-limit wildcard terms match literally. See README for bounds."))
 	fmt.Println(infoStyle.Render("  --distance N            Proximity window in characters (default 5000)"))
+	fmt.Println(infoStyle.Render("  -m, --max-count N       Alias for --max-excerpts, not an rg line-count limit"))
 	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum excerpts per file; >=90% new content (up to 10% overlap; default 1, max 50)"))
 	fmt.Println(infoStyle.Render("  --max-results N         Maximum matching files; 0 = unlimited."))
 	fmt.Println(infoStyle.Render("                          Defaults: --json 50, --plain 50, --pathonly 0, TUI 0."))
 	fmt.Println(infoStyle.Render("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted)"))
-	fmt.Println(infoStyle.Render("  --workers N             Stage 2 text filter workers (default 2)"))
+	fmt.Println(infoStyle.Render("  --workers N             Stage 2 text filter workers (default 4)"))
 	fmt.Println(infoStyle.Render("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000)"))
-	fmt.Println(infoStyle.Render("  --smart-forms          Enable smart word forms (s, es, ed, ing, al, tion/ation)"))
-	fmt.Println(infoStyle.Render("  --only <type>          Search only a single file type (e.g., pdf); ignores --code"))
-	fmt.Println(infoStyle.Render("  --startdir <path>      Base directory to search (default: current directory)"))
-	fmt.Println(infoStyle.Render("                         Accepts Linux, macOS, or Windows paths; quote if path has spaces"))
-	fmt.Println(infoStyle.Render("                         Wildcards and shell metacharacters are rejected"))
-	fmt.Println(infoStyle.Render("  --pathscope <patterns> Comma-separated directory patterns to restrict the search walk."))
-	fmt.Println(infoStyle.Render("                         Directories outside the scope are pruned before any files are visited --"))
-	fmt.Println(infoStyle.Render("                         not filtered after the fact. Use this to exclude large dirs like .venv,"))
-	fmt.Println(infoStyle.Render("                         node_modules, or any subtree you don't want walked at all."))
-	fmt.Println(infoStyle.Render("                         Wildcards: * (any chars) and ? (single char) only."))
-	fmt.Println(infoStyle.Render("                         Trailing slash optional: 'audio2midi/' and 'audio2midi' both work."))
-	fmt.Println(infoStyle.Render("                         Do not include file extensions (use --not / --only for that)."))
-	fmt.Println(infoStyle.Render("                         Example: --pathscope='audio2midi/,docs/,tests/*'"))
+	fmt.Println(infoStyle.Render("  --smart-forms           Enable smart word forms (s, es, ed, ing, al, tion/ation)"))
+	fmt.Println(infoStyle.Render("  -t, --type, --only TYPE Restrict file types; repeat or use comma-separated values"))
+	fmt.Println(infoStyle.Render("  --startdir PATH         Comma-separated search roots; specify this flag once"))
+	fmt.Println(infoStyle.Render("                          Existing directory names that contain commas stay intact"))
+	fmt.Println(infoStyle.Render("  --pathscope PATTERNS   Comma-separated positive scopes form a union; specify this flag once"))
+	fmt.Println(infoStyle.Render("                         Use repeatable -g for additional path globs"))
+	fmt.Println(infoStyle.Render("                         Bare name matches basenames at any depth"))
+	fmt.Println(infoStyle.Render("                         name/, ./name, and patterns containing / are root-anchored"))
+	fmt.Println(infoStyle.Render("                         * and ? stay within one segment; ** crosses segments"))
+	fmt.Println(infoStyle.Render("                         Use ./src for explicit root-relative matching"))
+	fmt.Println(infoStyle.Render("                         Absolute pathscope and user-glob patterns must overlap a search root"))
+	fmt.Println(infoStyle.Render("                         Examples: POSIX /repo/src/**; Windows C:/repo/src/**"))
+	fmt.Println(infoStyle.Render("                         A pattern can select inside a root or cover it as an ancestor"))
+	fmt.Println(infoStyle.Render("                         On Windows, a non-absolute leading slash is root-relative"))
+	fmt.Println(infoStyle.Render("                         If no root intersects it, validation fails before search"))
+	fmt.Println(infoStyle.Render("                         Prefix with ! to exclude a path"))
+	fmt.Println(infoStyle.Render("                         Pathscope intersects with positive --glob and --iglob patterns"))
+	fmt.Println(infoStyle.Render("  -g, --glob PATTERN     Add a case-sensitive path glob; repeat for a union"))
+	fmt.Println(infoStyle.Render("  --iglob PATTERN        Add a case-insensitive path glob"))
+	fmt.Println(infoStyle.Render("                         Prefix with ! to exclude; ** crosses directory boundaries"))
 	fmt.Println(infoStyle.Render("  --no-ignore            Do not apply repository ignore files (.gitignore, .ignore, or exclude)."))
 	fmt.Println(infoStyle.Render("  --max-filesize SIZE    Maximum file size (B, K/KB/KiB, M/MB/MiB; maximum 100M)."))
-	fmt.Println(infoStyle.Render("  --pathonly             Skip the interactive TUI; emit only distinct matching file paths (one per line)."))
+	fmt.Println(infoStyle.Render("  -l, --files-with-matches"))
+	fmt.Println(infoStyle.Render("  --pathonly             Emit only distinct matching file paths, one per line"))
 	fmt.Println(infoStyle.Render("  --plain                Skip the interactive TUI; emit plain line-oriented output to stdout."))
 	fmt.Println(infoStyle.Render("                         Useful for scripting and MCP tool callers that need machine-readable results."))
 	fmt.Println(infoStyle.Render("  --json                 Skip the interactive TUI; emit a JSON document to stdout."))
 	fmt.Println(infoStyle.Render("                         Preferred over --plain for agent/MCP callers -- unambiguous, no parse fragility."))
 	fmt.Println(infoStyle.Render("  --not ...               Tokens after this are exclusions;"))
 	fmt.Println(infoStyle.Render("                          extensions starting with '.' exclude types; others exclude words"))
+	fmt.Println(infoStyle.Render("  --                      Stop flag parsing; remaining tokens are literal terms or exclusions"))
+	fmt.Println(infoStyle.Render("  -C/-A/-B context flags are not supported; use --distance and --max-excerpts"))
+	fmt.Println(infoStyle.Render("  Value flags accept both --flag VALUE and --flag=VALUE forms"))
+	fmt.Println(infoStyle.Render("  Listed aliases are compatible with rg; garp is not a drop-in rg replacement"))
 	fmt.Println(infoStyle.Render("  --help, -h              Show help"))
 	fmt.Println(infoStyle.Render("  --version, -v           Show version"))
 	fmt.Println()
@@ -511,16 +761,19 @@ type jsonOutput struct {
 
 // jsonQuery echoes the search parameters back to the caller so the response is self-describing.
 type jsonQuery struct {
-	Terms       []string `json:"terms"`
-	Strict      bool     `json:"strict,omitempty"`
-	Excludes    []string `json:"excludes,omitempty"`
-	Partial     string   `json:"partial,omitempty"`
-	StartDir    string   `json:"start_dir,omitempty"`
-	PathScope   []string `json:"path_scope,omitempty"`
-	OnlyType    string   `json:"only_type,omitempty"`
-	Code        bool     `json:"include_code"`
-	NoIgnore    bool     `json:"no_ignore,omitempty"`
-	MaxFileSize int64    `json:"max_filesize,omitempty"`
+	Terms         []string `json:"terms"`
+	Strict        bool     `json:"strict,omitempty"`
+	Excludes      []string `json:"excludes,omitempty"`
+	Partial       string   `json:"partial,omitempty"`
+	StartDir      string   `json:"start_dir,omitempty"`
+	StartDirs     []string `json:"start_dirs,omitempty"`
+	PathScope     []string `json:"path_scope,omitempty"`
+	OnlyType      string   `json:"only_type,omitempty"`
+	OnlyTypes     []string `json:"only_types,omitempty"`
+	CaseSensitive bool     `json:"case_sensitive,omitempty"`
+	Code          bool     `json:"include_code"`
+	NoIgnore      bool     `json:"no_ignore,omitempty"`
+	MaxFileSize   int64    `json:"max_filesize,omitempty"`
 }
 
 func nativePathScope(pathScope []string) []string {
@@ -536,29 +789,62 @@ func nativePathScope(pathScope []string) []string {
 
 // buildFileTypes returns the ripgrep-style -g globs for a search: a single
 // --only type when given, otherwise the document (and optionally code) set.
-func buildFileTypes(includeCode bool, onlyType string) []string {
-	if onlyType != "" {
-		return config.OnlyTypeGlobs(onlyType)
+func buildFileTypes(includeCode bool, onlyType string, onlyTypes []string) []string {
+	effective := effectiveOnlyTypes(onlyType, onlyTypes)
+	if len(effective) > 0 {
+		return config.OnlyTypesGlobs(effective)
 	}
 	return config.BuildRipgrepFileTypes(includeCode)
 }
 
+func effectiveOnlyTypes(onlyType string, onlyTypes []string) []string {
+	if len(onlyTypes) > 0 {
+		return onlyTypes
+	}
+	if onlyType != "" {
+		return []string{onlyType}
+	}
+	return nil
+}
+
+func positiveGlobCodeEligibility(onlyType string, onlyTypes []string) bool {
+	return len(effectiveOnlyTypes(onlyType, onlyTypes)) == 0
+}
+
 func walkOptions(args *Arguments) search.WalkOptions {
 	return search.WalkOptions{
-		NoIgnore:    args.NoIgnore,
-		MaxFileSize: args.MaxFileSize,
+		NoIgnore:                    args.NoIgnore,
+		MaxFileSize:                 args.MaxFileSize,
+		UserGlobs:                   args.UserGlobs,
+		PositiveGlobCodeEligibility: positiveGlobCodeEligibility(args.OnlyType, args.OnlyTypes),
 	}
 }
 
 func preflightFileCount(args *Arguments) (int, error) {
-	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
-	return search.GetDocumentFileCountWithOptions(fileTypes, args.StartDir, args.PathScope, walkOptions(args))
+	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType, args.OnlyTypes)
+	roots := args.StartRoots
+	if len(roots) == 0 {
+		raw := args.StartDirs
+		if len(raw) == 0 && args.StartDir != "" {
+			raw = []string{args.StartDir}
+		}
+		var err error
+		roots, err = search.PrepareStartRootsWithOptions(raw, search.StartRootOptions{
+			NoIgnore:  args.NoIgnore,
+			PathScope: args.PathScope,
+			UserGlobs: args.UserGlobs,
+		})
+		if err != nil {
+			return 0, err
+		}
+	}
+	return search.GetDocumentFileCountForRoots(fileTypes, roots, args.PathScope, walkOptions(args))
 }
 
 // newSilentSearchEngine configures a silent SearchEngine for non-TUI CLI modes
 // (--json, --plain, --pathonly).
 func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
-	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType)
+	fileTypes := buildFileTypes(args.IncludeCode, args.OnlyType, args.OnlyTypes)
 	se := search.NewSearchEngineWithWorkers(
 		args.SearchWords,
 		args.ExcludeWords,
@@ -571,6 +857,8 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 	se.Silent = true
 	se.Strict = args.Strict
 	se.Partial = args.Partial
+	se.CaseSensitive = args.CaseSensitive
+	se.SmartForms = args.SmartForms
 	se.PathOnly = args.PathOnly
 	se.NoIgnore = args.NoIgnore
 	se.MaxFileSize = args.MaxFileSize
@@ -580,9 +868,12 @@ func newSilentSearchEngine(args *Arguments) *search.SearchEngine {
 	if args.StartDir != "" {
 		se.StartDir = args.StartDir
 	}
+	se.StartRoots = args.StartRoots
 	if len(args.PathScope) > 0 {
 		se.PathScope = args.PathScope
 	}
+	se.UserGlobs = args.UserGlobs
+	se.PositiveGlobCodeEligibility = positiveGlobCodeEligibility(args.OnlyType, args.OnlyTypes)
 	se.MaxExcerpts = args.MaxExcerpts
 	se.MaxResults = resolveMaxResults(args)
 	return se
@@ -616,21 +907,39 @@ func runJSON(args *Arguments) int {
 func buildJSONOutput(args *Arguments, outcome search.ExecutionResult) jsonOutput {
 	out := jsonOutput{
 		Query: jsonQuery{
-			Terms:       args.SearchWords,
-			Strict:      args.Strict,
-			Excludes:    args.ExcludeWords,
-			Partial:     string(args.Partial),
-			StartDir:    args.StartDir,
-			PathScope:   nativePathScope(args.PathScope),
-			OnlyType:    args.OnlyType,
-			Code:        args.IncludeCode,
-			NoIgnore:    args.NoIgnore,
-			MaxFileSize: args.MaxFileSize,
+			Terms:         args.SearchWords,
+			Strict:        args.Strict,
+			Excludes:      args.ExcludeWords,
+			Partial:       string(args.Partial),
+			StartDir:      args.StartDir,
+			PathScope:     nativePathScope(args.PathScope),
+			OnlyType:      args.OnlyType,
+			CaseSensitive: args.CaseSensitive,
+			Code:          args.IncludeCode,
+			NoIgnore:      args.NoIgnore,
+			MaxFileSize:   args.MaxFileSize,
 		},
 		Matches:   outcome.Matches,
 		Returned:  outcome.Returned,
 		Truncated: outcome.Truncated,
 		Results:   make([]jsonResult, 0, outcome.Returned),
+	}
+	if len(args.OnlyTypes) >= 2 {
+		out.Query.OnlyTypes = append([]string(nil), args.OnlyTypes...)
+	}
+	if !args.StartDirProvided {
+		out.Query.StartDir = ""
+	} else if len(args.StartRoots) > 0 {
+		reported := search.ReportedStartRoots(args.StartRoots)
+		if len(reported) > 0 {
+			out.Query.StartDir = reported[0].SuppliedPath
+		}
+		if len(reported) >= 2 {
+			out.Query.StartDirs = make([]string, len(reported))
+			for index := range reported {
+				out.Query.StartDirs[index] = reported[index].SuppliedPath
+			}
+		}
 	}
 
 	for _, r := range outcome.Results {
@@ -748,20 +1057,25 @@ func runPathOnly(args *Arguments) int {
 	return 0
 }
 
-func validateSearchRoot(startDir string) error {
-	root := startDir
-	if root == "" {
-		root = "."
+func prepareArgumentStartRoots(args *Arguments) error {
+	rawRoots := args.StartDirs
+	if !args.StartDirProvided {
+		rawRoots = nil
 	}
-	info, err := os.Stat(root)
+	roots, err := search.PrepareStartRootsWithOptions(rawRoots, search.StartRootOptions{
+		NoIgnore:  args.NoIgnore,
+		PathScope: args.PathScope,
+		UserGlobs: args.UserGlobs,
+	})
 	if err != nil {
-		return fmt.Errorf("invalid search root %q: %w", root, err)
+		return err
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("invalid search root %q: not a directory", root)
-	}
-	if _, err := os.ReadDir(root); err != nil {
-		return fmt.Errorf("invalid search root %q: read directory: %w", root, err)
+	args.StartRoots = roots
+	if args.StartDirProvided {
+		reportedRoots := search.ReportedStartRoots(roots)
+		if len(reportedRoots) > 0 {
+			args.StartDir = reportedRoots[0].SuppliedPath
+		}
 	}
 	return nil
 }
@@ -770,6 +1084,18 @@ func validateSearchRoot(startDir string) error {
 func Run() int {
 	// Parse args
 	args := parseArguments(os.Args[1:])
+	if args.ParseErr != nil {
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.ParseErr.Error()))
+		return 1
+	}
+	switch args.infoRequest {
+	case infoHelp:
+		showUsage()
+		return 0
+	case infoVersion:
+		showVersion()
+		return 0
+	}
 	if len(args.SearchWords) == 0 {
 		showUsage()
 		return 1
@@ -795,15 +1121,10 @@ func Run() int {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.PartialErr.Error()))
 		return 1
 	}
-	if err := validateSearchRoot(args.StartDir); err != nil {
+	if err := prepareArgumentStartRoots(args); err != nil {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+err.Error()))
 		return 1
 	}
-	// Hook for matching layer: advertise smart-forms via environment (consumed by matching)
-	if args.SmartForms {
-		_ = os.Setenv("GARP_SMART_FORMS", "1")
-	}
-
 	// Path-only output mode: emit distinct matching file paths (one per line) and exit.
 	// Checked before --json and --plain so --pathonly always returns only paths.
 	if args.PathOnly {

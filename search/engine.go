@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -37,6 +36,9 @@ func capForBinaryPrefilter(ext string) int64 {
 // SearchResult represents a file that matches all search criteria
 type SearchResult struct {
 	FilePath        string
+	rankingPath     string
+	rootOrder       int
+	canonicalPath   string
 	FileSize        int64
 	Score           int      // Sum of distinct matched term lengths in the best window.
 	TermCount       int      // Number of distinct query terms in the best window.
@@ -70,6 +72,10 @@ type ExecutionResult struct {
 // candidateMatch retains ranked metadata between filtering and result building.
 type candidateMatch struct {
 	filePath         string
+	accessPath       string
+	canonicalKey     string
+	rankingPath      string
+	rootOrder        int
 	score            int
 	termCount        int
 	matchedTerms     []string
@@ -77,6 +83,14 @@ type candidateMatch struct {
 	boundaryQuality  int
 	spanLen          int
 	topQualityChunks int
+}
+
+type discoveredCandidate struct {
+	filePath     string
+	canonicalKey string
+	root         StartRoot
+	rankingRoot  StartRoot
+	rootOrder    int
 }
 
 func (match *candidateMatch) setAnalysis(analysis rankedTextAnalysis) {
@@ -146,6 +160,8 @@ type SearchEngine struct {
 	IncludeCode       bool
 	Strict            bool
 	Partial           PartialMode
+	CaseSensitive     bool
+	SmartForms        bool
 	PathOnly          bool
 	Registry          *ExtractorRegistry
 	Distance          int
@@ -157,13 +173,19 @@ type SearchEngine struct {
 	MaxResults        int
 	NoIgnore          bool
 	MaxFileSize       int64
+	PreflightCount    int
 
 	// StartDir, if non-empty, sets the root directory for file walks.
 	// When empty, the walk uses the current working directory.
 	StartDir string
+	// StartRoots contains roots prepared by PrepareStartRoots. When non-empty,
+	// discovery and count must use these descriptors without reparsing.
+	StartRoots []StartRoot
 	// PathScope, if non-empty, restricts file walks to paths whose relative
 	// path matches at least one simple glob pattern (e.g., "*/backend/*").
-	PathScope []string
+	PathScope                   []string
+	UserGlobs                   []UserGlob
+	PositiveGlobCodeEligibility bool
 
 	// PDF metrics (atomic)
 	pdfProcessed     int64 // atomic counter
@@ -181,12 +203,15 @@ type SearchEngine struct {
 
 	// Optional progress callback (nil if unused)
 	OnProgress ProgressFunc
+
+	// Test observer for overlap-only progress key tracking.
+	onProgressKeyTracking func()
 }
 
 // NewSearchEngine creates a new search engine instance
 func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, includeCode bool, heavyConcurrency int, fileTimeoutBinary int) *SearchEngine {
 	return &SearchEngine{
-		SearchWords:       NormalizeQueryTerms(searchWords),
+		SearchWords:       append([]string(nil), searchWords...),
 		ExcludeWords:      excludeWords,
 		FileTypes:         fileTypes,
 		IncludeCode:       includeCode,
@@ -200,10 +225,19 @@ func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, inc
 	}
 }
 
+func (se *SearchEngine) queryOptions() QueryOptions {
+	return QueryOptions{
+		CaseSensitive: se.CaseSensitive,
+		SmartForms:    se.SmartForms,
+	}
+}
+
 func (se *SearchEngine) walkOptions() WalkOptions {
 	return WalkOptions{
-		NoIgnore:    se.NoIgnore,
-		MaxFileSize: se.MaxFileSize,
+		NoIgnore:                    se.NoIgnore,
+		MaxFileSize:                 se.MaxFileSize,
+		UserGlobs:                   se.UserGlobs,
+		PositiveGlobCodeEligibility: se.PositiveGlobCodeEligibility,
 	}
 }
 
@@ -218,43 +252,225 @@ func NewSearchEngineWithWorkers(searchWords, excludeWords []string, fileTypes []
 
 // DiscoverCandidates finds files containing the first search word
 func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error) {
-	return se.discoverCandidates(compileQuery(se.SearchWords, se.Partial), fileCount)
+	roots, err := se.effectiveStartRoots()
+	if err != nil {
+		return nil, 0, err
+	}
+	candidates, total, err := se.discoverCandidates(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), fileCount, roots)
+	paths := make([]string, len(candidates))
+	for index := range candidates {
+		paths[index] = candidates[index].filePath
+	}
+	return paths, total, err
 }
 
-func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int) ([]string, int, error) {
+func (se *SearchEngine) effectiveStartRoots() ([]StartRoot, error) {
+	if len(se.StartRoots) > 0 {
+		return se.StartRoots, nil
+	}
+	raw := []string{se.StartDir}
+	if se.StartDir == "" {
+		raw = nil
+	}
+	return PrepareStartRootsWithOptions(raw, StartRootOptions{
+		NoIgnore:  se.NoIgnore,
+		PathScope: se.PathScope,
+		UserGlobs: se.UserGlobs,
+	})
+}
+
+func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int, roots []StartRoot) ([]discoveredCandidate, int, error) {
 	if len(query.terms) == 0 {
 		return nil, 0, nil
 	}
 	if !se.Silent {
 		fmt.Printf("Finding files with '%s'...\n", query.terms[0])
 	}
-	candidateFiles, err := findFilesWithFirstWordProgressQueryWithOptions(query, se.FileTypes, se.FilterWorkers, func(processed, total int, path string) {
-		if se.OnProgress != nil {
-			se.OnProgress("discovery", processed, total, path)
+	candidates := make([]discoveredCandidate, 0, 128)
+	candidateIndex := make(map[string]int)
+	trackProgressKeys := se.OnProgress != nil && preparedPhysicalRootsOverlap(roots)
+	var progressSeen map[string]struct{}
+	if trackProgressKeys {
+		progressSeen = make(map[string]struct{})
+		if se.onProgressKeyTracking != nil {
+			se.onProgressKeyTracking()
 		}
-	}, se.StartDir, se.PathScope, se.Partial, se.walkOptions())
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to find files with first word: %w", err)
 	}
-	total := len(candidateFiles)
-	if len(candidateFiles) == 0 {
+	processed := 0
+	for _, root := range roots {
+		var onProgress func(int, int, string)
+		if se.OnProgress != nil {
+			onProgress = func(rootProcessed, _ int, path string) {
+				if rootProcessed == 0 {
+					return
+				}
+				if trackProgressKeys {
+					key := canonicalCandidateKey(root, path)
+					if _, exists := progressSeen[key]; exists {
+						return
+					}
+					progressSeen[key] = struct{}{}
+				}
+				processed++
+				se.OnProgress("discovery", processed, fileCount, path)
+			}
+		}
+		candidateFiles, err := findFilesWithFirstWordProgressQueryWithRoot(query, se.FileTypes, se.FilterWorkers, onProgress, root, se.PathScope, se.walkOptions())
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to find files with first word: %w", err)
+		}
+		for _, filePath := range candidateFiles {
+			key := canonicalCandidateKey(root, filePath)
+			candidate := newDiscoveredCandidate(filePath, key, root, roots)
+			if index, exists := candidateIndex[key]; exists {
+				if discoveredCandidateProducerBetter(candidate, candidates[index]) {
+					candidates[index] = candidate
+				}
+			} else {
+				candidateIndex[key] = len(candidates)
+				candidates = append(candidates, candidate)
+			}
+		}
+	}
+	total := len(candidates)
+	if len(candidates) == 0 {
 		if !se.Silent {
 			fmt.Printf("No files found containing '%s'\n", query.terms[0])
 		}
 		return nil, total, nil
 	}
 	if !se.Silent {
-		fmt.Printf("Found %s files containing '%s'\n", formatNumber(len(candidateFiles)), query.terms[0])
+		fmt.Printf("Found %s files containing '%s'\n", formatNumber(len(candidates)), query.terms[0])
 	}
-	return candidateFiles, total, nil
+	return candidates, total, nil
 }
 
 // FilterCandidates filters candidates for all words and excludes
 func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, startTime time.Time) ([]candidateMatch, error) {
-	return se.filterCandidates(compileQuery(se.SearchWords, se.Partial), candidateFiles, total, startTime)
+	roots, err := se.effectiveStartRoots()
+	if err != nil {
+		return nil, err
+	}
+	traversals := make([]preparedRootTraversal, len(roots))
+	for index, root := range roots {
+		traversal, err := prepareRootTraversal(root, se.PathScope, se.UserGlobs, se.NoIgnore)
+		if err != nil {
+			return nil, err
+		}
+		traversals[index] = traversal
+	}
+	candidates := make([]discoveredCandidate, len(candidateFiles))
+	for index, path := range candidateFiles {
+		candidate, err := candidateProvenance(path, traversals)
+		if err != nil {
+			return nil, err
+		}
+		candidates[index] = candidate
+	}
+	return se.filterCandidates(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), candidates, total, startTime)
 }
 
-func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []string, total int, startTime time.Time) ([]candidateMatch, error) {
+func candidateProvenance(path string, traversals []preparedRootTraversal) (discoveredCandidate, error) {
+	roots := make([]StartRoot, len(traversals))
+	for index := range traversals {
+		roots[index] = traversals[index].root
+	}
+	var best discoveredCandidate
+	found := false
+	for _, traversal := range traversals {
+		if !startRootCanProduceFile(traversal, path) {
+			continue
+		}
+		root := traversal.root
+		candidate := newDiscoveredCandidate(path, canonicalCandidateKey(root, path), root, roots)
+		if !found || discoveredCandidateProducerBetter(candidate, best) {
+			best = candidate
+			found = true
+		}
+	}
+	if found {
+		return best, nil
+	}
+	if len(traversals) == 1 {
+		root := traversals[0].root
+		return newDiscoveredCandidate(path, canonicalPathKey(path), root, roots), nil
+	}
+	return discoveredCandidate{}, fmt.Errorf(
+		"candidate %q is outside all prepared roots; multi-root FilterCandidates requires paths returned by DiscoverCandidates",
+		path,
+	)
+}
+
+func newDiscoveredCandidate(filePath, canonicalKey string, producer StartRoot, roots []StartRoot) discoveredCandidate {
+	rankingRoot := candidateRankingRoot(producer, roots)
+	return discoveredCandidate{
+		filePath:     filePath,
+		canonicalKey: canonicalKey,
+		root:         producer,
+		rankingRoot:  rankingRoot,
+		rootOrder:    reportedRootOrder(rankingRoot, roots),
+	}
+}
+
+func candidateRankingRoot(producer StartRoot, roots []StartRoot) StartRoot {
+	if producer.Reported {
+		return producer
+	}
+	rankingRoot := producer
+	rankingDepth := -1
+	for _, root := range roots {
+		if !root.Reported || !strictPathDescendant(root.PhysicalPath, producer.PhysicalPath) {
+			continue
+		}
+		if depth := physicalPathDepth(root.PhysicalPath); depth > rankingDepth {
+			rankingRoot = root
+			rankingDepth = depth
+		}
+	}
+	return rankingRoot
+}
+
+func reportedRootOrder(target StartRoot, roots []StartRoot) int {
+	order := 0
+	for _, root := range roots {
+		if !root.Reported {
+			continue
+		}
+		if root.CanonicalKey == target.CanonicalKey {
+			return order
+		}
+		order++
+	}
+	return target.SuppliedOrder
+}
+
+func discoveredCandidateProducerBetter(left, right discoveredCandidate) bool {
+	if left.root.Reported != right.root.Reported {
+		return left.root.Reported
+	}
+	if left.root.SuppliedOrder != right.root.SuppliedOrder {
+		return left.root.SuppliedOrder < right.root.SuppliedOrder
+	}
+	leftPath := canonicalPathKey(left.root.LogicalPath)
+	rightPath := canonicalPathKey(right.root.LogicalPath)
+	return leftPath < rightPath
+}
+
+func projectedCandidatePath(candidate discoveredCandidate) (displayPath, rankingPath string) {
+	producerRelative, err := filepath.Rel(candidate.root.LogicalPath, candidate.filePath)
+	if err != nil {
+		return candidate.filePath, mustRelativePath(candidate.rankingRoot.LogicalPath, candidate.filePath)
+	}
+	physicalPath := filepath.Join(candidate.root.PhysicalPath, producerRelative)
+	rankingRelative, err := filepath.Rel(candidate.rankingRoot.PhysicalPath, physicalPath)
+	if err != nil || rankingRelative == ".." ||
+		strings.HasPrefix(rankingRelative, ".."+string(filepath.Separator)) {
+		return candidate.filePath, mustRelativePath(candidate.rankingRoot.LogicalPath, candidate.filePath)
+	}
+	return filepath.Join(candidate.rankingRoot.LogicalPath, rankingRelative), rankingRelative
+}
+
+func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []discoveredCandidate, total int, startTime time.Time) ([]candidateMatch, error) {
 	if len(query.terms) == 0 {
 		return nil, nil
 	}
@@ -262,7 +478,6 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 		fmt.Println("Filtering for files containing ALL words...")
 	}
 	maxBytes := se.walkOptions().TextMaxBytes()
-	rankingRoot := resolveRankingRoot(se.StartDir)
 
 	// Separate excludes into extensions and words
 	var extExcludes []string
@@ -300,15 +515,25 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 	if workers < 1 {
 		workers = 1
 	}
-	jobs := make(chan string, workers*4)
+	jobs := make(chan discoveredCandidate, workers*4)
 	var wg sync.WaitGroup
 
-	handleOne := func(filePath string) bool {
-		match := candidateMatch{filePath: filePath}
+	handleOne := func(candidate discoveredCandidate) bool {
+		filePath := candidate.filePath
+		displayPath, rankingPath := projectedCandidatePath(candidate)
+		match := candidateMatch{
+			filePath:     displayPath,
+			accessPath:   filePath,
+			canonicalKey: candidate.canonicalKey,
+			rankingPath:  rankingPath,
+			rootOrder:    candidate.rootOrder,
+		}
 		// Check for excluded extensions
 		ext := filepath.Ext(filePath)
-		if slices.Contains(extExcludes, ext) {
-			return false
+		for _, excluded := range extExcludes {
+			if strings.EqualFold(excluded, ext) {
+				return false
+			}
 		}
 
 		// Check if file contains all search words
@@ -507,7 +732,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 					return false
 				}
 				// Compute exclude words from extracted text (cleaned)
-				hasExcludeWords = CheckTextContainsExcludeWords(CleanContent(out), wordExcludes)
+				hasExcludeWords = CheckTextContainsExcludeWordsWithOptions(CleanContent(out), wordExcludes, se.queryOptions())
 			} else {
 				if !se.Silent {
 					fmt.Printf("Warning: No extractor for %s\n", ext)
@@ -515,7 +740,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 				return false
 			}
 		} else if len(wordExcludes) > 0 {
-			ok2, err := checkFileContainsExcludeWords(filePath, wordExcludes, maxBytes)
+			ok2, err := checkFileContainsExcludeWordsWithOptions(filePath, wordExcludes, maxBytes, se.queryOptions())
 			if err != nil {
 				if !se.Silent {
 					fmt.Printf("Warning: Error checking exclude words in %s: %v\n", filePath, err)
@@ -529,7 +754,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 			return false
 		}
 
-		match.pathMatchCount = pathMatchCount(filePath, rankingRoot, query)
+		match.pathMatchCount = pathMatchCount(displayPath, candidate.rankingRoot.LogicalPath, query)
 		mu.Lock()
 		matchingFiles = append(matchingFiles, match)
 		mu.Unlock()
@@ -541,16 +766,16 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for filePath := range jobs {
+			for candidate := range jobs {
 				maybePaceForMemory()
-				matched := handleOne(filePath)
+				matched := handleOne(candidate)
 
 				_ = matched
 
 				// Atomic progress update
 				cur := atomic.AddInt64(&processed, 1)
 				if se.OnProgress != nil {
-					se.OnProgress("processing", int(cur), total, filePath)
+					se.OnProgress("processing", int(cur), total, candidate.filePath)
 				}
 				// Optional periodic console progress
 				if cur%500 == 0 && !se.Silent {
@@ -564,9 +789,9 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 	}
 
 	// Enqueue jobs
-	for _, p := range candidateFiles {
+	for _, candidate := range candidateFiles {
 		maybePaceForMemory()
-		jobs <- p
+		jobs <- candidate
 	}
 	close(jobs)
 	wg.Wait()
@@ -576,6 +801,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []s
 
 type rankingKey struct {
 	filePath         string
+	rootOrder        int
+	canonicalPath    string
 	score            int
 	termCount        int
 	pathMatchCount   int
@@ -586,6 +813,32 @@ type rankingKey struct {
 
 func normalizedRankingPath(path string) string {
 	return strings.ReplaceAll(filepath.ToSlash(path), `\`, "/")
+}
+
+func compareRankingPath(left, right string) int {
+	leftPath := normalizedRankingPath(left)
+	rightPath := normalizedRankingPath(right)
+	leftFolded := strings.ToLower(leftPath)
+	rightFolded := strings.ToLower(rightPath)
+	if leftFolded < rightFolded {
+		return -1
+	}
+	if leftFolded > rightFolded {
+		return 1
+	}
+	if leftPath < rightPath {
+		return -1
+	}
+	if leftPath > rightPath {
+		return 1
+	}
+	if left < right {
+		return -1
+	}
+	if left > right {
+		return 1
+	}
+	return 0
 }
 
 // rankingBetter is the single file-order comparator used before and after
@@ -610,22 +863,24 @@ func rankingBetter(a, b rankingKey) bool {
 		return a.topQualityChunks > b.topQualityChunks
 	}
 
-	aPath := normalizedRankingPath(a.filePath)
-	bPath := normalizedRankingPath(b.filePath)
-	aFolded := strings.ToLower(aPath)
-	bFolded := strings.ToLower(bPath)
-	if aFolded != bFolded {
-		return aFolded < bFolded
+	if comparison := compareRankingPath(a.filePath, b.filePath); comparison != 0 {
+		return comparison < 0
 	}
-	if aPath != bPath {
-		return aPath < bPath
+	if a.rootOrder != b.rootOrder {
+		return a.rootOrder < b.rootOrder
 	}
-	return a.filePath < b.filePath
+	return compareRankingPath(a.canonicalPath, b.canonicalPath) < 0
 }
 
 func candidateRankingKey(match candidateMatch) rankingKey {
+	rankingPath := match.rankingPath
+	if rankingPath == "" {
+		rankingPath = match.filePath
+	}
 	return rankingKey{
-		filePath:         match.filePath,
+		filePath:         rankingPath,
+		rootOrder:        match.rootOrder,
+		canonicalPath:    match.canonicalKey,
 		score:            match.score,
 		termCount:        match.termCount,
 		pathMatchCount:   match.pathMatchCount,
@@ -636,8 +891,14 @@ func candidateRankingKey(match candidateMatch) rankingKey {
 }
 
 func resultRankingKey(result SearchResult) rankingKey {
+	rankingPath := result.rankingPath
+	if rankingPath == "" {
+		rankingPath = result.FilePath
+	}
 	return rankingKey{
-		filePath:         result.FilePath,
+		filePath:         rankingPath,
+		rootOrder:        result.rootOrder,
+		canonicalPath:    result.canonicalPath,
 		score:            result.Score,
 		termCount:        result.TermCount,
 		pathMatchCount:   result.PathMatchCount,
@@ -657,8 +918,12 @@ func sortAndDedupeCandidates(matches []candidateMatch) []candidateMatch {
 		if match.filePath == "" {
 			continue
 		}
-		if current, exists := bestByPath[match.filePath]; !exists || candidateBetter(match, current) {
-			bestByPath[match.filePath] = match
+		key := match.canonicalKey
+		if key == "" {
+			key = match.filePath
+		}
+		if current, exists := bestByPath[key]; !exists || candidateBetter(match, current) {
+			bestByPath[key] = match
 		}
 	}
 
@@ -690,6 +955,9 @@ func (se *SearchEngine) buildPathOnlyResults(matchingFiles []candidateMatch) []S
 	for _, match := range ranked {
 		results = append(results, SearchResult{
 			FilePath:         match.filePath,
+			rankingPath:      match.rankingPath,
+			rootOrder:        match.rootOrder,
+			canonicalPath:    match.canonicalKey,
 			Score:            match.score,
 			TermCount:        match.termCount,
 			PathMatchCount:   match.pathMatchCount,
@@ -704,7 +972,7 @@ func (se *SearchEngine) buildPathOnlyResults(matchingFiles []candidateMatch) []S
 
 // ExtractAndBuildResults extracts content and builds search results
 func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) ([]SearchResult, error) {
-	outcome, err := se.extractAndBuildResultsDetailed(compileQuery(se.SearchWords, se.Partial), matchingFiles)
+	outcome, err := se.extractAndBuildResultsDetailed(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), matchingFiles)
 	return outcome.Results, err
 }
 
@@ -734,7 +1002,11 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		if se.MaxResults > 0 && len(results) >= se.MaxResults {
 			break
 		}
-		filePath := match.filePath
+		displayPath := match.filePath
+		filePath := match.accessPath
+		if filePath == "" {
+			filePath = displayPath
+		}
 		maybePaceForMemory()
 		var content string
 		var fileSize int64
@@ -906,7 +1178,10 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		}
 
 		result := SearchResult{
-			FilePath:         filePath,
+			FilePath:         displayPath,
+			rankingPath:      match.rankingPath,
+			rootOrder:        match.rootOrder,
+			canonicalPath:    match.canonicalKey,
 			FileSize:         fileSize,
 			Score:            match.score,
 			TermCount:        match.termCount,
@@ -944,24 +1219,32 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 // result metadata adjusted for Stage 3 failures that were actually observed.
 func (se *SearchEngine) ExecuteDetailed() (ExecutionResult, error) {
 	startTime := time.Now()
-	query := compileQuery(se.SearchWords, se.Partial)
+	query := compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions())
 	if len(query.terms) == 0 {
 		return ExecutionResult{}, nil
 	}
+	roots, err := se.effectiveStartRoots()
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if err := ValidateRootPolicies(roots, se.PathScope, se.UserGlobs); err != nil {
+		return ExecutionResult{}, err
+	}
+	se.StartRoots = roots
 
 	// Emit initial progress with unknown total (0); discovery will update it
 	if se.OnProgress != nil {
-		se.OnProgress("discovery", 0, 0, "")
+		se.OnProgress("discovery", 0, se.PreflightCount, "")
 	}
 
 	// Step 2: Discover candidates
-	candidateFiles, total, err := se.discoverCandidates(query, 0)
+	candidateFiles, total, err := se.discoverCandidates(query, se.PreflightCount, roots)
 	if err != nil {
 		return ExecutionResult{}, err
 	}
 	if candidateFiles == nil {
 		if se.OnProgress != nil {
-			se.OnProgress("discovery", 0, 0, "")
+			se.OnProgress("discovery", se.PreflightCount, se.PreflightCount, "")
 		}
 		return ExecutionResult{}, nil
 	}

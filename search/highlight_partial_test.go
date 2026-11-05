@@ -52,6 +52,20 @@ func TestHighlightTermsPartial(t *testing.T) {
 	}
 }
 
+func TestCaseSensitiveHighlightTerms(t *testing.T) {
+	const hi = "\033[1;31m"
+	const nc = "\033[0m"
+	got := HighlightTermsWithOptions(
+		"API api APIs",
+		[]string{"API"},
+		PartialModeOff,
+		QueryOptions{CaseSensitive: true},
+	)
+	if want := hi + "API" + nc + " api APIs"; got != want {
+		t.Fatalf("highlight = %q, want %q", got, want)
+	}
+}
+
 func TestInlineWildcardHighlightUsesExactRanges(t *testing.T) {
 	const hi = "\033[1;31m"
 	const nc = "\033[0m"

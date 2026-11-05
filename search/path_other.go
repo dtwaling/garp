@@ -8,6 +8,29 @@ import (
 	"path/filepath"
 )
 
+func canonicalPathKey(path string) string {
+	return canonicalPathKeyForPlatform(path, false)
+}
+
+func resolvePatternPhysicalPath(pattern string) string {
+	current := filepath.Clean(pattern)
+	var suffix []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return resolved
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Clean(pattern)
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
+}
+
 // resolveWalkRoot returns the caller-facing root and its resolved filesystem
 // target. The logical root stays unchanged when the explicit root is a link.
 func resolveWalkRoot(root string) (logicalRoot, physicalRoot string, err error) {

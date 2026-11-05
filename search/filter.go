@@ -2,12 +2,12 @@ package search
 
 import (
 	"archive/zip"
+	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -135,20 +135,13 @@ func maybePaceForMemory() {
 	}
 }
 
-// CheckTextContainsAllWords checks if extracted text contains all search words
-// in any order, within a distance window (in characters) between the earliest
-// and latest matched term positions.
-func smartFormsEnabled() bool {
-	return strings.EqualFold(os.Getenv("GARP_SMART_FORMS"), "1")
-}
-
 func buildTermRegexLower(word string, mode PartialMode) *regexp.Regexp {
 	base := strings.ToLower(strings.TrimSpace(word))
 	if base == "" {
 		// never matches; safe fallback
 		return getWordRegex(`a\A`)
 	}
-	return compileTermMatcher(base, mode, false).compatibilityRegex()
+	return compileTermMatcher(base, mode, true).compatibilityRegex()
 }
 
 func buildTermRegexCI(word string, mode PartialMode) *regexp.Regexp {
@@ -163,6 +156,15 @@ func buildTermRegexCI(word string, mode PartialMode) *regexp.Regexp {
 // FindTermIndexCI returns the exact matched byte range without delimiters.
 func FindTermIndexCI(text, term string, mode PartialMode) []int {
 	found, ok := compileTermMatcher(term, mode, true).find(text, 0)
+	if ok {
+		return []int{found.start, found.end}
+	}
+	return nil
+}
+
+// FindTermIndex returns the exact matched byte range for explicit query options.
+func FindTermIndex(text, term string, mode PartialMode, options QueryOptions) []int {
+	found, ok := compileTermMatcherWithOptions(term, mode, options).find(text, 0)
 	if ok {
 		return []int{found.start, found.end}
 	}
@@ -218,168 +220,43 @@ func CheckTextContainsRankedWordsPartial(text string, words []string, distance i
 
 // CheckTextContainsExcludeWords checks if extracted text contains any exclude words
 func CheckTextContainsExcludeWords(text string, excludeWords []string) bool {
+	return CheckTextContainsExcludeWordsWithOptions(text, excludeWords, QueryOptions{})
+}
+
+// CheckTextContainsExcludeWordsWithOptions applies the active query case mode.
+func CheckTextContainsExcludeWordsWithOptions(text string, excludeWords []string, options QueryOptions) bool {
 	if len(excludeWords) == 0 {
 		return false
 	}
-
-	contentStr := strings.ToLower(text)
-
-	// Check each exclude word
 	for _, word := range excludeWords {
-		if containsWholeWord(contentStr, strings.ToLower(word)) {
+		if containsLiteralExcludeWord(text, word, options.CaseSensitive) {
 			return true
 		}
 	}
 
 	return false
+}
+
+func containsLiteralExcludeWord(text, word string, caseSensitive bool) bool {
+	word = strings.TrimSpace(word)
+	if word == "" {
+		return false
+	}
+	literal := regexp.QuoteMeta(word)
+	if !caseSensitive && isWordByte(word[len(word)-1]) {
+		literal += `(?:es|s)?`
+	}
+	if !caseSensitive {
+		literal = `(?i:` + literal + `)`
+	}
+	pattern := `\b(?:` + literal + `)\b`
+	return getWordRegex(pattern).MatchString(text)
 }
 
 // FileInfo represents information about a file
 type FileInfo struct {
 	Path string
 	Size int64
-}
-
-// matchesPathScope returns true if the file path (relative to walkRoot) matches
-// at least one pattern in normScope. If normScope is empty, all files match.
-// Patterns use filepath.Match semantics (simple globs: * and ? only).
-// The comparison uses forward-slash paths for cross-platform consistency.
-//
-// Directory-prefix shorthand: a pattern with no wildcards that ends in "/" (or
-// a bare dir name) is treated as a prefix match so "audio2midi/" matches any
-// file under audio2midi/ at any depth.
-//
-// normScope must already be run through normalizePathScopePatterns -- the
-// per-pattern normalization is hoisted out of this per-entry hot path.
-func matchesPathScope(absPath, walkRoot string, normScope []string) bool {
-	if len(normScope) == 0 {
-		return true
-	}
-	rel, err := filepath.Rel(walkRoot, absPath)
-	if err != nil {
-		return false
-	}
-	relSlash := filepath.ToSlash(rel)
-	for _, pattern := range normScope {
-		matchPattern, matchRel := normalizePathScopeMatchPair(pattern, relSlash)
-		if pathScopePatternMatches(matchPattern, matchRel) {
-			return true
-		}
-		if scopePatternMatchesDirPrefix(matchPattern, matchRel) {
-			return true
-		}
-	}
-	return false
-}
-
-// dirCouldMatchPathScope returns true if descending into this directory could
-// ever yield a file that matches at least one pathScope pattern. When it
-// returns false the walk can safely skip the entire subtree with SkipDir.
-//
-// A directory could yield matches when any pattern:
-//  1. Has this dir as a prefix (e.g. pattern "audio2midi/dsp.py" -> dir "audio2midi" is a prefix)
-//  2. Has a wildcard that could span into this dir (e.g. pattern "*/foo/*" can match dirs at any level)
-//  3. Is a bare wildcard pattern like "*" or "**"
-//
-// When normScope is empty (no restriction) all dirs are traversed.
-// normScope must already be run through normalizePathScopePatterns.
-func dirCouldMatchPathScope(absDir, walkRoot string, normScope []string) bool {
-	if len(normScope) == 0 {
-		return true
-	}
-	rel, err := filepath.Rel(walkRoot, absDir)
-	if err != nil {
-		return true // can't determine, don't prune
-	}
-	relSlash := filepath.ToSlash(rel)
-	if relSlash == "." {
-		return true // root always traversed
-	}
-	for _, pattern := range normScope {
-		matchPattern, matchRel := normalizePathScopeMatchPair(pattern, relSlash)
-		literalPrefix := pathScopeLiteralPrefix(matchPattern)
-		if literalPrefix != "" &&
-			matchRel != literalPrefix &&
-			!strings.HasPrefix(matchRel, literalPrefix+"/") &&
-			!strings.HasPrefix(literalPrefix, matchRel+"/") {
-			continue
-		}
-
-		// Pattern contains wildcards -- can't safely prune based on dir name alone;
-		// wildcards like "*" or "*/foo/*" could match any depth. Allow traversal.
-		if strings.ContainsAny(matchPattern, "*?") {
-			return true
-		}
-		// Literal pattern: prune only if dir is provably outside all patterns.
-		// Dir is "inside" a pattern when:
-		//   a) dir IS the pattern prefix (e.g. dir="audio2midi", pattern="audio2midi/dsp.py")
-		//   b) dir is a component of pattern (e.g. dir="docs", pattern="docs/plans")
-		//   c) pattern is a prefix of dir (e.g. dir="audio2midi/sub", pattern="audio2midi")
-		prefix := strings.TrimRight(matchPattern, "/")
-		if prefix == "" {
-			continue
-		}
-		if matchRel == prefix ||
-			strings.HasPrefix(matchRel, prefix+"/") ||
-			strings.HasPrefix(prefix, matchRel+"/") {
-			return true
-		}
-	}
-	return false
-}
-
-// normalizePathScopePatterns normalizes every pattern once, before the walk, so
-// the per-file/per-directory matchers don't repeat this pure (pattern, walkRoot)
-// work on the hot path. Returns nil for an empty scope.
-func normalizePathScopePatterns(pathScope []string, walkRoot string) []string {
-	if len(pathScope) == 0 {
-		return nil
-	}
-	out := make([]string, len(pathScope))
-	for i, p := range pathScope {
-		out[i] = normalizePathScopePattern(p, walkRoot)
-	}
-	return out
-}
-
-func normalizePathScopePattern(pattern, walkRoot string) string {
-	pattern = stripMatchingQuotes(strings.TrimSpace(pattern))
-	pattern = strings.ReplaceAll(pattern, "\\", "/")
-	if pattern == "" {
-		return pattern
-	}
-
-	nativePattern := filepath.FromSlash(pattern)
-	if filepath.IsAbs(nativePattern) {
-		if rel, err := filepath.Rel(walkRoot, nativePattern); err == nil {
-			if relSlash := filepath.ToSlash(rel); relSlash != "." && !strings.HasPrefix(relSlash, "../") && relSlash != ".." {
-				return relSlash
-			}
-		}
-	}
-	return pattern
-}
-
-func normalizePathScopeMatchPair(pattern, relSlash string) (string, string) {
-	if runtime.GOOS != "windows" {
-		return pattern, relSlash
-	}
-	return strings.ToLower(pattern), strings.ToLower(relSlash)
-}
-
-func pathScopePatternMatches(pattern, relSlash string) bool {
-	if pattern == "" {
-		return false
-	}
-	if !strings.Contains(pattern, "/") {
-		if matched, err := path.Match(pattern, path.Base(relSlash)); err == nil && matched {
-			return true
-		}
-	}
-
-	patternParts := splitPathScopeParts(pattern)
-	relParts := splitPathScopeParts(relSlash)
-	return pathScopePartsMatch(patternParts, relParts)
 }
 
 func splitPathScopeParts(s string) []string {
@@ -510,6 +387,41 @@ func GetDocumentFileCountWithOptions(fileTypes []string, walkRoot string, pathSc
 		return 0, err
 	}
 	return count, nil
+}
+
+// GetDocumentFileCountForRoots counts the canonical union of candidates from
+// prepared roots using the same traversal policy as discovery.
+func GetDocumentFileCountForRoots(fileTypes []string, roots []StartRoot, pathScope []string, options WalkOptions) (int, error) {
+	return getDocumentFileCountForRoots(fileTypes, roots, pathScope, options, nil)
+}
+
+func getDocumentFileCountForRoots(fileTypes []string, roots []StartRoot, pathScope []string, options WalkOptions, onKeyTracking func()) (int, error) {
+	overlap := preparedPhysicalRootsOverlap(roots)
+	count := 0
+	var seen map[string]struct{}
+	if overlap {
+		seen = make(map[string]struct{})
+		if onKeyTracking != nil {
+			onKeyTracking()
+		}
+	}
+	for _, root := range roots {
+		err := walkPreparedCandidates(fileTypes, root, pathScope, options, func(path string, _ os.FileInfo) error {
+			if overlap {
+				seen[canonicalCandidateKey(root, path)] = struct{}{}
+			} else {
+				count++
+			}
+			return nil
+		})
+		if err != nil {
+			return 0, err
+		}
+	}
+	if !overlap {
+		return count, nil
+	}
+	return len(seen), nil
 }
 
 // FindFilesWithFirstWord finds all files containing the first search word (pure Go).
@@ -742,15 +654,19 @@ func asciiPlainTermHasAcceptedEnd(buf []byte, end int, matcher termMatcher) bool
 		return true
 	}
 
-	if asciiSuffixEndsAtBoundary(buf, end, "es", matcher.caseInsensitive) ||
-		asciiSuffixEndsAtBoundary(buf, end, "s", matcher.caseInsensitive) {
+	if !matcher.caseInsensitive && !matcher.smartForms {
+		return false
+	}
+	suffixInsensitive := matcher.caseInsensitive || matcher.smartForms
+	if asciiSuffixEndsAtBoundary(buf, end, "es", suffixInsensitive) ||
+		asciiSuffixEndsAtBoundary(buf, end, "s", suffixInsensitive) {
 		return true
 	}
 	if !matcher.smartForms {
 		return false
 	}
 	for _, suffix := range [...]string{"ed", "ing", "al", "tion", "ation"} {
-		if asciiSuffixEndsAtBoundary(buf, end, suffix, matcher.caseInsensitive) {
+		if asciiSuffixEndsAtBoundary(buf, end, suffix, suffixInsensitive) {
 			return true
 		}
 	}
@@ -793,6 +709,25 @@ func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes 
 }
 
 func findFilesWithFirstWordProgressQueryWithOptions(query compiledQuery, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
+	raw := []string{walkRoot}
+	if walkRoot == "" {
+		raw = nil
+	}
+	roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{
+		NoIgnore:  options.NoIgnore,
+		PathScope: pathScope,
+		UserGlobs: options.UserGlobs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(roots) != 1 {
+		return nil, fmt.Errorf("single-root discovery received %d effective roots", len(roots))
+	}
+	return findFilesWithFirstWordProgressQueryWithRoot(query, fileTypes, workers, onProgress, roots[0], pathScope, options)
+}
+
+func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes []string, workers int, onProgress func(processed, total int, path string), root StartRoot, pathScope []string, options WalkOptions) ([]string, error) {
 	// Emit initial progress with unknown total
 	if onProgress != nil {
 		onProgress(0, 0, "")
@@ -911,7 +846,7 @@ func findFilesWithFirstWordProgressQueryWithOptions(query compiledQuery, fileTyp
 	processed := 0
 
 	// Walk and stream paths to workers
-	walkErr := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
+	walkErr := walkPreparedCandidates(fileTypes, root, pathScope, options, func(path string, _ os.FileInfo) error {
 		ext := strings.ToLower(filepath.Ext(path))
 
 		processed++
@@ -1493,6 +1428,10 @@ func CheckFileContainsExcludeWords(filePath string, excludeWords []string) (bool
 }
 
 func checkFileContainsExcludeWords(filePath string, excludeWords []string, maxBytes int64) (bool, error) {
+	return checkFileContainsExcludeWordsWithOptions(filePath, excludeWords, maxBytes, QueryOptions{})
+}
+
+func checkFileContainsExcludeWordsWithOptions(filePath string, excludeWords []string, maxBytes int64, options QueryOptions) (bool, error) {
 	if len(excludeWords) == 0 {
 		return false, nil
 	}
@@ -1501,11 +1440,8 @@ func checkFileContainsExcludeWords(filePath string, excludeWords []string, maxBy
 	if err != nil {
 		return false, err
 	}
-	contentStr := strings.ToLower(content)
-
-	// Check each exclude word
 	for _, word := range excludeWords {
-		if containsWholeWord(contentStr, strings.ToLower(word)) {
+		if containsLiteralExcludeWord(content, word, options.CaseSensitive) {
 			return true, nil
 		}
 	}

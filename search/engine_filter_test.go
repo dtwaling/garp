@@ -27,8 +27,8 @@ func TestEngineCanonicalTerms(t *testing.T) {
 	engine.StartDir = root
 	engine.Silent = true
 
-	if got := engine.SearchWords; len(got) != 1 || got[0] != "ms-*-api" {
-		t.Fatalf("SearchWords = %q, want [ms-*-api]", got)
+	if got := engine.SearchWords; len(got) != 2 || got[0] != "ms-**-api" || got[1] != "MS-*-API" {
+		t.Fatalf("SearchWords = %q, want authoritative caller input", got)
 	}
 
 	matches, err := engine.FilterCandidates([]string{fixture}, 1, time.Now())
@@ -48,6 +48,32 @@ func TestEngineCanonicalTerms(t *testing.T) {
 		got.MatchedTerms[0] != "ms-*-api" {
 		t.Errorf("metadata = score %d, term count %d, terms %q; want %d, 1, [ms-*-api]",
 			got.Score, got.TermCount, got.MatchedTerms, len("ms-*-api"))
+	}
+}
+
+func TestEngineSearchWordsRemainAuthoritative(t *testing.T) {
+	root := t.TempDir()
+	upper := filepath.Join(root, "upper.txt")
+	lower := filepath.Join(root, "lower.txt")
+	if err := os.WriteFile(upper, []byte("API"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lower, []byte("api"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := search.NewSearchEngine([]string{"unused"}, nil, []string{"-g", "*.txt"}, false, 1, 1000)
+	engine.SearchWords = []string{"API"}
+	engine.CaseSensitive = true
+	engine.StartDir = root
+	engine.Silent = true
+	engine.PathOnly = true
+	results, err := engine.Execute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].FilePath != upper {
+		t.Fatalf("modified SearchWords results = %#v", results)
 	}
 }
 

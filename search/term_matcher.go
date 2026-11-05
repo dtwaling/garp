@@ -18,10 +18,10 @@ const (
 )
 
 type termMatcherCacheKey struct {
-	term            string
-	mode            PartialMode
-	caseInsensitive bool
-	smartForms      bool
+	term          string
+	mode          PartialMode
+	caseSensitive bool
+	smartForms    bool
 }
 
 var (
@@ -41,6 +41,12 @@ type compiledQuery struct {
 	matchers          []termMatcher
 	maxMatchBytes     int
 	maxDetectionBytes int
+}
+
+// QueryOptions defines immutable matching behavior for a compiled query.
+type QueryOptions struct {
+	CaseSensitive bool
+	SmartForms    bool
 }
 
 // termMatcher owns the canonical and effective matching semantics for one term.
@@ -67,9 +73,13 @@ type termMatcher struct {
 	detectionBytes int
 }
 
-// NormalizeQueryTerms trims terms, collapses consecutive stars, removes empty
-// terms, and deduplicates case-insensitively while preserving first-seen text.
+// NormalizeQueryTerms applies the default case-insensitive query contract.
 func NormalizeQueryTerms(terms []string) []string {
+	return NormalizeQueryTermsWithOptions(terms, QueryOptions{})
+}
+
+// NormalizeQueryTermsWithOptions canonicalizes and deduplicates query terms.
+func NormalizeQueryTermsWithOptions(terms []string, options QueryOptions) []string {
 	normalized := make([]string, 0, len(terms))
 	seen := make(map[string]struct{}, len(terms))
 	for _, term := range terms {
@@ -77,7 +87,11 @@ func NormalizeQueryTerms(terms []string) []string {
 		if term == "" {
 			continue
 		}
-		key := unicodeFoldKey(term)
+		key := term
+		if !options.CaseSensitive {
+			term = lowerWithinSimpleFoldOrbit(term)
+			key = unicodeFoldKey(term)
+		}
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -85,6 +99,35 @@ func NormalizeQueryTerms(terms []string) []string {
 		normalized = append(normalized, term)
 	}
 	return normalized
+}
+
+func lowerWithinSimpleFoldOrbit(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		lower := unicode.ToLower(r)
+		if lower != r && runeInSimpleFoldOrbit(r, lower) {
+			r = lower
+		}
+		b.WriteRune(r)
+		i += size
+	}
+	return b.String()
+}
+
+func runeInSimpleFoldOrbit(start, candidate rune) bool {
+	for folded := unicode.SimpleFold(start); folded != start; folded = unicode.SimpleFold(folded) {
+		if folded == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func collapseStars(term string) string {
@@ -129,13 +172,17 @@ func unicodeFoldKey(s string) string {
 }
 
 func compileQuery(terms []string, mode PartialMode) compiledQuery {
-	normalized := NormalizeQueryTerms(terms)
+	return compileQueryWithOptions(terms, mode, QueryOptions{})
+}
+
+func compileQueryWithOptions(terms []string, mode PartialMode, options QueryOptions) compiledQuery {
+	normalized := NormalizeQueryTermsWithOptions(terms, options)
 	query := compiledQuery{
 		terms:    append([]string(nil), normalized...),
 		matchers: make([]termMatcher, 0, len(normalized)),
 	}
 	for _, term := range normalized {
-		matcher := compileTermMatcher(term, mode, true)
+		matcher := compileTermMatcherWithOptions(term, mode, options)
 		query.matchers = append(query.matchers, matcher)
 		if matcher.maxMatchBytes < 0 {
 			query.maxMatchBytes = -1
@@ -150,12 +197,18 @@ func compileQuery(terms []string, mode PartialMode) compiledQuery {
 }
 
 func compileTermMatcher(term string, requestedMode PartialMode, caseInsensitive bool) termMatcher {
+	return compileTermMatcherWithOptions(term, requestedMode, QueryOptions{
+		CaseSensitive: !caseInsensitive,
+	})
+}
+
+func compileTermMatcherWithOptions(term string, requestedMode PartialMode, options QueryOptions) termMatcher {
 	term = collapseStars(strings.TrimSpace(term))
 	key := termMatcherCacheKey{
-		term:            term,
-		mode:            requestedMode,
-		caseInsensitive: caseInsensitive,
-		smartForms:      smartFormsEnabled(),
+		term:          term,
+		mode:          requestedMode,
+		caseSensitive: options.CaseSensitive,
+		smartForms:    options.SmartForms,
 	}
 	termMatcherCacheMu.RLock()
 	matcher, ok := termMatcherCache[key]
@@ -164,7 +217,7 @@ func compileTermMatcher(term string, requestedMode PartialMode, caseInsensitive 
 		return matcher
 	}
 
-	matcher = compileTermMatcherUncached(term, requestedMode, caseInsensitive, key.smartForms)
+	matcher = compileTermMatcherUncached(term, requestedMode, !options.CaseSensitive, options.SmartForms)
 	termMatcherCacheMu.Lock()
 	if cached, ok := termMatcherCache[key]; ok {
 		matcher = cached
@@ -237,7 +290,7 @@ func compileTermMatcherUncached(term string, requestedMode PartialMode, caseInse
 		case PartialModeContains:
 			// The literal core is sufficient.
 		default:
-			if isWordByte(term[len(term)-1]) {
+			if isWordByte(term[len(term)-1]) && (caseInsensitive || smartForms) {
 				suffix := inflectionSuffix(caseInsensitive, smartForms)
 				searchPattern = `(?:` + searchPattern + suffix + `)`
 				suffixBytes := 2
@@ -334,14 +387,11 @@ func wildcardPattern(term string, starWidth int, caseInsensitive bool) string {
 }
 
 func inflectionSuffix(caseInsensitive, smartForms bool) string {
-	if !caseInsensitive {
-		if smartForms {
-			return `(?:es|s|ed|ing|al|tion|ation)?`
-		}
-		return `(?:es|s)?`
-	}
 	if smartForms {
 		return `(?:[eE][sS]|[sS]|[eE][dD]|[iI][nN][gG]|[aA][lL]|[tT][iI][oO][nN]|[aA][tT][iI][oO][nN])?`
+	}
+	if !caseInsensitive {
+		return ``
 	}
 	return `(?:[eE][sS]|[sS])?`
 }
@@ -567,14 +617,15 @@ func (m termMatcher) matchByteExactAt(
 	}
 
 	forms := []string{""}
-	if isWordByte(m.term[len(m.term)-1]) {
+	if isWordByte(m.term[len(m.term)-1]) && (m.caseInsensitive || m.smartForms) {
 		forms = []string{"es", "s", ""}
 		if m.smartForms {
 			forms = []string{"ation", "tion", "ing", "ed", "al", "es", "s", ""}
 		}
 	}
 	for _, form := range forms {
-		candidate, matched := matchASCIIBytes(text, end, form, m.caseInsensitive)
+		suffixInsensitive := m.caseInsensitive || m.smartForms
+		candidate, matched := matchASCIIBytes(text, end, form, suffixInsensitive)
 		if matched && boundaries[candidate] &&
 			(!m.trailingBound || candidate == len(text) || !isWordByte(text[candidate])) {
 			return candidate, true

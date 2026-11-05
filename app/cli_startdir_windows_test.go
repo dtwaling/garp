@@ -8,9 +8,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"garp/search"
 )
 
-func TestValidateSearchRootAcceptsJunction(t *testing.T) {
+func TestStartDirWindowsCaseEquivalentRootsDeduplicate(t *testing.T) {
+	root := t.TempDir()
+	roots, err := search.PrepareStartRoots([]string{root, strings.ToUpper(root)}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("root count = %d, want 1", len(roots))
+	}
+}
+
+func TestStartDirPrepareStartRootsAcceptsJunction(t *testing.T) {
 	base := t.TempDir()
 	target := filepath.Join(base, "target")
 	if err := os.Mkdir(target, 0o755); err != nil {
@@ -21,12 +34,12 @@ func TestValidateSearchRootAcceptsJunction(t *testing.T) {
 		t.Skipf("directory junctions are unavailable: %v: %s", err, output)
 	}
 
-	if err := validateSearchRoot(junction); err != nil {
-		t.Fatalf("validateSearchRoot(junction) error = %v", err)
+	if _, err := search.PrepareStartRoots([]string{junction}, false); err != nil {
+		t.Fatalf("PrepareStartRoots(junction) error = %v", err)
 	}
 }
 
-func TestValidateSearchRootAcceptsPathBeyondMAXPATH(t *testing.T) {
+func TestStartDirPrepareStartRootsAcceptsPathBeyondMAXPATH(t *testing.T) {
 	root := t.TempDir()
 	longRoot := root
 	for len(longRoot) <= 300 {
@@ -36,7 +49,7 @@ func TestValidateSearchRootAcceptsPathBeyondMAXPATH(t *testing.T) {
 		}
 	}
 
-	if err := validateSearchRoot(longRoot); err != nil {
-		t.Fatalf("validateSearchRoot(long path) error = %v", err)
+	if _, err := search.PrepareStartRoots([]string{longRoot}, false); err != nil {
+		t.Fatalf("PrepareStartRoots(long path) error = %v", err)
 	}
 }

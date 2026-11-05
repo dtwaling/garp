@@ -129,14 +129,20 @@ func pathMatchCount(filePath, startDir string, query compiledQuery) int {
 	relPath := rankingRelativePath(filePath, resolveRankingRoot(startDir))
 
 	count := 0
-	lowerPath := strings.ToLower(relPath)
 	for i, matcher := range query.matchers {
 		if matcher.matches(relPath) {
 			count++
 			continue
 		}
 		core := alphanumericCore(query.terms[i])
-		if len(core) >= 2 && strings.Contains(lowerPath, strings.ToLower(core)) {
+		if len(core) < 2 {
+			continue
+		}
+		fallbackMatch := strings.Contains(relPath, core)
+		if matcher.caseInsensitive {
+			fallbackMatch = strings.Contains(strings.ToLower(relPath), strings.ToLower(core))
+		}
+		if fallbackMatch {
 			count++
 		}
 	}

@@ -47,6 +47,20 @@ func TestPathMatchCount(t *testing.T) {
 		}
 	})
 
+	t.Run("case-sensitive fallback preserves case", func(t *testing.T) {
+		caseQuery := compileQueryWithOptions(
+			[]string{"API-"},
+			PartialModeContains,
+			QueryOptions{CaseSensitive: true},
+		)
+		if got := pathMatchCount(filepath.Join(root, "api-client.txt"), root, caseQuery); got != 0 {
+			t.Fatalf("lowercase fallback count = %d, want 0", got)
+		}
+		if got := pathMatchCount(filepath.Join(root, "API-client.txt"), root, caseQuery); got != 1 {
+			t.Fatalf("exact-case fallback count = %d, want 1", got)
+		}
+	})
+
 	t.Run("default root uses current directory", func(t *testing.T) {
 		cwd := t.TempDir()
 		t.Chdir(cwd)

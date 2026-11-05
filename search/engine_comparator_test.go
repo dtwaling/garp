@@ -81,6 +81,27 @@ func TestRankingComparatorNormalizesAndOrdersPaths(t *testing.T) {
 	}
 }
 
+func TestRankingComparatorUsesRootOrderThenCanonicalPath(t *testing.T) {
+	base := rankingKey{filePath: "same.txt", score: 10, termCount: 1}
+	firstRoot := base
+	firstRoot.rootOrder = 0
+	firstRoot.canonicalPath = "z-root/same.txt"
+	secondRoot := base
+	secondRoot.rootOrder = 1
+	secondRoot.canonicalPath = "a-root/same.txt"
+	if !rankingBetter(firstRoot, secondRoot) || rankingBetter(secondRoot, firstRoot) {
+		t.Fatal("supplied root order did not break an equal relative-path tie")
+	}
+
+	canonicalFirst := base
+	canonicalFirst.canonicalPath = "a-root/same.txt"
+	canonicalSecond := base
+	canonicalSecond.canonicalPath = "z-root/same.txt"
+	if !rankingBetter(canonicalFirst, canonicalSecond) || rankingBetter(canonicalSecond, canonicalFirst) {
+		t.Fatal("canonical absolute path did not break the final tie")
+	}
+}
+
 func TestRankingComparatorRawPathTieIsDeterministicAndTransitive(t *testing.T) {
 	want := []string{
 		"dir/A.php",

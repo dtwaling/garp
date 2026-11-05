@@ -6,10 +6,13 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"garp/search"
 )
 
 func TestParseArguments_StartDir_Accepted(t *testing.T) {
@@ -226,7 +229,42 @@ func TestNoIgnoreAndMaxFileSizePropagateToSearchEngines(t *testing.T) {
 	}
 }
 
-func TestShowUsageDocumentsIgnoreAndFileSizeFlags(t *testing.T) {
+func TestLegacyOnlyTypeDisablesPositiveGlobCodeEligibility(t *testing.T) {
+	globs := []search.UserGlob{{Pattern: "*.go"}}
+	args := &Arguments{
+		SearchWords:       []string{"anchor"},
+		OnlyType:          "md",
+		UserGlobs:         globs,
+		HeavyConcurrency:  1,
+		FilterWorkers:     1,
+		FileTimeoutBinary: 1000,
+	}
+	silent := newSilentSearchEngine(args)
+	if silent.PositiveGlobCodeEligibility {
+		t.Fatal("legacy Arguments.OnlyType enabled positive-glob code eligibility")
+	}
+	if walkOptions(args).PositiveGlobCodeEligibility {
+		t.Fatal("legacy Arguments.OnlyType enabled preflight code eligibility")
+	}
+
+	tuiModel := model{
+		searchWords:       []string{"anchor"},
+		onlyType:          "md",
+		userGlobs:         globs,
+		heavyConcurrency:  1,
+		filterWorkers:     1,
+		fileTimeoutBinary: 1000,
+	}
+	tui := tuiModel.newSearchEngine()
+	if tui.PositiveGlobCodeEligibility {
+		t.Fatal("legacy model.onlyType enabled positive-glob code eligibility")
+	}
+	if positiveGlobCodeEligibility(tuiModel.onlyType, tuiModel.onlyTypes) {
+		t.Fatal("legacy model.onlyType enabled TUI preflight code eligibility")
+	}
+}
+
+func TestShowUsageDocumentsFlagsAndCompatibilityLimits(t *testing.T) {
 	out := string(captureCLIStdout(t, func() int {
 		showUsage()
 		return 0
@@ -237,10 +275,47 @@ func TestShowUsageDocumentsIgnoreAndFileSizeFlags(t *testing.T) {
 		"[--max-filesize SIZE]",
 		"--no-ignore            Do not apply repository ignore files",
 		"--max-filesize SIZE    Maximum file size",
+		"-l, --files-with-matches",
+		"-m, --max-count N",
+		"not an rg line-count limit",
+		"-t, --type, --only TYPE",
+		"-g, --glob PATTERN",
+		"--iglob PATTERN",
+		"-i, --ignore-case",
+		"-s, --case-sensitive",
+		"Comma-separated search roots; specify this flag once",
+		"Comma-separated positive scopes form a union",
+		"Use repeatable -g for additional path globs",
+		"Bare name matches basenames at any depth",
+		"name/, ./name, and patterns containing / are root-anchored",
+		"* and ? stay within one segment; ** crosses segments",
+		"Use ./src for explicit root-relative matching",
+		"Absolute pathscope and user-glob patterns must overlap a search root",
+		"Examples: POSIX /repo/src/**; Windows C:/repo/src/**",
+		"A pattern can select inside a root or cover it as an ancestor",
+		"On Windows, a non-absolute leading slash is root-relative",
+		"If no root intersects it, validation fails before search",
+		"Prefix with ! to exclude a path",
+		"Pathscope intersects with positive --glob and --iglob patterns",
+		"both --flag VALUE and --flag=VALUE",
+		"Stop flag parsing",
+		"context flags are not supported",
+		"not a drop-in rg replacement",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("usage missing %q:\n%s", want, out)
 		}
+	}
+	defaultWorkers := parseArguments([]string{"needle"}).FilterWorkers
+	if defaultWorkers != 4 {
+		t.Fatalf("parser default workers = %d, want 4", defaultWorkers)
+	}
+	workersHelp := fmt.Sprintf(
+		"--workers N             Stage 2 text filter workers (default %d)",
+		defaultWorkers,
+	)
+	if !strings.Contains(out, workersHelp) {
+		t.Errorf("usage worker default differs from parser default; missing %q:\n%s", workersHelp, out)
 	}
 }
 
@@ -295,11 +370,11 @@ func TestRunJSON_PathScopeUsesPlatformSeparators(t *testing.T) {
 }
 
 func TestParseArguments_StartDir_WithEquals(t *testing.T) {
-	// Some users may pass --startdir=/path style (equals sign)
-	// Our parser uses next-token style; this test documents that equals-style
-	// falls through as a search word (not supported, by design).
-	// No regression: equals-style was never supported.
 	args := parseArguments([]string{"foo", "--startdir=/home/user/project"})
-	// Should be treated as search word (unrecognized flag)
-	_ = args // just verify it doesn't panic
+	if args.ParseErr != nil {
+		t.Fatalf("ParseErr = %v, want nil", args.ParseErr)
+	}
+	if want := filepath.Clean("/home/user/project"); args.StartDir != want {
+		t.Errorf("StartDir = %q, want %q", args.StartDir, want)
+	}
 }
