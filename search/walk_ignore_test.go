@@ -37,6 +37,65 @@ func TestWalkIgnoreInheritancePrecedenceAndPruning(t *testing.T) {
 	}
 }
 
+func TestWalkFileTypeAndPolicyGatedBeforeIgnore(t *testing.T) {
+	root := t.TempDir()
+	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "ignored.*\n!restored.md\n*.png\n!keep.png\npruned/\n")
+	for _, relative := range []string{
+		"docs/ignored.md",
+		"docs/ignored.go",
+		"docs/keep.md",
+		"docs/keep.png",
+		"docs/main.go",
+		"docs/notes.txt",
+		"docs/policy-excluded.md",
+		"docs/pruned/keep.md",
+		"docs/restored.md",
+		"docs/sub/keep.md",
+		"outside/keep.md",
+		"root.md",
+	} {
+		writeWalkFixture(t, root, relative, "anchor")
+	}
+
+	for _, tt := range []struct {
+		name     string
+		noIgnore bool
+		code     bool
+		want     []string
+	}{
+		{
+			name: "ignore enabled",
+			want: []string{"docs/keep.md", "docs/restored.md", "docs/sub/keep.md"},
+		},
+		{
+			name: "positive glob code eligibility",
+			code: true,
+			want: []string{"docs/keep.md", "docs/main.go", "docs/restored.md", "docs/sub/keep.md"},
+		},
+		{
+			name:     "no ignore retains type and policy gates",
+			noIgnore: true,
+			want:     []string{"docs/ignored.md", "docs/keep.md", "docs/pruned/keep.md", "docs/restored.md", "docs/sub/keep.md"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := collectCandidates(t, root, []string{"-g", "*.md"}, []string{"docs/"}, WalkOptions{
+				NoIgnore:                    tt.noIgnore,
+				PositiveGlobCodeEligibility: tt.code,
+				UserGlobs: []UserGlob{
+					{Pattern: "*.md"},
+					{Pattern: "*.go"},
+					{Pattern: "*.png"},
+					{Pattern: "policy-excluded.md", Negated: true},
+				},
+			})
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("candidates = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWalkIgnoreNoIgnoreStillUsesHardcodedSkips(t *testing.T) {
 	root := t.TempDir()
 	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "ignored.md\n")
