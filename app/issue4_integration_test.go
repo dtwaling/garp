@@ -118,7 +118,7 @@ func TestIssue4Acceptance(t *testing.T) {
 		writeIssue4Fixture(t, first, "same.txt", "needle")
 		writeIssue4Fixture(t, second, "same.txt", "needle")
 		out := captureIssue4RunJSON(t, []string{
-			"garp", "needle", "--startdir", first, "--startdir", second, "--only", "txt", "--json",
+			"garp", "needle", "--startdir", first + "," + second, "--only", "txt", "--json",
 		})
 		if out.Query.StartDir != first || !slicesEqual(out.Query.StartDirs, []string{first, second}) {
 			t.Fatalf("multi-root JSON = %#v", out.Query)
@@ -131,7 +131,7 @@ func TestIssue4Acceptance(t *testing.T) {
 		child := filepath.Join(parent, "blocked", "child")
 		writeIssue4Fixture(t, child, "retained.txt", "needle")
 		nestedOut := captureIssue4RunJSON(t, []string{
-			"garp", "needle", "--startdir", parent, "--startdir", child,
+			"garp", "needle", "--startdir", parent + "," + child,
 			"--pathscope", "!blocked/**", "--only", "txt", "--json",
 		})
 		if len(nestedOut.Results) != 1 || nestedOut.Query.StartDir != parent ||

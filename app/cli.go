@@ -205,6 +205,17 @@ func appendOnlyTypes(current []string, flag, value string) ([]string, error) {
 	return current, nil
 }
 
+func repeatedRootPolicyFlagError(flag string) error {
+	switch flag {
+	case "--startdir":
+		return fmt.Errorf("%s may only be specified once; use comma-separated paths in one %s value", flag, flag)
+	case "--pathscope":
+		return fmt.Errorf("%s may only be specified once; use comma-separated patterns in one %s value or repeat -g for additional path globs", flag, flag)
+	default:
+		return nil
+	}
+}
+
 // parseArguments parses command line args.
 func parseArguments(args []string) *Arguments {
 	result := &Arguments{
@@ -221,6 +232,8 @@ func parseArguments(args []string) *Arguments {
 	parsingExcludes := false
 	optionsEnded := false
 	heavyProvided := false
+	startDirSeen := false
+	pathScopeSeen := false
 
 	setParseError := func(err error) {
 		if err != nil && result.ParseErr == nil {
@@ -265,6 +278,15 @@ func parseArguments(args []string) *Arguments {
 			valueFlag = true
 		}
 		if valueFlag {
+			repeatedRootPolicyFlag := false
+			switch flag {
+			case "--startdir":
+				repeatedRootPolicyFlag = startDirSeen
+				startDirSeen = true
+			case "--pathscope":
+				repeatedRootPolicyFlag = pathScopeSeen
+				pathScopeSeen = true
+			}
 			value, nextIndex, err := requiredFlagValue(
 				args,
 				index,
@@ -275,6 +297,10 @@ func parseArguments(args []string) *Arguments {
 				isNumericValueFlag(flag),
 			)
 			index = nextIndex
+			if repeatedRootPolicyFlag {
+				setParseError(repeatedRootPolicyFlagError(flag))
+				continue
+			}
 			if err != nil {
 				switch flag {
 				case "--max-results":
@@ -610,9 +636,10 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000)"))
 	fmt.Println(infoStyle.Render("  --smart-forms           Enable smart word forms (s, es, ed, ing, al, tion/ation)"))
 	fmt.Println(infoStyle.Render("  -t, --type, --only TYPE Restrict file types; repeat or use comma-separated values"))
-	fmt.Println(infoStyle.Render("  --startdir PATH         Search root; repeat or use comma-separated paths"))
+	fmt.Println(infoStyle.Render("  --startdir PATH         Comma-separated search roots; specify this flag once"))
 	fmt.Println(infoStyle.Render("                          Existing directory names that contain commas stay intact"))
-	fmt.Println(infoStyle.Render("  --pathscope PATTERNS   Comma-separated positive scopes form a union"))
+	fmt.Println(infoStyle.Render("  --pathscope PATTERNS   Comma-separated positive scopes form a union; specify this flag once"))
+	fmt.Println(infoStyle.Render("                         Use repeatable -g for additional path globs"))
 	fmt.Println(infoStyle.Render("                         Bare name matches basenames at any depth"))
 	fmt.Println(infoStyle.Render("                         name/, ./name, and patterns containing / are root-anchored"))
 	fmt.Println(infoStyle.Render("                         * and ? stay within one segment; ** crosses segments"))

@@ -92,7 +92,6 @@ func TestParseArgumentsStartDirs(t *testing.T) {
 	args := parseArguments([]string{
 		"needle",
 		"--startdir", "first, second",
-		"--startdir=third",
 	})
 	if args.ParseErr != nil {
 		t.Fatal(args.ParseErr)
@@ -100,7 +99,7 @@ func TestParseArgumentsStartDirs(t *testing.T) {
 	if !args.StartDirProvided {
 		t.Fatal("StartDirProvided = false")
 	}
-	if len(args.StartDirs) != 2 || args.StartDirs[0] != "first, second" || args.StartDirs[1] != "third" {
+	if len(args.StartDirs) != 1 || args.StartDirs[0] != "first, second" {
 		t.Fatalf("StartDirs = %q", args.StartDirs)
 	}
 	if args.StartDir != filepath.Clean("first") {

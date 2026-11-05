@@ -27,7 +27,7 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 
 ## Flags that matter
 
-- `--startdir <dir>`: search root (default: cwd). Repeat it or use comma-separated paths for a multi-repository search. An existing directory name that contains a comma stays intact.
+- `--startdir <dir>`: search roots (default: cwd). Use one comma-separated value for a multi-repository search; specify the flag once. An existing directory name that contains a comma stays intact.
 - `--pathscope 'a/,b/'`: comma-separated path patterns. Prefix with `!` to exclude. It intersects with positive globs. Bare `name` matches basenames at any depth. `name/`, `./name`, and patterns that contain `/` are root-anchored. `*` and `?` stay within one segment; `**` crosses segments.
 - `-g` / `--glob <pattern>`: repeatable case-sensitive path glob. `--iglob` is case-insensitive. Prefix a pattern with `!` to exclude it.
 - `--code`: include source files, including Dockerfile/Containerfile names. `-t` / `--type` / `--only <ext>` restricts file types. Repeat the flag or use comma-separated values. A type restriction overrides `--code`.

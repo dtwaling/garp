@@ -228,7 +228,7 @@ func TestJSONStartDirsCompatibilityAndOmission(t *testing.T) {
 		}
 	}
 	args := parseArguments([]string{
-		"needle", "--startdir", first, "--startdir", second,
+		"needle", "--startdir", first + "," + second,
 	})
 	roots, err := search.PrepareStartRoots(args.StartDirs, false)
 	if err != nil {

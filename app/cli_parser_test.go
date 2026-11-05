@@ -219,6 +219,93 @@ func TestParseArgumentsUserGlobs(t *testing.T) {
 	}
 }
 
+func TestRootPolicyFlagOccurrences(t *testing.T) {
+	tests := []struct {
+		flag         string
+		firstValue   string
+		secondValue  string
+		wantGuidance string
+	}{
+		{
+			flag:         "--startdir",
+			firstValue:   "first",
+			secondValue:  "second",
+			wantGuidance: "comma-separated paths",
+		},
+		{
+			flag:         "--pathscope",
+			firstValue:   "src",
+			secondValue:  "docs",
+			wantGuidance: "repeat -g",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.flag, func(t *testing.T) {
+			forms := [][]string{
+				{"needle", test.flag, test.firstValue, test.flag, test.secondValue},
+				{"needle", test.flag + "=" + test.firstValue, test.flag + "=" + test.secondValue},
+				{"needle", test.flag, test.firstValue, test.flag + "=" + test.secondValue},
+				{"needle", test.flag + "=" + test.firstValue, test.flag, test.secondValue},
+			}
+			for _, argv := range forms {
+				args := parseArguments(argv)
+				if args.ParseErr == nil {
+					t.Fatalf("%v: ParseErr = nil, want repeated flag rejection", argv)
+				}
+				message := args.ParseErr.Error()
+				if !strings.Contains(message, test.flag+" may only be specified once") {
+					t.Fatalf("%v: ParseErr = %q, want repeat description", argv, message)
+				}
+				if !strings.Contains(message, test.wantGuidance) {
+					t.Fatalf("%v: ParseErr = %q, want guidance %q", argv, message, test.wantGuidance)
+				}
+			}
+
+			code, stderr := runWithArgsAndStderr(t, []string{
+				"garp", "needle", test.flag, test.firstValue, test.flag + "=" + test.secondValue,
+			})
+			if code != 1 {
+				t.Fatalf("Run() = %d, want 1", code)
+			}
+			if !strings.Contains(stderr, test.flag+" may only be specified once") {
+				t.Fatalf("stderr = %q, want repeated flag error", stderr)
+			}
+		})
+	}
+
+	t.Run("comma-separated values remain valid", func(t *testing.T) {
+		args := parseArguments([]string{
+			"needle",
+			"--startdir", "first, second",
+			"--pathscope=src,docs/**",
+		})
+		if args.ParseErr != nil {
+			t.Fatalf("ParseErr = %v, want nil", args.ParseErr)
+		}
+		if !slicesEqual(args.StartDirs, []string{"first, second"}) {
+			t.Fatalf("StartDirs = %q, want one comma-list occurrence", args.StartDirs)
+		}
+		if !slicesEqual(args.PathScope, []string{"src", "docs/**"}) {
+			t.Fatalf("PathScope = %q, want comma-separated patterns", args.PathScope)
+		}
+	})
+
+	t.Run("globs remain repeatable", func(t *testing.T) {
+		args := parseArguments([]string{
+			"needle",
+			"-g", "*.go",
+			"--glob=docs/**",
+			"--iglob", "README.*",
+		})
+		if args.ParseErr != nil {
+			t.Fatalf("ParseErr = %v, want nil", args.ParseErr)
+		}
+		if len(args.UserGlobs) != 3 {
+			t.Fatalf("UserGlobs = %+v, want three repeated globs", args.UserGlobs)
+		}
+	})
+}
+
 func TestParseArgumentsUserGlobErrorUsesActualAliasOnce(t *testing.T) {
 	for _, flag := range []string{"-g", "--glob", "--iglob"} {
 		t.Run(flag, func(t *testing.T) {

@@ -50,7 +50,7 @@ garp pitch onset midi --strict        # enforce all terms with strict AND
 
 # Scope search to specific directories (prunes the walk -- never descends outside scope)
 garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/,tests/' --code
-garp deployment owner --startdir repo-a --startdir repo-b -g 'docs/**' --json
+garp deployment owner --startdir 'repo-a,repo-b' -g 'docs/**' --json
 
 # Machine-readable output for scripts and MCP/agent callers
 garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/' --code --json
@@ -142,8 +142,8 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 |------|---------|-------------|
 | `--code` | off | Include code files (.go, .py, .js, .ts, ...) |
 | `--distance N` | 5000 | Proximity window in characters |
-| `--startdir <path>` | cwd | Search root. Repeat the flag or use comma-separated paths for multiple roots. An existing directory name that contains a comma stays intact. |
-| `--pathscope <patterns>` | (all) | Comma-separated path patterns. Prefix with `!` to exclude. The scope intersects with positive globs. See path pattern rules below. |
+| `--startdir <path>` | cwd | Search roots as one comma-separated value. Specify the flag once. An existing directory name that contains a comma stays intact. |
+| `--pathscope <patterns>` | (all) | Comma-separated path patterns in one flag occurrence. Prefix with `!` to exclude. Use repeatable `-g` for additional path globs. The scope intersects with positive globs. See path pattern rules below. |
 | `-g`, `--glob <pattern>` | (all) | Repeatable case-sensitive path glob. Prefix with `!` to exclude. |
 | `--iglob <pattern>` | (all) | Repeatable case-insensitive path glob. Prefix with `!` to exclude. |
 | `-t`, `--type`, `--only <type>` | (all) | Restrict file types. Repeat the flag or use comma-separated values. |
