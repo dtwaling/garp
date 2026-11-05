@@ -15,6 +15,45 @@ func canonicalPathKey(path string) string {
 	return canonicalPathKeyForPlatform(path, true)
 }
 
+func resolvePatternPhysicalPath(pattern string) string {
+	cleaned := filepath.Clean(pattern)
+	volume := filepath.VolumeName(cleaned)
+	if volume == "" || !filepath.IsAbs(cleaned) {
+		return cleaned
+	}
+	current := volume + string(filepath.Separator)
+	remainder := strings.TrimLeft(strings.TrimPrefix(cleaned, volume), `\/`)
+	if remainder == "" {
+		return filepath.Clean(current)
+	}
+	segments := strings.FieldsFunc(remainder, func(character rune) bool {
+		return character == '\\' || character == '/'
+	})
+	for index, segment := range segments {
+		if strings.ContainsAny(segment, "*?") {
+			return appendWindowsPatternSegments(current, segments[index:])
+		}
+		candidate := filepath.Join(current, segment)
+		info, err := os.Stat(candidate)
+		if err != nil || !info.IsDir() {
+			return appendWindowsPatternSegments(current, segments[index:])
+		}
+		_, resolved, err := resolveWalkRoot(candidate)
+		if err != nil {
+			return appendWindowsPatternSegments(current, segments[index:])
+		}
+		current, _ = selectResolvedSegmentForPlatform(current, segment, resolved, true)
+	}
+	return filepath.Clean(current)
+}
+
+func appendWindowsPatternSegments(root string, segments []string) string {
+	for _, segment := range segments {
+		root = filepath.Join(root, segment)
+	}
+	return root
+}
+
 // resolveWalkRoot returns the caller-facing root and its resolved filesystem
 // target. CreateFile follows an explicit symlink or junction by default.
 func resolveWalkRoot(root string) (logicalRoot, physicalRoot string, err error) {

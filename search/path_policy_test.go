@@ -3,7 +3,9 @@ package search
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -332,6 +334,335 @@ func TestPathPolicyAbsoluteThroughSymlinkedParent(t *testing.T) {
 	}
 	if !policy.MatchesFile(filepath.Join(logicalRoot, "missing", "readme.md")) {
 		t.Error("absolute pattern did not resolve its symlinked parent before containment")
+	}
+	if !policy.CouldMatchDirectory(filepath.Join(logicalRoot, "missing")) {
+		t.Error("resolved absolute wildcard prefix pruned its matching logical directory")
+	}
+	if policy.CouldMatchDirectory(filepath.Join(logicalRoot, "unrelated")) {
+		t.Error("resolved absolute wildcard prefix retained an unrelated logical directory")
+	}
+}
+
+func TestCompiledAbsolutePatternCrossPairsPlatformNeutral(t *testing.T) {
+	pattern := compiledPathPattern{
+		pattern:         "logical/missing/*.md",
+		physicalPattern: "physical/missing/*.md",
+		absolute:        true,
+		anchored:        true,
+		active:          true,
+		parts:           splitPathScopeParts("logical/missing/*.md"),
+		physicalParts:   splitPathScopeParts("physical/missing/*.md"),
+	}
+	tests := []struct {
+		name     string
+		logical  string
+		physical string
+		want     bool
+	}{
+		{name: "native pair", logical: "logical/missing/readme.md", physical: "physical/missing/readme.md", want: true},
+		{name: "crossed pair", logical: "physical/missing/readme.md", physical: "logical/missing/readme.md", want: true},
+		{name: "logical form in physical candidate", logical: "other/readme.md", physical: "logical/missing/readme.md", want: true},
+		{name: "unrelated", logical: "other/readme.md", physical: "elsewhere/readme.md", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := pattern.matchesAbsoluteCandidates(test.logical, test.physical, false); got != test.want {
+				t.Fatalf("matchesAbsoluteCandidates() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestWindowsContainmentPreservesRelativePatternCase(t *testing.T) {
+	relative, contained := relativeContainedPathForPlatform(
+		`C:\Root`,
+		`c:\root\Case\*.GO`,
+		true,
+	)
+	if !contained || filepath.ToSlash(relative) != "Case/*.GO" {
+		t.Fatalf("relative/contained = %q/%v, want Case/*.GO/true", relative, contained)
+	}
+	if _, contained := relativeContainedPathForPlatform(`C:\Root`, `c:\RootSibling\*.GO`, true); contained {
+		t.Fatal("Windows containment accepted a sibling-name prefix")
+	}
+	exact, err := compilePathPatternWithAbsolute(
+		filepath.ToSlash(relative),
+		false,
+		".",
+		".",
+		func(string) bool { return false },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folded, err := compilePathPatternWithAbsolute(
+		filepath.ToSlash(relative),
+		true,
+		".",
+		".",
+		func(string) bool { return false },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exact.matches("Case/main.GO", false) || exact.matches("case/main.go", false) {
+		t.Fatal("case-sensitive descendant matching was weakened by Windows containment folding")
+	}
+	if !folded.matches("case/main.go", false) {
+		t.Fatal("case-insensitive descendant matching did not fold relative segments")
+	}
+}
+
+func TestSelectResolvedPatternPreservesWindowsUserCase(t *testing.T) {
+	tests := []struct {
+		name     string
+		original string
+		resolved string
+		windows  bool
+		want     string
+	}{
+		{
+			name:     "Windows case only",
+			original: `C:/Root/Case/*.GO`,
+			resolved: `c:/root/case/*.go`,
+			windows:  true,
+			want:     `C:/Root/Case/*.GO`,
+		},
+		{
+			name:     "Windows reparse target",
+			original: `C:/Link/Case/*.GO`,
+			resolved: `D:/Target/case/*.GO`,
+			windows:  true,
+			want:     `D:/Target/case/*.GO`,
+		},
+		{
+			name:     "POSIX case change is physical",
+			original: `/Root/Case/*.GO`,
+			resolved: `/root/case/*.go`,
+			want:     `/root/case/*.go`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := filepath.ToSlash(selectResolvedPattern(test.original, test.resolved, test.windows)); got != test.want {
+				t.Fatalf("selectResolvedPattern() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSelectResolvedSegmentForPlatform(t *testing.T) {
+	tests := []struct {
+		name        string
+		parent      string
+		userSegment string
+		resolved    string
+		want        string
+		redirected  bool
+	}{
+		{
+			name:        "case-only descendant",
+			parent:      `C:/Target`,
+			userSegment: "Case",
+			resolved:    `c:/target/case`,
+			want:        `C:/Target/Case`,
+		},
+		{
+			name:        "junction target",
+			parent:      `C:/Base`,
+			userSegment: "Link",
+			resolved:    `D:/Target`,
+			want:        `D:/Target`,
+			redirected:  true,
+		},
+		{
+			name:        "case-only after redirect",
+			parent:      `D:/Target`,
+			userSegment: "Case",
+			resolved:    `d:/target/case`,
+			want:        `D:/Target/Case`,
+		},
+		{
+			name:        "short-name alias",
+			parent:      `C:/`,
+			userSegment: "PROGRA~1",
+			resolved:    `C:/Program Files`,
+			want:        `C:/Program Files`,
+			redirected:  true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, redirected := selectResolvedSegmentForPlatform(
+				test.parent,
+				test.userSegment,
+				test.resolved,
+				true,
+			)
+			got = filepath.ToSlash(got)
+			if got != test.want || redirected != test.redirected {
+				t.Fatalf("selectResolvedSegmentForPlatform() = %q/%v, want %q/%v", got, redirected, test.want, test.redirected)
+			}
+		})
+	}
+}
+
+func TestRootSpanningRelativePatternTable(t *testing.T) {
+	tests := []struct {
+		name     string
+		pattern  string
+		root     string
+		foldCase bool
+		want     []string
+	}{
+		{
+			name:     "wildcards span root",
+			pattern:  `c:/*/x/temp/**`,
+			root:     `C:/Users/X/Temp`,
+			foldCase: true,
+			want:     []string{`**`},
+		},
+		{
+			name:     "descendant case remains",
+			pattern:  `c:/*/x/temp/**/Case/*.GO`,
+			root:     `C:/Users/X/Temp`,
+			foldCase: true,
+			want:     []string{`**/Case/*.GO`},
+		},
+		{
+			name:     "root mismatch",
+			pattern:  `c:/Admin/**`,
+			root:     `C:/Users/X/Temp`,
+			foldCase: true,
+			want:     nil,
+		},
+		{
+			name:     "Windows pattern covers deeper root",
+			pattern:  `c:/*/x`,
+			root:     `C:/Users/X/Temp`,
+			foldCase: true,
+			want:     []string{"."},
+		},
+		{
+			name:    "POSIX wildcard above root",
+			pattern: `/repo/*/ignored/**`,
+			root:    `/repo/a`,
+			want:    []string{`ignored/**`},
+		},
+		{
+			name:    "POSIX literal case mismatch",
+			pattern: `/repo/X/ignored/**`,
+			root:    `/repo/x`,
+			want:    nil,
+		},
+		{
+			name:    "POSIX pattern covers deeper root",
+			pattern: `/repo/*/x`,
+			root:    `/repo/a/x/deeper`,
+			want:    []string{"."},
+		},
+		{
+			name:    "globstar yields every alignment",
+			pattern: `/repo/**/a/b/**`,
+			root:    `/repo/a`,
+			want:    []string{`b/**`, `**/a/b/**`},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := rootSpanningRelativePatterns(test.pattern, test.root, test.foldCase)
+			for index := range got {
+				got[index] = strings.ReplaceAll(filepath.ToSlash(got[index]), `\`, "/")
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("rootSpanningRelativePatterns() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPathPolicyAbsoluteLiteralPrefixPruning(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target", "**", "*.md")
+	policy, err := CompilePathPolicy([]string{target}, nil, root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: filepath.Join(root, "target"), want: true},
+		{path: filepath.Join(root, "target", "nested"), want: true},
+		{path: filepath.Join(root, "unrelated"), want: false},
+	}
+	for _, test := range tests {
+		if got := policy.CouldMatchDirectory(test.path); got != test.want {
+			t.Errorf("CouldMatchDirectory(%q) = %v, want %v", test.path, got, test.want)
+		}
+	}
+}
+
+func TestPathPolicyDerivedAbsoluteVariantsRemainRootAnchored(t *testing.T) {
+	root := t.TempDir()
+	positive, err := CompilePathPolicy(
+		[]string{filepath.Join(root, "tests")},
+		nil,
+		root,
+		root,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !positive.MatchesFile(filepath.Join(root, "tests", "match.md")) {
+		t.Fatal("absolute positive missed root-anchored directory")
+	}
+	if positive.MatchesFile(filepath.Join(root, "nested", "tests", "match.md")) {
+		t.Fatal("absolute positive matched nested same-name directory")
+	}
+
+	negative, err := CompilePathPolicy(
+		[]string{"!" + filepath.Join(root, "build")},
+		nil,
+		root,
+		root,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if negative.MatchesFile(filepath.Join(root, "build", "blocked.md")) {
+		t.Fatal("absolute negative admitted root-anchored directory")
+	}
+	if !negative.MatchesFile(filepath.Join(root, "nested", "build", "allowed.md")) {
+		t.Fatal("absolute negative excluded nested same-name directory")
+	}
+
+	directFiles, err := CompilePathPolicy(
+		[]string{filepath.Join(root, "*.md")},
+		nil,
+		root,
+		root,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !directFiles.MatchesFile(filepath.Join(root, "direct.md")) ||
+		directFiles.MatchesFile(filepath.Join(root, "nested", "deep.md")) {
+		t.Fatal("single-segment absolute wildcard lost root anchoring")
+	}
+
+	directoryOnly, err := CompilePathPolicy(
+		[]string{filepath.Join(root, "build") + string(filepath.Separator)},
+		nil,
+		root,
+		root,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directoryOnly.MatchesFile(filepath.Join(root, "build")) ||
+		!directoryOnly.MatchesFile(filepath.Join(root, "build", "inside.md")) {
+		t.Fatal("derived absolute trailing-directory semantics were not preserved")
 	}
 }
 

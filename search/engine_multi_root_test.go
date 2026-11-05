@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -138,11 +139,13 @@ func TestMultiRootSplitAPIInfersTraversalOnlyChildProvenance(t *testing.T) {
 	match := filepath.Join(child, "match.txt")
 	writeMultiRootFixture(t, match, "needle")
 	pathScope := []string{"!blocked/**"}
-	roots, err := PrepareStartRoots([]string{parent, child}, PreserveNestedStartRoots(pathScope, nil))
+	roots, err := PrepareStartRootsWithOptions(
+		[]string{parent, child},
+		StartRootOptions{PathScope: pathScope},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	roots = ApplyStartRootOptions(roots, false, StartRootOptions{PathScope: pathScope})
 
 	engine := NewSearchEngine([]string{"needle"}, nil, nil, false, 1, 1000)
 	engine.StartRoots = roots
@@ -173,11 +176,10 @@ func TestMultiRootTraversalOnlyOverlapUsesReportedRankingProvenance(t *testing.T
 
 	var baselinePaths []string
 	for _, raw := range [][]string{{parent, child}, {child, parent}} {
-		roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(pathScope, nil))
+		roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{PathScope: pathScope})
 		if err != nil {
 			t.Fatal(err)
 		}
-		roots = ApplyStartRootOptions(roots, false, StartRootOptions{PathScope: pathScope})
 		reported := ReportedStartRoots(roots)
 		if len(reported) != 1 || reported[0].LogicalPath != parent {
 			t.Fatalf("roots %q reported = %+v, want parent only", raw, reported)
@@ -247,11 +249,10 @@ func TestMultiRootSplitAPIPathScopeExemptionUsesParentProvenance(t *testing.T) {
 	}
 	pathScope := []string{"ignored/**"}
 	for _, raw := range [][]string{{parent, child}, {child, parent}} {
-		roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(pathScope, nil))
+		roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{PathScope: pathScope})
 		if err != nil {
 			t.Fatal(err)
 		}
-		roots = ApplyStartRootOptions(roots, true, StartRootOptions{PathScope: pathScope})
 		engine := NewSearchEngine([]string{"needle"}, nil, nil, false, 1, 1000)
 		engine.StartRoots = roots
 		engine.PathScope = pathScope
@@ -284,7 +285,7 @@ func TestMultiRootSplitAPIDescendantSymlinkProvenance(t *testing.T) {
 	if err := os.Symlink(external, link); err != nil {
 		t.Skipf("directory symlink unavailable: %v", err)
 	}
-	roots, err := PrepareStartRoots([]string{parent, link}, false)
+	roots, err := PrepareStartRootsWithOptions([]string{parent, link}, StartRootOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,6 +302,90 @@ func TestMultiRootSplitAPIDescendantSymlinkProvenance(t *testing.T) {
 	}
 	if len(matches) != 1 || matches[0].rootOrder != 1 || matches[0].rankingPath != "match.txt" {
 		t.Fatalf("matches = %+v, want explicit symlink-root provenance", matches)
+	}
+}
+
+func TestMultiRootAbsoluteGlobRetainsLogicalSymlinkChild(t *testing.T) {
+	parent := t.TempDir()
+	physicalChild := filepath.Join(parent, "physical")
+	logicalChild := filepath.Join(parent, "logical")
+	match := filepath.Join(physicalChild, "blocked.txt")
+	writeMultiRootFixture(t, match, "needle")
+	if err := os.Symlink(physicalChild, logicalChild); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	fileTypes := []string{"-g", "*.txt"}
+	tests := []struct {
+		name       string
+		segment    string
+		ignoreCase bool
+	}{
+		{name: "case-sensitive", segment: "l*"},
+		{name: "ignore-case", segment: "L*", ignoreCase: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			globs := []UserGlob{{
+				Pattern:    filepath.Join(parent, test.segment, "blocked.txt"),
+				IgnoreCase: test.ignoreCase,
+			}}
+			run := func(t *testing.T, raw []string) ([]StartRoot, []string) {
+				t.Helper()
+				roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{UserGlobs: globs})
+				if err != nil {
+					t.Fatal(err)
+				}
+				options := WalkOptions{UserGlobs: globs}
+				count, err := GetDocumentFileCountForRoots(fileTypes, roots, nil, options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				engine := NewSearchEngine([]string{"needle"}, nil, fileTypes, false, 1, 1000)
+				engine.StartRoots = roots
+				engine.UserGlobs = globs
+				engine.Silent = true
+				engine.PathOnly = true
+				candidates, _, err := engine.DiscoverCandidates(count)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if count != 1 || len(candidates) != 1 {
+					t.Fatalf("count/candidates = %d/%v, want one", count, candidates)
+				}
+				results, err := engine.Execute()
+				if err != nil {
+					t.Fatal(err)
+				}
+				paths := make([]string, len(results))
+				for index := range results {
+					paths[index] = results[index].FilePath
+				}
+				return roots, paths
+			}
+
+			_, childOnly := run(t, []string{logicalChild})
+			for _, raw := range [][]string{{parent, logicalChild}, {logicalChild, parent}} {
+				roots, combined := run(t, raw)
+				reported := ReportedStartRoots(roots)
+				if len(roots) != 2 || len(reported) != 1 || reported[0].LogicalPath != parent {
+					t.Fatalf("roots %q = %+v, reported = %+v; want parent plus traversal child", raw, roots, reported)
+				}
+				if len(childOnly) != 1 || len(combined) != 1 {
+					t.Fatalf("child/combined paths = %v/%v, want one each", childOnly, combined)
+				}
+				childInfo, err := os.Stat(childOnly[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				combinedInfo, err := os.Stat(combined[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !os.SameFile(childInfo, combinedInfo) {
+					t.Fatalf("child/combined results = %q/%q, want same physical file", childOnly, combined)
+				}
+			}
+		})
 	}
 }
 
@@ -327,11 +412,10 @@ func TestMultiRootTraversalOnlyPhysicalChildProjectsReportedSymlinkPath(t *testi
 		filepath.Join(reportedParent, "c", "ignored", "b.txt"),
 	}
 	for _, raw := range [][]string{{reportedParent, child}, {child, reportedParent}} {
-		roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(pathScope, nil))
+		roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{PathScope: pathScope})
 		if err != nil {
 			t.Fatal(err)
 		}
-		roots = ApplyStartRootOptions(roots, false, StartRootOptions{PathScope: pathScope})
 		reported := ReportedStartRoots(roots)
 		if len(reported) != 1 || reported[0].LogicalPath != reportedParent {
 			t.Fatalf("roots %q reported = %+v, want symlink parent", raw, reported)
@@ -424,15 +508,13 @@ func TestMultiRootNestedTraversalAvoidsSkippedChildDataLoss(t *testing.T) {
 				}
 			}
 			for _, raw := range [][]string{{parent, child}, {child, parent}} {
-				retainNested := RetainNestedStartRoots(test.pathScope, test.userGlobs)
-				roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(test.pathScope, test.userGlobs))
-				if err != nil {
-					t.Fatal(err)
-				}
-				roots = ApplyStartRootOptions(roots, retainNested, StartRootOptions{
+				roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{
 					PathScope: test.pathScope,
 					UserGlobs: test.userGlobs,
 				})
+				if err != nil {
+					t.Fatal(err)
+				}
 				engine := NewSearchEngine([]string{"needle"}, nil, nil, false, 1, 1000)
 				engine.StartRoots = roots
 				engine.PathScope = test.pathScope
@@ -473,11 +555,10 @@ func TestMultiRootThreeLevelCollapsePreservesGrandchildData(t *testing.T) {
 		{grandchild, child, parent},
 	}
 	for _, raw := range permutations {
-		roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(pathScope, nil))
+		roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{PathScope: pathScope})
 		if err != nil {
 			t.Fatal(err)
 		}
-		roots = ApplyStartRootOptions(roots, false, StartRootOptions{PathScope: pathScope})
 		reported := ReportedStartRoots(roots)
 		if len(reported) != 1 || reported[0].LogicalPath != parent {
 			t.Fatalf("roots %q reported = %+v, want parent only", raw, reported)
@@ -516,15 +597,10 @@ func TestMultiRootDepthZeroExemptionRetainsChildAndCountParity(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, raw := range [][]string{{parent, child}, {child, parent}} {
-				roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(pathScope, nil))
+				roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{PathScope: pathScope})
 				if err != nil {
 					t.Fatal(err)
 				}
-				roots = ApplyStartRootOptions(
-					roots,
-					RetainNestedStartRoots(pathScope, nil),
-					StartRootOptions{PathScope: pathScope},
-				)
 				reported := ReportedStartRoots(roots)
 				if RetainNestedStartRoots(pathScope, nil) {
 					if len(reported) != 2 || reported[0].LogicalPath != raw[0] || reported[1].LogicalPath != raw[1] {
@@ -587,6 +663,206 @@ func TestMultiRootOutsideRepositoryIgnoreScopeRetainsChild(t *testing.T) {
 		}
 		if count != 1 || len(candidates) != 1 || candidates[0] != match {
 			t.Fatalf("roots %q count/candidates = %d/%v, want standalone-child match %q", raw, count, candidates, match)
+		}
+	}
+}
+
+func TestMultiRootRelativeAnchoredNegativeFilePolicyRetainsChild(t *testing.T) {
+	tests := []struct {
+		name      string
+		pathScope []string
+		userGlobs []UserGlob
+	}{
+		{name: "pathscope", pathScope: []string{"!c/blocked.txt"}},
+		{name: "user glob", userGlobs: []UserGlob{{Pattern: "c/blocked.txt", Negated: true}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parent := t.TempDir()
+			child := filepath.Join(parent, "c")
+			match := filepath.Join(child, "blocked.txt")
+			writeMultiRootFixture(t, match, "needle")
+			for _, raw := range [][]string{{parent, child}, {child, parent}} {
+				options := StartRootOptions{PathScope: test.pathScope, UserGlobs: test.userGlobs}
+				roots, err := PrepareStartRootsWithOptions(raw, options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reported := ReportedStartRoots(roots)
+				if len(reported) != 1 || reported[0].LogicalPath != parent {
+					t.Fatalf("roots %q reported = %+v, want parent only", raw, reported)
+				}
+				fileTypes := []string{"-g", "*.txt"}
+				walkOptions := WalkOptions{UserGlobs: test.userGlobs}
+				count, err := GetDocumentFileCountForRoots(fileTypes, roots, test.pathScope, walkOptions)
+				if err != nil {
+					t.Fatal(err)
+				}
+				engine := NewSearchEngine([]string{"needle"}, nil, fileTypes, false, 1, 1000)
+				engine.StartRoots = roots
+				engine.PathScope = test.pathScope
+				engine.UserGlobs = test.userGlobs
+				engine.Silent = true
+				candidates, _, err := engine.DiscoverCandidates(count)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if count != 1 || len(candidates) != 1 || candidates[0] != match {
+					t.Fatalf("roots %q count/candidates = %d/%v, want child-only match %q", raw, count, candidates, match)
+				}
+			}
+		})
+	}
+}
+
+func TestMultiRootAbsolutePoliciesAcrossNestedRoots(t *testing.T) {
+	t.Run("positive covers child root only", func(t *testing.T) {
+		parent := t.TempDir()
+		child := filepath.Join(parent, "child")
+		other := t.TempDir()
+		childFile := filepath.Join(child, "match.txt")
+		writeMultiRootFixture(t, childFile, "needle")
+		writeMultiRootFixture(t, filepath.Join(other, "other.txt"), "needle")
+		pathScope := []string{filepath.Join(parent, "**")}
+		roots, err := PrepareStartRootsWithOptions(
+			[]string{child, other},
+			StartRootOptions{PathScope: pathScope},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count, err := GetDocumentFileCountForRoots([]string{"-g", "*.txt"}, roots, pathScope, WalkOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("absolute positive count = %d, want child-root file only", count)
+		}
+	})
+
+	t.Run("negative remains active in child root", func(t *testing.T) {
+		parent := t.TempDir()
+		child := filepath.Join(parent, "child")
+		other := t.TempDir()
+		writeMultiRootFixture(t, filepath.Join(child, "blocked.txt"), "needle")
+		writeMultiRootFixture(t, filepath.Join(other, "allowed.txt"), "needle")
+		pathScope := []string{"!" + filepath.Join(child, "**")}
+		roots, err := PrepareStartRootsWithOptions(
+			[]string{child, other},
+			StartRootOptions{PathScope: pathScope},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count, err := GetDocumentFileCountForRoots([]string{"-g", "*.txt"}, roots, pathScope, WalkOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("absolute negative count = %d, want unrelated-root file only", count)
+		}
+	})
+
+	t.Run("positive reaches ignored traversal child", func(t *testing.T) {
+		parent := t.TempDir()
+		child := filepath.Join(parent, "ignored")
+		match := filepath.Join(child, "match.txt")
+		writeMultiRootFixture(t, match, "needle")
+		if err := os.WriteFile(filepath.Join(parent, ".ignore"), []byte("ignored/\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		pathScope := []string{filepath.Join(parent, "**")}
+		roots, err := PrepareStartRootsWithOptions(
+			[]string{parent, child},
+			StartRootOptions{PathScope: pathScope},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(roots) != 2 || len(ReportedStartRoots(roots)) != 1 {
+			t.Fatalf("roots = %+v, want reported parent plus traversal child", roots)
+		}
+		count, err := GetDocumentFileCountForRoots([]string{"-g", "*.txt"}, roots, pathScope, WalkOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("ignored traversal child count = %d, want 1", count)
+		}
+	})
+
+	t.Run("logical and physical symlink forms", func(t *testing.T) {
+		physical := t.TempDir()
+		logical := filepath.Join(t.TempDir(), "logical")
+		if err := os.Symlink(physical, logical); err != nil {
+			t.Skipf("directory symlink unavailable: %v", err)
+		}
+		child := filepath.Join(physical, "child")
+		writeMultiRootFixture(t, filepath.Join(child, "match.txt"), "needle")
+		positive := []string{filepath.Join(logical, "**")}
+		roots, err := PrepareStartRootsWithOptions(
+			[]string{child},
+			StartRootOptions{PathScope: positive},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count, err := GetDocumentFileCountForRoots([]string{"-g", "*.txt"}, roots, positive, WalkOptions{})
+		if err != nil || count != 1 {
+			t.Fatalf("logical absolute pattern count/error = %d/%v, want 1/nil", count, err)
+		}
+
+		negative := []string{"!" + filepath.Join(physical, "child", "**")}
+		roots, err = PrepareStartRootsWithOptions(
+			[]string{logical},
+			StartRootOptions{PathScope: negative},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count, err = GetDocumentFileCountForRoots([]string{"-g", "*.txt"}, roots, negative, WalkOptions{})
+		if err != nil || count != 0 {
+			t.Fatalf("physical absolute negative count/error = %d/%v, want 0/nil", count, err)
+		}
+	})
+}
+
+func TestMultiRootPOSIXAbsoluteGlobstarExemptionRetainsChild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX absolute path semantics")
+	}
+	parent := t.TempDir()
+	child := filepath.Join(parent, "a")
+	match := filepath.Join(child, "ignored", "match.txt")
+	writeMultiRootFixture(t, match, "needle")
+	if err := os.WriteFile(filepath.Join(child, ".ignore"), []byte("ignored/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pathScope := []string{filepath.Join(parent, "**", "a", "ignored", "**")}
+	for _, raw := range [][]string{{parent, child}, {child, parent}} {
+		roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{PathScope: pathScope})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reported := ReportedStartRoots(roots)
+		if len(roots) != 2 || len(reported) != 1 || reported[0].LogicalPath != parent {
+			t.Fatalf("roots %q = %+v, reported = %+v; want parent plus traversal child", raw, roots, reported)
+		}
+		fileTypes := []string{"-g", "*.txt"}
+		count, err := GetDocumentFileCountForRoots(fileTypes, roots, pathScope, WalkOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine := NewSearchEngine([]string{"needle"}, nil, fileTypes, false, 1, 1000)
+		engine.StartRoots = roots
+		engine.PathScope = pathScope
+		engine.Silent = true
+		candidates, _, err := engine.DiscoverCandidates(count)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 || len(candidates) != 1 || candidates[0] != match {
+			t.Fatalf("roots %q count/candidates = %d/%v, want %q", raw, count, candidates, match)
 		}
 	}
 }

@@ -269,16 +269,11 @@ func (se *SearchEngine) effectiveStartRoots() ([]StartRoot, error) {
 	if se.StartDir == "" {
 		raw = nil
 	}
-	retainNested := RetainNestedStartRoots(se.PathScope, se.UserGlobs)
-	roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(se.PathScope, se.UserGlobs))
-	if err != nil {
-		return nil, err
-	}
-	return ApplyStartRootOptions(roots, retainNested, StartRootOptions{
+	return PrepareStartRootsWithOptions(raw, StartRootOptions{
 		NoIgnore:  se.NoIgnore,
 		PathScope: se.PathScope,
 		UserGlobs: se.UserGlobs,
-	}), nil
+	})
 }
 
 func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int, roots []StartRoot) ([]discoveredCandidate, int, error) {

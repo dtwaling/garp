@@ -2,6 +2,7 @@ package search
 
 import (
 	"archive/zip"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -693,9 +694,16 @@ func findFilesWithFirstWordProgressQueryWithOptions(query compiledQuery, fileTyp
 	if walkRoot == "" {
 		raw = nil
 	}
-	roots, err := PrepareStartRoots(raw, true)
+	roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{
+		NoIgnore:  options.NoIgnore,
+		PathScope: pathScope,
+		UserGlobs: options.UserGlobs,
+	})
 	if err != nil {
 		return nil, err
+	}
+	if len(roots) != 1 {
+		return nil, fmt.Errorf("single-root discovery received %d effective roots", len(roots))
 	}
 	return findFilesWithFirstWordProgressQueryWithRoot(query, fileTypes, workers, onProgress, roots[0], pathScope, options)
 }

@@ -686,23 +686,14 @@ func (m model) preflightFileCount() (int, error) {
 			raw = nil
 		}
 		var err error
-		retainNested := search.RetainNestedStartRoots(m.pathScope, m.userGlobs)
-		roots, err = search.PrepareStartRoots(
-			raw,
-			search.PreserveNestedStartRoots(m.pathScope, m.userGlobs),
-		)
+		roots, err = search.PrepareStartRootsWithOptions(raw, search.StartRootOptions{
+			NoIgnore:  m.noIgnore,
+			PathScope: m.pathScope,
+			UserGlobs: m.userGlobs,
+		})
 		if err != nil {
 			return 0, err
 		}
-		roots = search.ApplyStartRootOptions(
-			roots,
-			retainNested,
-			search.StartRootOptions{
-				NoIgnore:  m.noIgnore,
-				PathScope: m.pathScope,
-				UserGlobs: m.userGlobs,
-			},
-		)
 	}
 	return search.GetDocumentFileCountForRoots(
 		fileTypes,

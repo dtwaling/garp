@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"garp/config"
@@ -20,6 +21,121 @@ func writeWalkFixture(t *testing.T, root, relative, content string) string {
 		t.Fatal(err)
 	}
 	return filename
+}
+
+func TestWalkCandidatesRejectsMultiRootCompatibilityInput(t *testing.T) {
+	first := t.TempDir()
+	second := t.TempDir()
+	err := walkCandidates(nil, first+","+second, nil, WalkOptions{}, func(string, os.FileInfo) error {
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "single-root walk") {
+		t.Fatalf("walkCandidates multi-root error = %v, want explicit rejection", err)
+	}
+}
+
+func TestWalkAbsolutePositiveScopeExemptsIgnoredDirectChildAndPrunesSibling(t *testing.T) {
+	root := t.TempDir()
+	target := writeWalkFixture(t, root, "ignored/match.txt", "needle")
+	writeWalkFixture(t, root, "ignored-sibling/other.txt", "needle")
+	if err := os.WriteFile(filepath.Join(root, ".ignore"), []byte("ignored/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pathScope := []string{filepath.Join(root, "ignored", "**")}
+	var visited []string
+	err := walkCandidates(
+		[]string{"-g", "*.txt"},
+		root,
+		pathScope,
+		WalkOptions{},
+		func(path string, _ os.FileInfo) error {
+			visited = append(visited, path)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(visited, []string{target}) {
+		t.Fatalf("visited = %q, want ignored target only", visited)
+	}
+	policy, err := CompilePathPolicy(pathScope, nil, root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !policy.exemptsDirectChild("ignored") {
+		t.Fatal("absolute scope did not preserve root-relative direct-child metadata")
+	}
+	if policy.exemptsDirectChild("ignored-sibling") {
+		t.Fatal("absolute scope falsely exempted sibling-name directory")
+	}
+	if policy.CouldMatchDirectory(filepath.Join(root, "ignored-sibling")) {
+		t.Fatal("absolute scope did not prune unrelated sibling")
+	}
+}
+
+func TestWalkAbsoluteWildcardAboveRootExemptsIgnoredDirectChild(t *testing.T) {
+	root := t.TempDir()
+	target := writeWalkFixture(t, root, "ignored/match.txt", "needle")
+	writeWalkFixture(t, root, "other/miss.txt", "needle")
+	if err := os.WriteFile(filepath.Join(root, ".ignore"), []byte("ignored/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pathScope := []string{filepath.Join(filepath.Dir(root), "*", "ignored", "**")}
+	var visited []string
+	err := walkCandidates(
+		[]string{"-g", "*.txt"},
+		root,
+		pathScope,
+		WalkOptions{},
+		func(path string, _ os.FileInfo) error {
+			visited = append(visited, path)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(visited, []string{target}) {
+		t.Fatalf("visited = %q, want ignored target only", visited)
+	}
+}
+
+func TestWalkRelativeNegativePatternsDoNotPruneSyntheticRoot(t *testing.T) {
+	for _, pattern := range []string{"!.*", "!.*/", "!*"} {
+		t.Run(pattern, func(t *testing.T) {
+			root := t.TempDir()
+			visible := writeWalkFixture(t, root, "visible.txt", "needle")
+			writeWalkFixture(t, root, ".hidden/inside.txt", "needle")
+			policy, err := CompilePathPolicy([]string{pattern}, nil, root, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !policy.CouldMatchRoot() {
+				t.Fatalf("relative negative %q pruned the synthetic root", pattern)
+			}
+			var visited []string
+			err = walkCandidates(
+				[]string{"-g", "*.txt"},
+				root,
+				[]string{pattern},
+				WalkOptions{},
+				func(path string, _ os.FileInfo) error {
+					visited = append(visited, path)
+					return nil
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pattern != "!*" && !reflect.DeepEqual(visited, []string{visible}) {
+				t.Fatalf("visited = %q, want visible root file only", visited)
+			}
+			if pattern == "!*" && len(visited) != 0 {
+				t.Fatalf("visited = %q, want wildcard-negative descendants excluded", visited)
+			}
+		})
+	}
 }
 
 func collectCandidates(t *testing.T, root string, fileTypes, pathScope []string, options WalkOptions) []string {

@@ -116,9 +116,16 @@ func walkCandidates(
 	if walkRoot == "" {
 		raw = nil
 	}
-	roots, err := PrepareStartRoots(raw, true)
+	roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{
+		NoIgnore:  options.NoIgnore,
+		PathScope: pathScope,
+		UserGlobs: options.UserGlobs,
+	})
 	if err != nil {
 		return err
+	}
+	if len(roots) != 1 {
+		return fmt.Errorf("single-root walk received %d effective roots", len(roots))
 	}
 	return walkPreparedCandidates(fileTypes, roots[0], pathScope, options, visit)
 }
@@ -138,6 +145,9 @@ func walkPreparedCandidates(
 		return err
 	}
 	policy := traversal.policy
+	if !policy.CouldMatchRoot() {
+		return nil
+	}
 
 	var walkDirectory func(logicalDir, physicalDir string, depth int, chain ignoreChain) error
 	walkDirectory = func(logicalDir, physicalDir string, depth int, chain ignoreChain) error {
@@ -186,7 +196,7 @@ func walkPreparedCandidates(
 			typeEligible := matcher.allows(logicalPath)
 			if !typeEligible && options.PositiveGlobCodeEligibility &&
 				len(policy.globPositive) > 0 && config.IsCodeFile(logicalPath) {
-				typeEligible = matchesAnyPattern(policy.globPositive, filepath.ToSlash(mustRelativePath(logicalRoot, logicalPath)), false)
+				typeEligible = policy.MatchesPositiveGlob(logicalPath)
 			}
 			if !typeEligible {
 				continue

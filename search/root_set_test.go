@@ -78,6 +78,28 @@ func TestPrepareStartRoots(t *testing.T) {
 	})
 }
 
+func TestPrepareStartRootsCompatibilityWrapper(t *testing.T) {
+	parent := t.TempDir()
+	child := filepath.Join(parent, "child")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	collapsed, err := PrepareStartRoots([]string{parent, child}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collapsed) != 1 || collapsed[0].LogicalPath != parent {
+		t.Fatalf("collapsed roots = %+v, want parent only", collapsed)
+	}
+	retained, err := PrepareStartRoots([]string{parent, child}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retained) != 2 || retained[0].LogicalPath != parent || retained[1].LogicalPath != child {
+		t.Fatalf("retained roots = %+v, want supplied roots in order", retained)
+	}
+}
+
 func TestPrepareStartRootsCanonicalDuplicates(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation is not generally available on Windows")
@@ -165,14 +187,13 @@ func TestPrepareStartRootsRetainsChildrenPrunedByNegativePolicies(t *testing.T) 
 				t.Fatal(err)
 			}
 			for _, raw := range [][]string{{parent, child}, {child, parent}} {
-				roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(test.pathScope, test.userGlobs))
-				if err != nil {
-					t.Fatal(err)
-				}
-				roots = ApplyStartRootOptions(roots, false, StartRootOptions{
+				roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{
 					PathScope: test.pathScope,
 					UserGlobs: test.userGlobs,
 				})
+				if err != nil {
+					t.Fatal(err)
+				}
 				if len(roots) != 2 {
 					t.Fatalf("roots %q traversal count = %d, want 2", raw, len(roots))
 				}
@@ -194,11 +215,13 @@ func TestPrepareStartRootsNoIgnoreCollapsesIgnoredChild(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(parent, ".ignore"), []byte("ignored/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	roots, err := PrepareStartRoots([]string{parent, child}, false)
+	roots, err := PrepareStartRootsWithOptions(
+		[]string{parent, child},
+		StartRootOptions{NoIgnore: true},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	roots = ApplyStartRootOptions(roots, false, StartRootOptions{NoIgnore: true})
 	if len(roots) != 1 || roots[0].LogicalPath != parent {
 		t.Fatalf("roots = %+v, want reachable parent only with no-ignore", roots)
 	}
@@ -227,11 +250,10 @@ func TestPrepareStartRootsThreeLevelCollapseUsesOnlyKeptAncestors(t *testing.T) 
 		{grandchild, child, parent},
 	}
 	for _, raw := range permutations {
-		roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(pathScope, nil))
+		roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{PathScope: pathScope})
 		if err != nil {
 			t.Fatal(err)
 		}
-		roots = ApplyStartRootOptions(roots, RetainNestedStartRoots(pathScope, nil), StartRootOptions{PathScope: pathScope})
 		if len(roots) != 3 {
 			t.Fatalf("roots %q traversal count = %d, want all exemption-sensitive roots", raw, len(roots))
 		}
@@ -264,15 +286,10 @@ func TestPrepareStartRootsRetainsDepthZeroExemptionChildren(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, raw := range [][]string{{parent, child}, {child, parent}} {
-				roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(pathScope, nil))
+				roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{PathScope: pathScope})
 				if err != nil {
 					t.Fatal(err)
 				}
-				roots = ApplyStartRootOptions(
-					roots,
-					RetainNestedStartRoots(pathScope, nil),
-					StartRootOptions{PathScope: pathScope},
-				)
 				if len(roots) != 2 {
 					t.Fatalf("roots %q traversal count = %d, want 2", raw, len(roots))
 				}
@@ -289,7 +306,7 @@ func TestPrepareStartRootsRetainsDepthZeroExemptionChildren(t *testing.T) {
 	}
 }
 
-func TestApplyStartRootOptionsReportsRelativePolicyRootsInSuppliedOrder(t *testing.T) {
+func TestPrepareStartRootsWithOptionsReportsRelativePolicyRootsInSuppliedOrder(t *testing.T) {
 	parent := t.TempDir()
 	child := filepath.Join(parent, "child")
 	if err := os.MkdirAll(child, 0o755); err != nil {
@@ -310,14 +327,13 @@ func TestApplyStartRootOptionsReportsRelativePolicyRootsInSuppliedOrder(t *testi
 				if !retainNested {
 					t.Fatal("relative policy did not request nested-root retention")
 				}
-				roots, err := PrepareStartRoots(raw, PreserveNestedStartRoots(test.pathScope, test.userGlobs))
-				if err != nil {
-					t.Fatal(err)
-				}
-				roots = ApplyStartRootOptions(roots, retainNested, StartRootOptions{
+				roots, err := PrepareStartRootsWithOptions(raw, StartRootOptions{
 					PathScope: test.pathScope,
 					UserGlobs: test.userGlobs,
 				})
+				if err != nil {
+					t.Fatal(err)
+				}
 				reported := ReportedStartRoots(roots)
 				if len(reported) != 2 {
 					t.Fatalf("roots %q reported count = %d, want 2", raw, len(reported))
@@ -355,15 +371,6 @@ func TestRetainNestedStartRoots(t *testing.T) {
 	if RetainNestedStartRoots([]string{"!blocked/**"}, nil) {
 		t.Fatal("negative policy became a reported-root retention policy")
 	}
-	if !PreserveNestedStartRoots([]string{"!blocked/**"}, nil) {
-		t.Fatal("negative policy did not preserve roots for reachability")
-	}
-	if !PreserveNestedStartRoots([]string{"ignored"}, nil) {
-		t.Fatal("basename depth-zero exemption did not preserve nested roots")
-	}
-	if !PreserveNestedStartRoots([]string{"ignored/**"}, nil) {
-		t.Fatal("first-segment depth-zero exemption did not preserve nested roots")
-	}
 }
 
 func TestValidateRootPoliciesAbsoluteContainment(t *testing.T) {
@@ -380,6 +387,38 @@ func TestValidateRootPoliciesAbsoluteContainment(t *testing.T) {
 	}
 	if err := ValidateRootPolicies(roots, nil, []UserGlob{{Pattern: filepath.Join(t.TempDir(), "*.md")}}); err == nil {
 		t.Fatal("out-of-root absolute user glob accepted")
+	}
+}
+
+func TestValidateRootPoliciesAboveRootWildcardCoverage(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "a")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	roots, err := PrepareStartRoots([]string{root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		pathScope []string
+		userGlobs []UserGlob
+	}{
+		{name: "globstar markdown", pathScope: []string{filepath.Join(parent, "**", "*.md")}},
+		{name: "single segment", pathScope: []string{filepath.Join(parent, "*", "x.md")}},
+		{name: "anchored negative", pathScope: []string{"!" + filepath.Join(parent, "**", "private.md")}},
+		{
+			name:      "case-sensitive user glob",
+			userGlobs: []UserGlob{{Pattern: filepath.Join(parent, "**", "*.MD")}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateRootPolicies(roots, test.pathScope, test.userGlobs); err != nil {
+				t.Fatalf("ValidateRootPolicies() error = %v", err)
+			}
+		})
 	}
 }
 

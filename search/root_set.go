@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -29,8 +30,34 @@ type StartRootOptions struct {
 	UserGlobs []UserGlob
 }
 
-// PrepareStartRoots expands, validates, resolves, and deduplicates start roots.
+// PrepareStartRootsWithOptions performs complete root preparation for one
+// search invocation.
+func PrepareStartRootsWithOptions(raw []string, options StartRootOptions) ([]StartRoot, error) {
+	retainNested := RetainNestedStartRoots(options.PathScope, options.UserGlobs)
+	roots, err := prepareStartRootDescriptors(raw)
+	if err != nil {
+		return nil, err
+	}
+	roots = ApplyStartRootOptions(roots, retainNested, options)
+	if err := ValidateRootPolicies(roots, options.PathScope, options.UserGlobs); err != nil {
+		return nil, err
+	}
+	return roots, nil
+}
+
+// PrepareStartRoots is the policy-free compatibility wrapper. It expands,
+// validates, resolves, and deduplicates roots, then applies retainNested only.
+// Production callers with path or ignore policy must use
+// PrepareStartRootsWithOptions.
 func PrepareStartRoots(raw []string, retainNested bool) ([]StartRoot, error) {
+	roots, err := prepareStartRootDescriptors(raw)
+	if err != nil {
+		return nil, err
+	}
+	return ApplyStartRootOptions(roots, retainNested, StartRootOptions{}), nil
+}
+
+func prepareStartRootDescriptors(raw []string) ([]StartRoot, error) {
 	supplied := raw != nil
 	if raw == nil {
 		raw = []string{"."}
@@ -82,7 +109,7 @@ func PrepareStartRoots(raw []string, retainNested bool) ([]StartRoot, error) {
 	if len(roots) == 0 {
 		return nil, fmt.Errorf("--startdir: no search roots were supplied")
 	}
-	return ApplyStartRootOptions(roots, retainNested, StartRootOptions{}), nil
+	return roots, nil
 }
 
 // ApplyStartRootOptions refines prepared traversal roots without reparsing or
@@ -95,7 +122,10 @@ func ApplyStartRootOptions(roots []StartRoot, retainNested bool, options StartRo
 	if retainNested {
 		return roots
 	}
-	exemptionRetention := pathScopeCanExemptDirectChild(options.PathScope)
+	relativeExemptionRetention := pathScopeCanExemptDirectChild(options.PathScope)
+	absolutePositiveRetention := hasAbsolutePositivePathScope(options.PathScope) ||
+		hasAbsolutePositiveUserGlob(options.UserGlobs)
+	negativePolicyRetention := hasRelativeAnchoredNegativePolicy(options.PathScope, options.UserGlobs)
 
 	// Compatibility reporting collapses every supplied descendant regardless
 	// of which roots must remain for traversal.
@@ -137,7 +167,9 @@ func ApplyStartRootOptions(roots []StartRoot, retainNested bool, options StartRo
 				break
 			}
 		}
-		keep[childIndex] = exemptionRetention && hasKeptAncestor || !reachableFromKeptAncestor
+		keep[childIndex] = (relativeExemptionRetention || absolutePositiveRetention || negativePolicyRetention) &&
+			hasKeptAncestor ||
+			!reachableFromKeptAncestor
 	}
 	collapsed := make([]StartRoot, 0, len(roots))
 	for index, root := range roots {
@@ -306,19 +338,40 @@ func RetainNestedStartRoots(pathScope []string, userGlobs []UserGlob) bool {
 	return false
 }
 
-// PreserveNestedStartRoots reports whether preparation must defer nested-root
-// collapse until path-policy reachability is evaluated.
-func PreserveNestedStartRoots(pathScope []string, userGlobs []UserGlob) bool {
-	if RetainNestedStartRoots(pathScope, userGlobs) || pathScopeCanExemptDirectChild(pathScope) {
-		return true
-	}
+func hasRelativeAnchoredNegativePolicy(pathScope []string, userGlobs []UserGlob) bool {
 	for _, raw := range pathScope {
-		if strings.HasPrefix(raw, "!") {
+		if strings.HasPrefix(raw, "!") && relativePathAnchored(strings.TrimPrefix(raw, "!")) {
 			return true
 		}
 	}
 	for _, glob := range userGlobs {
+		if glob.Negated && relativePathAnchored(glob.Pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAbsolutePositivePathScope(pathScope []string) bool {
+	for _, raw := range pathScope {
+		raw = stripMatchingQuotes(strings.TrimSpace(raw))
+		if raw == "" || strings.HasPrefix(raw, "!") {
+			continue
+		}
+		if filepath.IsAbs(filepath.FromSlash(strings.ReplaceAll(raw, `\`, "/"))) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAbsolutePositiveUserGlob(userGlobs []UserGlob) bool {
+	for _, glob := range userGlobs {
 		if glob.Negated {
+			continue
+		}
+		pattern := filepath.FromSlash(strings.ReplaceAll(glob.Pattern, `\`, "/"))
+		if filepath.IsAbs(pattern) {
 			return true
 		}
 	}
@@ -335,30 +388,47 @@ func relativePathAnchored(raw string) bool {
 
 // ValidateRootPolicies rejects absolute patterns that no prepared root contains.
 func ValidateRootPolicies(roots []StartRoot, pathScope []string, userGlobs []UserGlob) error {
-	patterns := make([]string, 0, len(pathScope)+len(userGlobs))
 	for _, raw := range pathScope {
-		patterns = append(patterns, strings.TrimPrefix(raw, "!"))
+		pattern := strings.TrimPrefix(raw, "!")
+		if err := validateAbsoluteRootPolicy(
+			roots,
+			pattern,
+			runtime.GOOS == "windows",
+			raw,
+		); err != nil {
+			return err
+		}
 	}
 	for _, glob := range userGlobs {
-		patterns = append(patterns, glob.Pattern)
-	}
-	for _, raw := range patterns {
-		pattern := filepath.FromSlash(strings.ReplaceAll(stripMatchingQuotes(strings.TrimSpace(raw)), `\`, "/"))
-		if !filepath.IsAbs(pattern) {
-			continue
+		raw := glob.Pattern
+		if glob.Negated {
+			raw = "!" + raw
 		}
-		contained := false
-		for _, root := range roots {
-			if _, ok := relativeAbsolutePattern(pattern, root.LogicalPath, root.PhysicalPath); ok {
-				contained = true
-				break
-			}
-		}
-		if !contained {
-			return fmt.Errorf("absolute path pattern %q is outside every search root", raw)
+		if err := validateAbsoluteRootPolicy(roots, glob.Pattern, glob.IgnoreCase, raw); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func validateAbsoluteRootPolicy(roots []StartRoot, pattern string, ignoreCase bool, display string) error {
+	native := filepath.FromSlash(strings.ReplaceAll(stripMatchingQuotes(strings.TrimSpace(pattern)), `\`, "/"))
+	if !filepath.IsAbs(native) {
+		return nil
+	}
+	for _, root := range roots {
+		compiled, err := compilePathPattern(pattern, ignoreCase, root.LogicalPath, root.PhysicalPath)
+		if err != nil {
+			return err
+		}
+		if compiled.absoluteCouldMatchDirectory(
+			filepath.ToSlash(root.LogicalPath),
+			filepath.ToSlash(root.PhysicalPath),
+		) {
+			return nil
+		}
+	}
+	return fmt.Errorf("absolute path pattern %q is outside every search root", display)
 }
 
 func canonicalCandidateKey(root StartRoot, logicalPath string) string {

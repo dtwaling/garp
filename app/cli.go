@@ -787,23 +787,14 @@ func preflightFileCount(args *Arguments) (int, error) {
 			raw = []string{args.StartDir}
 		}
 		var err error
-		retainNested := search.RetainNestedStartRoots(args.PathScope, args.UserGlobs)
-		roots, err = search.PrepareStartRoots(
-			raw,
-			search.PreserveNestedStartRoots(args.PathScope, args.UserGlobs),
-		)
+		roots, err = search.PrepareStartRootsWithOptions(raw, search.StartRootOptions{
+			NoIgnore:  args.NoIgnore,
+			PathScope: args.PathScope,
+			UserGlobs: args.UserGlobs,
+		})
 		if err != nil {
 			return 0, err
 		}
-		roots = search.ApplyStartRootOptions(
-			roots,
-			retainNested,
-			search.StartRootOptions{
-				NoIgnore:  args.NoIgnore,
-				PathScope: args.PathScope,
-				UserGlobs: args.UserGlobs,
-			},
-		)
 	}
 	return search.GetDocumentFileCountForRoots(fileTypes, roots, args.PathScope, walkOptions(args))
 }
@@ -1055,25 +1046,12 @@ func Run() int {
 	if !args.StartDirProvided {
 		rawRoots = nil
 	}
-	retainNested := search.RetainNestedStartRoots(args.PathScope, args.UserGlobs)
-	roots, err := search.PrepareStartRoots(
-		rawRoots,
-		search.PreserveNestedStartRoots(args.PathScope, args.UserGlobs),
-	)
+	roots, err := search.PrepareStartRootsWithOptions(rawRoots, search.StartRootOptions{
+		NoIgnore:  args.NoIgnore,
+		PathScope: args.PathScope,
+		UserGlobs: args.UserGlobs,
+	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+err.Error()))
-		return 1
-	}
-	roots = search.ApplyStartRootOptions(
-		roots,
-		retainNested,
-		search.StartRootOptions{
-			NoIgnore:  args.NoIgnore,
-			PathScope: args.PathScope,
-			UserGlobs: args.UserGlobs,
-		},
-	)
-	if err := search.ValidateRootPolicies(roots, args.PathScope, args.UserGlobs); err != nil {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+err.Error()))
 		return 1
 	}
