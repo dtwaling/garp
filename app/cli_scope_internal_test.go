@@ -263,7 +263,7 @@ func TestLegacyOnlyTypeDisablesPositiveGlobCodeEligibility(t *testing.T) {
 	}
 }
 
-func TestShowUsageDocumentsIgnoreAndFileSizeFlags(t *testing.T) {
+func TestShowUsageDocumentsFlagsAndCompatibilityLimits(t *testing.T) {
 	out := string(captureCLIStdout(t, func() int {
 		showUsage()
 		return 0
@@ -274,6 +274,23 @@ func TestShowUsageDocumentsIgnoreAndFileSizeFlags(t *testing.T) {
 		"[--max-filesize SIZE]",
 		"--no-ignore            Do not apply repository ignore files",
 		"--max-filesize SIZE    Maximum file size",
+		"-l, --files-with-matches",
+		"-m, --max-count N",
+		"not an rg line-count limit",
+		"-t, --type, --only TYPE",
+		"-g, --glob PATTERN",
+		"--iglob PATTERN",
+		"-i, --ignore-case",
+		"-s, --case-sensitive",
+		"repeat or use comma-separated paths",
+		"Comma-separated positive scopes form a union",
+		"* and ? stay within one segment; ** crosses segments",
+		"Prefix with ! to exclude a path",
+		"Pathscope intersects with positive --glob and --iglob patterns",
+		"both --flag VALUE and --flag=VALUE",
+		"Stop flag parsing",
+		"context flags are not supported",
+		"not a drop-in rg replacement",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("usage missing %q:\n%s", want, out)

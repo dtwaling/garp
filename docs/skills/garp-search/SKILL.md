@@ -27,14 +27,22 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 
 ## Flags that matter
 
-- `--startdir <dir>`: search root (default: cwd). `--pathscope 'a/,b/'`: comma-separated directory patterns that prune the walk -- directories outside scope are never descended. `*`/`?` wildcards only; no file extensions (use `--only`/`--not`).
-- `--code`: include source files, incl. Dockerfile/Containerfile matched by name. `--only <ext>`: restrict to one extension family, no dot (`--only sql`, `--only pdf`, `--only dockerfile`); overrides `--code`. Omit both for the document set (md, txt, html, csv, ini, yaml, pdf, docx, ...).
+- `--startdir <dir>`: search root (default: cwd). Repeat it or use comma-separated paths for a multi-repository search. An existing directory name that contains a comma stays intact.
+- `--pathscope 'a/,b/'`: comma-separated path patterns. Prefix with `!` to exclude. It intersects with positive globs. `*` stays in one path segment; `**` crosses segments.
+- `-g` / `--glob <pattern>`: repeatable case-sensitive path glob. `--iglob` is case-insensitive. Prefix a pattern with `!` to exclude it.
+- `--code`: include source files, including Dockerfile/Containerfile names. `-t` / `--type` / `--only <ext>` restricts file types. Repeat the flag or use comma-separated values. A type restriction overrides `--code`.
 - `--distance N`: proximity window in characters (default 5000). Same call/block in code ~100-300; same paragraph/section in docs ~1000-2000.
-- `--max-excerpts N`: excerpts per file (default 1, max 50), skip-ahead selected so every chunk is >=90% new content.
+- `-m` / `--max-count` / `--max-excerpts N`: proximity excerpts per file (default 1, max 50), not raw matching lines.
 - `--partial[=prefix|contains]`: boundary-aware prefix (default) or raw substring. Per-term inline glob instead: append `*` to one term (`deploy*`; quote it in shells). `--smart-forms`: match word forms (plurals, -ing, -ed, -tion).
+- `-i` / `--ignore-case` and `-s` / `--case-sensitive`: the last case flag wins.
 - `--strict`: require every term in the window (3+ term searches are ranked by default).
-- `--pathonly`: skip excerpt extraction and emit only distinct matching file paths (one per line, ranked order; empty stdout on zero matches).
+- `-l` / `--files-with-matches` / `--pathonly`: skip excerpt extraction and emit one distinct matching file path per line in ranked order. Zero matches produce empty stdout.
 - `--not <tokens...>`: exclusions after the flag; `.ext` excludes a file type, bare words exclude whole words.
+
+Value flags accept both `--flag value` and `--flag=value`. Use `--` to stop
+flag parsing. The listed aliases follow rg conventions, but garp is not a
+drop-in rg replacement. Context flags such as `-C`, `-A`, and `-B` are not
+supported; use `--distance` and `--max-excerpts`.
 
 ## Output shape (`--json`)
 
@@ -44,6 +52,8 @@ One-shot find -> pinpoint -> targeted read: each result carries the file, a rank
 - Each excerpt: `text` (context-padded, newlines collapsed) plus 1-based `start_line` = line of the earliest matched term in that chunk, and per-chunk `score`/`term_count`. Present for text/code; omitted for extracted formats (PDF, DOCX, email).
 - Chunks within a file are a ranked subset, best-first: with `--max-excerpts N > 1` every quality tier can seed a chunk, so a strong cluster no longer hides the file's other clusters. Every chunk is >=90% new content (bounded overlap).
 - Act on results by reading the file at `start_line` (with margin) instead of re-searching or paging through reads.
+- `query.start_dir` is the first reported root. `query.start_dirs` appears only for two or more reported roots. A nested supplied root can fold into its reported ancestor even when garp still walks it to prevent data loss. Result paths remain under the reported ancestor. Both fields are omitted when `--startdir` is absent.
+- `query.only_type` remains the singular compatibility field. `query.only_types` appears only for two or more distinct types. `query.case_sensitive` appears only when enabled.
 
 ```jsonc
 "results": [ { "file": "...", "score": 14, "term_count": 2, "matched_terms": ["a", "b"],

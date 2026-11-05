@@ -587,46 +587,52 @@ func showUsage() {
 
 	// Usage
 	fmt.Println(subHeaderStyle.Render("USAGE"))
-	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--max-results N]\n[--startdir PATH] [--pathscope PATTERNS] [--no-ignore] [--max-filesize SIZE]\n[--pathonly] [--plain] [--json] [--heavy-concurrency N] [--workers N]\n[--file-timeout-binary N] <word1> <word2> ...\n[--not <exclude1> <exclude2> ...]", 100)))
+	fmt.Println(infoStyle.Render(wrapTextWithIndent("  garp ", "[--code] [--strict] [--partial[=MODE]] [--distance N] [--max-excerpts N] [--max-results N]\n[--startdir PATH] [--pathscope PATTERNS] [--no-ignore] [--max-filesize SIZE]\n[-g PATTERN] [-t TYPE] [-i|-s] [-l] [--plain] [--json] <word1> <word2> ...\n[--not <exclude1> <exclude2> ...] [-- <literal> ...]", 100)))
 	fmt.Println()
 
 	// Flags
 	fmt.Println(subHeaderStyle.Render("FLAGS"))
 	fmt.Println(infoStyle.Render("  --code                  Include code files in the search"))
 	fmt.Println(infoStyle.Render("  --strict                Require all search terms to match"))
+	fmt.Println(infoStyle.Render("  -i, --ignore-case       Match terms without case sensitivity (default)"))
+	fmt.Println(infoStyle.Render("  -s, --case-sensitive    Match terms with case sensitivity; last case flag wins"))
 	fmt.Println(infoStyle.Render("  --partial[=MODE]        Enable partial word matching (prefix, contains)."))
-	fmt.Println(infoStyle.Render("                          Default mode: prefix. When omitted: whole-word."))
+	fmt.Println(infoStyle.Render("                          Bare form selects prefix; off and none select whole-word matching."))
 	fmt.Println(infoStyle.Render("                          Tip: valid query terms support inline * and ?."))
 	fmt.Println(infoStyle.Render("                          Invalid or over-limit wildcard terms match literally. See README for bounds."))
 	fmt.Println(infoStyle.Render("  --distance N            Proximity window in characters (default 5000)"))
+	fmt.Println(infoStyle.Render("  -m, --max-count N       Alias for --max-excerpts, not an rg line-count limit"))
 	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum excerpts per file; >=90% new content (up to 10% overlap; default 1, max 50)"))
 	fmt.Println(infoStyle.Render("  --max-results N         Maximum matching files; 0 = unlimited."))
 	fmt.Println(infoStyle.Render("                          Defaults: --json 50, --plain 50, --pathonly 0, TUI 0."))
 	fmt.Println(infoStyle.Render("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted)"))
 	fmt.Println(infoStyle.Render("  --workers N             Stage 2 text filter workers (default 2)"))
 	fmt.Println(infoStyle.Render("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000)"))
-	fmt.Println(infoStyle.Render("  --smart-forms          Enable smart word forms (s, es, ed, ing, al, tion/ation)"))
-	fmt.Println(infoStyle.Render("  --only <type>          Search only a single file type (e.g., pdf); ignores --code"))
-	fmt.Println(infoStyle.Render("  --startdir <path>      Base directory to search (default: current directory)"))
-	fmt.Println(infoStyle.Render("                         Accepts Linux, macOS, or Windows paths; quote if path has spaces"))
-	fmt.Println(infoStyle.Render("                         Wildcards and shell metacharacters are rejected"))
-	fmt.Println(infoStyle.Render("  --pathscope <patterns> Comma-separated directory patterns to restrict the search walk."))
-	fmt.Println(infoStyle.Render("                         Directories outside the scope are pruned before any files are visited --"))
-	fmt.Println(infoStyle.Render("                         not filtered after the fact. Use this to exclude large dirs like .venv,"))
-	fmt.Println(infoStyle.Render("                         node_modules, or any subtree you don't want walked at all."))
-	fmt.Println(infoStyle.Render("                         Wildcards: * (any chars) and ? (single char) only."))
-	fmt.Println(infoStyle.Render("                         Trailing slash optional: 'audio2midi/' and 'audio2midi' both work."))
-	fmt.Println(infoStyle.Render("                         Do not include file extensions (use --not / --only for that)."))
-	fmt.Println(infoStyle.Render("                         Example: --pathscope='audio2midi/,docs/,tests/*'"))
+	fmt.Println(infoStyle.Render("  --smart-forms           Enable smart word forms (s, es, ed, ing, al, tion/ation)"))
+	fmt.Println(infoStyle.Render("  -t, --type, --only TYPE Restrict file types; repeat or use comma-separated values"))
+	fmt.Println(infoStyle.Render("  --startdir PATH         Search root; repeat or use comma-separated paths"))
+	fmt.Println(infoStyle.Render("                          Existing directory names that contain commas stay intact"))
+	fmt.Println(infoStyle.Render("  --pathscope PATTERNS   Comma-separated positive scopes form a union"))
+	fmt.Println(infoStyle.Render("                         * and ? stay within one segment; ** crosses segments"))
+	fmt.Println(infoStyle.Render("                         Prefix with ! to exclude a path"))
+	fmt.Println(infoStyle.Render("                         Pathscope intersects with positive --glob and --iglob patterns"))
+	fmt.Println(infoStyle.Render("  -g, --glob PATTERN     Add a case-sensitive path glob; repeat for a union"))
+	fmt.Println(infoStyle.Render("  --iglob PATTERN        Add a case-insensitive path glob"))
+	fmt.Println(infoStyle.Render("                         Prefix with ! to exclude; ** crosses directory boundaries"))
 	fmt.Println(infoStyle.Render("  --no-ignore            Do not apply repository ignore files (.gitignore, .ignore, or exclude)."))
 	fmt.Println(infoStyle.Render("  --max-filesize SIZE    Maximum file size (B, K/KB/KiB, M/MB/MiB; maximum 100M)."))
-	fmt.Println(infoStyle.Render("  --pathonly             Skip the interactive TUI; emit only distinct matching file paths (one per line)."))
+	fmt.Println(infoStyle.Render("  -l, --files-with-matches"))
+	fmt.Println(infoStyle.Render("  --pathonly             Emit only distinct matching file paths, one per line"))
 	fmt.Println(infoStyle.Render("  --plain                Skip the interactive TUI; emit plain line-oriented output to stdout."))
 	fmt.Println(infoStyle.Render("                         Useful for scripting and MCP tool callers that need machine-readable results."))
 	fmt.Println(infoStyle.Render("  --json                 Skip the interactive TUI; emit a JSON document to stdout."))
 	fmt.Println(infoStyle.Render("                         Preferred over --plain for agent/MCP callers -- unambiguous, no parse fragility."))
 	fmt.Println(infoStyle.Render("  --not ...               Tokens after this are exclusions;"))
 	fmt.Println(infoStyle.Render("                          extensions starting with '.' exclude types; others exclude words"))
+	fmt.Println(infoStyle.Render("  --                      Stop flag parsing; remaining tokens are literal terms or exclusions"))
+	fmt.Println(infoStyle.Render("  -C/-A/-B context flags are not supported; use --distance and --max-excerpts"))
+	fmt.Println(infoStyle.Render("  Value flags accept both --flag VALUE and --flag=VALUE forms"))
+	fmt.Println(infoStyle.Render("  Listed aliases are compatible with rg; garp is not a drop-in rg replacement"))
 	fmt.Println(infoStyle.Render("  --help, -h              Show help"))
 	fmt.Println(infoStyle.Render("  --version, -v           Show version"))
 	fmt.Println()
@@ -725,6 +731,7 @@ type jsonQuery struct {
 	Excludes      []string `json:"excludes,omitempty"`
 	Partial       string   `json:"partial,omitempty"`
 	StartDir      string   `json:"start_dir,omitempty"`
+	StartDirs     []string `json:"start_dirs,omitempty"`
 	PathScope     []string `json:"path_scope,omitempty"`
 	OnlyType      string   `json:"only_type,omitempty"`
 	OnlyTypes     []string `json:"only_types,omitempty"`
@@ -885,6 +892,20 @@ func buildJSONOutput(args *Arguments, outcome search.ExecutionResult) jsonOutput
 	if len(args.OnlyTypes) >= 2 {
 		out.Query.OnlyTypes = append([]string(nil), args.OnlyTypes...)
 	}
+	if !args.StartDirProvided {
+		out.Query.StartDir = ""
+	} else if len(args.StartRoots) > 0 {
+		reported := search.ReportedStartRoots(args.StartRoots)
+		if len(reported) > 0 {
+			out.Query.StartDir = reported[0].SuppliedPath
+		}
+		if len(reported) >= 2 {
+			out.Query.StartDirs = make([]string, len(reported))
+			for index := range reported {
+				out.Query.StartDirs[index] = reported[index].SuppliedPath
+			}
+		}
+	}
 
 	for _, r := range outcome.Results {
 		excerpts := make([]jsonExcerpt, len(r.RawExcerpts))
@@ -1001,6 +1022,29 @@ func runPathOnly(args *Arguments) int {
 	return 0
 }
 
+func prepareArgumentStartRoots(args *Arguments) error {
+	rawRoots := args.StartDirs
+	if !args.StartDirProvided {
+		rawRoots = nil
+	}
+	roots, err := search.PrepareStartRootsWithOptions(rawRoots, search.StartRootOptions{
+		NoIgnore:  args.NoIgnore,
+		PathScope: args.PathScope,
+		UserGlobs: args.UserGlobs,
+	})
+	if err != nil {
+		return err
+	}
+	args.StartRoots = roots
+	if args.StartDirProvided {
+		reportedRoots := search.ReportedStartRoots(roots)
+		if len(reportedRoots) > 0 {
+			args.StartDir = reportedRoots[0].SuppliedPath
+		}
+	}
+	return nil
+}
+
 // Run parses CLI arguments and starts the TUI. Returns a process exit code.
 func Run() int {
 	// Parse args
@@ -1042,25 +1086,9 @@ func Run() int {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.PartialErr.Error()))
 		return 1
 	}
-	rawRoots := args.StartDirs
-	if !args.StartDirProvided {
-		rawRoots = nil
-	}
-	roots, err := search.PrepareStartRootsWithOptions(rawRoots, search.StartRootOptions{
-		NoIgnore:  args.NoIgnore,
-		PathScope: args.PathScope,
-		UserGlobs: args.UserGlobs,
-	})
-	if err != nil {
+	if err := prepareArgumentStartRoots(args); err != nil {
 		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+err.Error()))
 		return 1
-	}
-	args.StartRoots = roots
-	if args.StartDirProvided {
-		reportedRoots := search.ReportedStartRoots(roots)
-		if len(reportedRoots) > 0 {
-			args.StartDir = reportedRoots[0].SuppliedPath
-		}
 	}
 	// Path-only output mode: emit distinct matching file paths (one per line) and exit.
 	// Checked before --json and --plain so --pathonly always returns only paths.
