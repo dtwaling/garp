@@ -279,10 +279,13 @@ func startRootCanProduceFile(traversal preparedRootTraversal, logicalPath string
 	if linkErr != nil || linked {
 		return false
 	}
+	if !traversal.policy.MatchesFile(logicalPath) {
+		return false
+	}
 	if !traversal.noIgnore && ignoredByRules(chain.rules, physicalPath, false) {
 		return false
 	}
-	return traversal.policy.MatchesFile(logicalPath)
+	return true
 }
 
 func splitStartRootValue(raw string) ([]string, error) {

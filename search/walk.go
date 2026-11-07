@@ -190,9 +190,6 @@ func walkPreparedCandidates(
 			if entry.Type() != 0 {
 				continue
 			}
-			if !options.NoIgnore && ignoredByRules(chain.rules, physicalPath, false) {
-				continue
-			}
 			typeEligible := matcher.allows(logicalPath)
 			if !typeEligible && options.PositiveGlobCodeEligibility &&
 				len(policy.globPositive) > 0 && config.IsCodeFile(logicalPath) {
@@ -202,6 +199,9 @@ func walkPreparedCandidates(
 				continue
 			}
 			if !policy.MatchesFile(logicalPath) {
+				continue
+			}
+			if !options.NoIgnore && ignoredByRules(chain.rules, physicalPath, false) {
 				continue
 			}
 

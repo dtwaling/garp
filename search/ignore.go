@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const maxIgnoreMetadataBytes int64 = 1 << 20
@@ -30,6 +31,9 @@ type ignoreRule struct {
 	directoryOnly    bool
 	caseInsensitive  bool
 	windowsPaths     bool
+	anchored         bool
+	literalBase      string
+	suffixBase       string
 	matcher          *regexp.Regexp
 }
 
@@ -353,14 +357,21 @@ func parseIgnoreRulesForOS(contents, sourceDir string, sourcePrecedence int, goo
 			continue
 		}
 
-		anchored := strings.HasPrefix(line, "/") || strings.Contains(line, "/")
+		rule.anchored = strings.HasPrefix(line, "/") || strings.Contains(line, "/")
 		line = strings.TrimPrefix(line, "/")
 
-		expression, err := ignorePatternRegexp(line, anchored, caseInsensitive)
+		expression, err := ignorePatternRegexp(line, caseInsensitive)
 		if err != nil {
 			continue
 		}
 		rule.matcher = expression
+		if !rule.anchored && !strings.ContainsAny(line, `\?[`) {
+			if !strings.Contains(line, "*") {
+				rule.literalBase = line
+			} else if strings.HasPrefix(line, "*.") && !strings.Contains(line[1:], "*") {
+				rule.suffixBase = line[1:]
+			}
+		}
 		rules = append(rules, rule)
 	}
 
@@ -382,29 +393,66 @@ func trimUnescapedTrailingSpaces(line string) string {
 }
 
 func (rule ignoreRule) matches(candidate string, isDir bool) bool {
+	return rule.matchesNormalized(normalizeIgnorePath(candidate, rule.windowsPaths), isDir)
+}
+
+// matchesNormalized accepts a candidate normalized for this rule's path mode.
+func (rule ignoreRule) matchesNormalized(candidate string, isDir bool) bool {
 	if rule.directoryOnly && !isDir {
 		return false
 	}
 
-	relative, ok := pathRelativeToIgnoreSource(candidate, rule.sourceDir, rule.windowsPaths, rule.caseInsensitive)
+	relative, ok := pathRelativeToIgnoreSource(candidate, rule.sourceDir, rule.caseInsensitive)
 	if !ok || relative == "" {
 		return false
 	}
-	return rule.matcher.MatchString(relative)
+	if rule.anchored {
+		return rule.matcher.MatchString(relative)
+	}
+	base := path.Base(relative)
+	if rule.literalBase != "" {
+		return equalIgnorePath(base, rule.literalBase, rule.caseInsensitive)
+	}
+	if rule.suffixBase != "" {
+		if !rule.caseInsensitive {
+			return strings.HasSuffix(base, rule.suffixBase)
+		}
+		// Count backwards by runes: Unicode fold equivalents can have
+		// different UTF-8 byte lengths (for example, Kelvin sign and k).
+		end := len(base)
+		for suffix := rule.suffixBase; len(suffix) > 0; {
+			if end == 0 {
+				return false
+			}
+			_, baseSize := utf8.DecodeLastRuneInString(base[:end])
+			_, suffixSize := utf8.DecodeLastRuneInString(suffix)
+			if !strings.EqualFold(base[end-baseSize:end], suffix[len(suffix)-suffixSize:]) {
+				return false
+			}
+			end -= baseSize
+			suffix = suffix[:len(suffix)-suffixSize]
+		}
+		return true
+	}
+	return rule.matcher.MatchString(base)
 }
 
 func ignoredByRules(rules []ignoreRule, candidate string, isDir bool) bool {
-	ignored := false
-	for _, rule := range rules {
-		if rule.matches(candidate, isDir) {
-			ignored = !rule.negated
+	if len(rules) == 0 {
+		return false
+	}
+	// Chains contain rules for one platform, so normalize only once.
+	normalized := normalizeIgnorePath(candidate, rules[0].windowsPaths)
+	for i := len(rules) - 1; i >= 0; i-- {
+		if rules[i].matchesNormalized(normalized, isDir) {
+			return !rules[i].negated
 		}
 	}
-	return ignored
+	return false
 }
 
-func pathRelativeToIgnoreSource(candidate, sourceDir string, windowsPaths, caseInsensitive bool) (string, bool) {
-	candidate = normalizeIgnorePath(candidate, windowsPaths)
+// pathRelativeToIgnoreSource expects both paths to already be normalized.
+func pathRelativeToIgnoreSource(candidate, sourceDir string, caseInsensitive bool) (string, bool) {
 	if sourceDir == "" {
 		return strings.TrimPrefix(candidate, "/"), true
 	}
@@ -444,7 +492,7 @@ func normalizeIgnorePath(value string, windowsPaths bool) string {
 	return strings.TrimPrefix(value, "./")
 }
 
-func ignorePatternRegexp(pattern string, anchored, caseInsensitive bool) (*regexp.Regexp, error) {
+func ignorePatternRegexp(pattern string, caseInsensitive bool) (*regexp.Regexp, error) {
 	translated, err := translateIgnoreGlob(pattern)
 	if err != nil {
 		return nil, err
@@ -455,9 +503,7 @@ func ignorePatternRegexp(pattern string, anchored, caseInsensitive bool) (*regex
 		expression.WriteString("(?i)")
 	}
 	expression.WriteByte('^')
-	if !anchored {
-		expression.WriteString("(?:.*/)?")
-	}
+
 	expression.WriteString(translated)
 	expression.WriteByte('$')
 	return regexp.Compile(expression.String())

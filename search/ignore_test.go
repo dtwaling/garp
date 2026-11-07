@@ -1,11 +1,14 @@
 package search
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeIgnoreFixture(t *testing.T, name, contents string) {
@@ -671,5 +674,172 @@ func symlinkOrSkip(t *testing.T, oldname, newname string) {
 	t.Helper()
 	if err := os.Symlink(oldname, newname); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
+	}
+}
+
+func largeIgnoreFixture() string {
+	patterns := []string{
+		"*.exe", "*.dll", "*.dcu", "[Dd]ebug/", "[Oo]utput/",
+		"*Resource.rc", "/Build/", "!keep.dll", "Résumé.TXT",
+		"*.k", "*.K", "*.s", "__history", "Thumbs.db", "*.VisualState.xml",
+		"*.~*", `literal\*`,
+	}
+	var contents strings.Builder
+	for i := len(patterns); i < 260; i++ {
+		fmt.Fprintf(&contents, "unused-%03d\n", i)
+	}
+	contents.WriteString(strings.Join(patterns, "\n"))
+	return contents.String()
+}
+
+// legacyIgnoreMatchers preserves the pre-optimization whole-path regex shape.
+func legacyIgnoreMatchers(t testing.TB, rules []ignoreRule) []*regexp.Regexp {
+	t.Helper()
+	matchers := make([]*regexp.Regexp, len(rules))
+	for i, rule := range rules {
+		pattern := strings.TrimRight(strings.TrimPrefix(rule.pattern, "!"), "/")
+		anchored := strings.Contains(pattern, "/")
+		translated, err := translateIgnoreGlob(strings.TrimPrefix(pattern, "/"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix := "^"
+		if rule.caseInsensitive {
+			prefix = "(?i)^"
+		}
+		if !anchored {
+			prefix += "(?:.*/)?"
+		}
+		matchers[i] = regexp.MustCompile(prefix + translated + "$")
+	}
+	return matchers
+}
+
+func legacyIgnoredByRules(rules []ignoreRule, matchers []*regexp.Regexp, candidate string, isDir bool) bool {
+	ignored := false
+	for i, rule := range rules {
+		if rule.directoryOnly && !isDir {
+			continue
+		}
+		relative, ok := pathRelativeToIgnoreSource(normalizeIgnorePath(candidate, rule.windowsPaths), rule.sourceDir, rule.caseInsensitive)
+		if ok && relative != "" && matchers[i].MatchString(relative) {
+			ignored = !rule.negated
+		}
+	}
+	return ignored
+}
+
+func TestIgnoreLargeRuleSetParityAndSpeed(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), ".gitignore")
+	writeIgnoreFixture(t, filename, largeIgnoreFixture())
+	contents, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			rules := parseIgnoreRulesForOS(string(contents), "repo", 0, goos)
+			if len(rules) != 260 {
+				t.Fatalf("got %d rules, want 260", len(rules))
+			}
+			legacy := legacyIgnoreMatchers(t, rules)
+			cases := []struct {
+				name                  string
+				isDir, posix, windows bool
+			}{
+				{"a/tool.exe", false, true, true},
+				{"a/tool.EXE", false, false, true},
+				{"a/lib.dll", false, true, true},
+				{"a/unit.dcu", false, true, true},
+				{"a/keep.dll", false, false, false},
+				{"a/Debug", true, true, true},
+				{"a/Output", true, true, true},
+				{"a/Debug", false, false, false},
+				{"a/MyResource.rc", false, true, true},
+				{"Build", true, true, true},
+				{"a/Build", true, false, false},
+				{"a/résumé.txt", false, false, true},
+				{"a/__history", true, true, true},
+				{"a/Thumbs.db", false, true, true},
+				{"a/view.VisualState.xml", false, true, true},
+				{"a/file.~bak", false, true, true},
+				{"a/literal*", false, true, true},
+				{"a/readme.md", false, false, false},
+				{"a/file.ſ", false, false, true},
+			}
+			for _, tc := range cases {
+				candidate := "repo/./deep/../" + tc.name
+				want := tc.posix
+				if goos == "windows" {
+					candidate = strings.ReplaceAll(candidate, "/", `\`)
+					want = tc.windows
+				}
+				got := ignoredByRules(rules, candidate, tc.isDir)
+				before := legacyIgnoredByRules(rules, legacy, candidate, tc.isDir)
+				if got != want || got != before {
+					t.Errorf("%q dir=%t: got %t, legacy %t, want %t", candidate, tc.isDir, got, before, want)
+				}
+			}
+			// Time distinct file entries, including negated matches.
+			paths := make([]string, 10000)
+			want := make([]bool, len(paths))
+			for i := range paths {
+				name := []string{"tool.exe", "lib.dll", "unit.dcu", "keep.dll"}[i%4]
+				paths[i] = fmt.Sprintf("repo/sub/%d/%s", i, name)
+				if goos == "windows" {
+					paths[i] = strings.ReplaceAll(paths[i], "/", `\`)
+				}
+				want[i] = i%4 != 3
+			}
+			got := make([]bool, len(paths))
+			start := time.Now()
+			for i, candidate := range paths {
+				got[i] = ignoredByRules(rules, candidate, false)
+			}
+			elapsed := time.Since(start)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatal("10,000-path result set differs from expected")
+			}
+			t.Logf("10,000 paths / 260 rules: %s", elapsed)
+			// Allow race instrumentation overhead; benchmarks measure raw speed.
+			if elapsed >= 500*time.Millisecond {
+				t.Errorf("evaluation took %s, want < 500ms", elapsed)
+			}
+		})
+	}
+}
+
+func TestIgnoreUnicodeSuffixParity(t *testing.T) {
+	for _, tc := range []struct{ pattern, candidate string }{
+		{"*.k", "file.K"}, {"*.K", "file.k"}, {"*.s", "file.ſ"},
+	} {
+		for _, goos := range []string{"linux", "windows"} {
+			rules := parseIgnoreRulesForOS(tc.pattern, "repo", 0, goos)
+			candidate := "repo/deep/" + tc.candidate
+			got := ignoredByRules(rules, candidate, false)
+			before := legacyIgnoredByRules(rules, legacyIgnoreMatchers(t, rules), candidate, false)
+			if got != before || got != (goos == "windows") {
+				t.Errorf("%s %q vs %q: got %t legacy %t", goos, tc.pattern, candidate, got, before)
+			}
+		}
+	}
+}
+
+func BenchmarkIgnoredByRulesLargeGitignore(b *testing.B) {
+	for _, goos := range []string{"linux", "windows"} {
+		rules := parseIgnoreRulesForOS(largeIgnoreFixture(), "repo", 0, goos)
+		legacy := legacyIgnoreMatchers(b, rules)
+		for _, candidate := range []string{"repo/deep/tool.exe", "repo/deep/keep.dll", "repo/deep/readme.md"} {
+			b.Run(goos+"/"+candidate+"/legacy", func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					legacyIgnoredByRules(rules, legacy, candidate, false)
+				}
+			})
+			b.Run(goos+"/"+candidate+"/optimized", func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					ignoredByRules(rules, candidate, false)
+				}
+			})
+		}
 	}
 }
