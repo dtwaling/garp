@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -15,6 +16,60 @@ type rankingStaticExtractor struct {
 
 func (e rankingStaticExtractor) ExtractText([]byte) (string, error) {
 	return e.text, nil
+}
+
+type rankingCountingExtractor struct {
+	text  string
+	calls atomic.Int64
+}
+
+func (e *rankingCountingExtractor) ExtractText([]byte) (string, error) {
+	e.calls.Add(1)
+	return e.text, nil
+}
+
+func TestFilterCandidatesBinaryExcludeWordsExtractsOnce(t *testing.T) {
+	for _, query := range []struct {
+		name  string
+		terms []string
+	}{
+		{name: "single term", terms: []string{"alpha"}},
+		{name: "multiple terms", terms: []string{"alpha", "beta"}},
+	} {
+		for _, fixture := range []struct {
+			name string
+			text string
+			want int
+		}{
+			{name: "allowed", text: "alpha beta", want: 1},
+			{name: "excluded", text: "alpha beta forbidden", want: 0},
+		} {
+			t.Run(query.name+"/"+fixture.name, func(t *testing.T) {
+				root := t.TempDir()
+				path := filepath.Join(root, "binary.pdf")
+				// Only the extractor's output should drive matching and exclusions.
+				if err := os.WriteFile(path, []byte("opaque binary fixture"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				extractor := &rankingCountingExtractor{text: fixture.text}
+				engine := NewSearchEngine(query.terms, []string{"forbidden"}, nil, false, 1, 1000)
+				engine.StartDir = root
+				engine.Silent = true
+				engine.Registry.extractors["pdf"] = extractor
+
+				matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(matches) != fixture.want {
+					t.Errorf("matches = %d, want %d", len(matches), fixture.want)
+				}
+				if got := extractor.calls.Load(); got != 1 {
+					t.Errorf("ExtractText calls = %d, want 1", got)
+				}
+			})
+		}
+	}
 }
 
 func TestPathMatchCount(t *testing.T) {
