@@ -30,9 +30,12 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 - `--startdir <dir>`: search roots (default: cwd). Use one comma-separated value for a multi-repository search; specify the flag once. An existing directory name that contains a comma stays intact.
 - `-g <pattern>` is case-sensitive and `--iglob <pattern>` is case-insensitive; both are repeatable, positive globs form one union, and commas are literal. Prefix a pattern with `!` to exclude it. Bare `name` matches basenames at any depth. `name/`, `./name`, and patterns that contain `/` are root-anchored. `*` and `?` stay within one segment; `**` crosses segments.
 - `--code`: include source files, including Dockerfile/Containerfile names. `-t <ext>` restricts file types. Repeat the flag or use comma-separated values. A type restriction overrides `--code`.
+- `.gitignore`, `.ignore`, and `.git/info/exclude` are respected by default. Use `--no-ignore` to search ignored files; other search filters still apply.
+- `--max-filesize <size>`: skip files above the size cap; text/code files default to `5M` when omitted. Requires a positive size, up to `100M`; `0` is invalid.
 - `--distance N`: proximity window in characters (default 5000). Same call/block in code ~100-300; same paragraph/section in docs ~1000-2000.
 - `-m N`: proximity excerpts per file (default 1, max 50), not raw matching lines.
-- `--partial[=prefix|contains]`: boundary-aware prefix (default) or raw substring. Per-term inline glob instead: append `*` to one term (`deploy*`; quote it in shells). `--smart-forms`: match word forms (plurals, -ing, -ed, -tion).
+- `--max-results N`: maximum ranked matching files returned (default `50` in `--json` and `--plain`; `0` = unlimited).
+- `--partial[=prefix|contains]`: boundary-aware prefix (default) or raw substring. Per-term inline wildcards `*` and `?` work at any position: leading, mid-token, or trailing (`deploy*`, `ms-*-api`, `*OptionApi*`, `mark?systems`; quote terms in shells). `--smart-forms`: match word forms (plurals, -ing, -ed, -tion).
 - `-i` and `-s`: select case-insensitive or case-sensitive matching; the last case flag wins.
 - `--strict`: require every term in the window (3+ term searches are ranked by default).
 - `-l`: skip excerpt extraction and emit one distinct matching file path per line in ranked order. Zero matches produce empty stdout.
@@ -54,6 +57,7 @@ slash is root-relative.
 
 One-shot find -> pinpoint -> targeted read: each result carries the file, a ranked excerpt, and the line of the earliest matched term.
 
+- Top-level `matches` counts all matching files; `returned` counts files in `results`. `truncated: true` means only the top `N` ranked files were returned under `--max-results N`; use `--max-results 0` for all matches.
 - Sort order: score, matched-term count, path-term count, boundary quality, tighter span, top-quality chunk count, ranking-root-relative path, supplied root order, then canonical path. `matched_terms` lists the terms that actually hit.
 - Each excerpt: `text` (context-padded, newlines collapsed) plus 1-based `start_line` = line of the earliest matched term in that chunk, and per-chunk `score`/`term_count`. Present for text/code; omitted for extracted formats (PDF, DOCX, email).
 - Chunks within a file are a ranked subset, best-first: with `-m N` where `N > 1`, every quality tier can seed a chunk, so a strong cluster no longer hides the file's other clusters. Every chunk is >=90% new content (bounded overlap).

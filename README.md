@@ -146,6 +146,8 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `--pathscope <patterns>` | (all) | Comma-separated path patterns in one flag occurrence. Prefix with `!` to exclude. Use repeatable `-g` for additional path globs. The scope intersects with positive globs. See path pattern rules below. |
 | `-g`, `--glob <pattern>` | (all) | Repeatable case-sensitive path glob. Prefix with `!` to exclude. |
 | `--iglob <pattern>` | (all) | Repeatable case-insensitive path glob. Prefix with `!` to exclude. |
+| `--no-ignore` | off | Search files ignored by repository ignore files (`.gitignore`, `.ignore`, or Git `exclude`). |
+| `--max-filesize <size>` | `5M` for text/code | Skip files larger than the given positive size; an explicit limit also applies to binary formats. Accepts B, K/KB/KiB, M/MB/MiB (binary units), up to `100M`. Omit for the default; `0` is invalid. |
 | `-t`, `--type`, `--only <type>` | (all) | Restrict file types. Repeat the flag or use comma-separated values. |
 | `--smart-forms` | off | Match word forms (plurals, -ing, -ed, -tion) |
 | `--partial[=MODE]` | off | Enable partial matching. Bare form selects `prefix`; modes are `prefix`, `contains`, `off`, and `none`. |
@@ -400,21 +402,28 @@ restricts to just this family.
 
 ```
 garp/
-├── main.go              # Entry point
-├── app/
-│   ├── cli.go           # Arg parsing, flags, --json/--plain dispatch
-│   └── tui.go           # TUI, progress streaming, results display
-├── search/
-│   ├── engine.go        # Search orchestration
-│   ├── filter.go        # File walking, scope pruning, matching
-│   ├── cleaner.go       # Content cleaning, excerpt extraction
-│   ├── extractor.go     # Pure-Go binary format extractors
-│   └── scope.go         # --startdir / --pathscope validation
-├── config/
-│   └── types.go         # Supported types, globs, skip-dir list
-├── bin/                 # Prebuilt binary
-├── Makefile
-└── README.md
+|-- main.go              # Entry point delegating to app.Run
+|-- app/
+|   |-- cli.go           # Arg parsing, flags, --json/--plain/--pathonly dispatch
+|   `-- tui.go           # TUI, progress streaming, results display
+|-- search/
+|   |-- engine.go        # Search orchestration
+|   |-- filter.go        # Candidate discovery, streaming and proximity matching
+|   |-- walk.go          # Shared traversal, candidate eligibility, size limits
+|   |-- ignore.go        # Repository ignore rules and inherited ignore chains
+|   |-- path_policy.go   # Pathscope and user-glob matching, directory pruning
+|   |-- root_set.go      # Search-root validation, deduplication, nested-root policy
+|   |-- ranking.go       # Proximity-window analysis and file-ranking metadata
+|   |-- term_matcher.go  # Query normalization, whole-word, partial and wildcard matching
+|   |-- lines.go         # Source line indexing and excerpt line anchors
+|   |-- cleaner.go       # Content cleaning, excerpt extraction
+|   |-- extractor.go     # Pure-Go binary format extractors
+|   `-- scope.go         # --startdir / --pathscope / --max-filesize validation
+|-- config/
+|   `-- types.go         # Supported types, globs, skip-dir list
+|-- bin/                 # Prebuilt binary
+|-- Makefile
+`-- README.md
 ```
 
 ## Building
