@@ -1008,20 +1008,11 @@ func streamContainsQueryDecidedWithCap(filePath string, query compiledQuery, str
 
 	// Align with GetFileContent limits, then apply optional capBytes
 	stat, statErr := f.Stat()
-	var maxBytes int64
+	maxBytes := int64(maxFileSizeBytes)
 	completeAtLimit := false
-	if statErr == nil {
-		switch {
-		case stat.Size() > 50*1024*1024:
-			maxBytes = 10 * 1024 * 1024
-		case stat.Size() > 10*1024*1024:
-			maxBytes = 5 * 1024 * 1024
-		default:
-			maxBytes = stat.Size()
-			completeAtLimit = true
-		}
-	} else {
-		maxBytes = 10 * 1024 * 1024
+	if statErr == nil && stat.Size() <= maxBytes {
+		maxBytes = stat.Size()
+		completeAtLimit = true
 	}
 	if capBytes > 0 && capBytes < maxBytes {
 		maxBytes = capBytes
@@ -1494,36 +1485,34 @@ func readTextPrefix(filePath string, maxBytes int64) (string, int64, error) {
 	return string(content), stat.Size(), nil
 }
 
-// GetFileContent reads and returns file content with size limits
+// GetFileContent reads file content using the default size limit.
 func GetFileContent(filePath string) (string, int64, error) {
+	return GetFileContentWithLimit(filePath, 0)
+}
+
+// GetFileContentWithLimit reads at most maxBytes and returns the full file size.
+// Non-positive limits use the default binary file size limit.
+func GetFileContentWithLimit(filePath string, maxBytes int64) (string, int64, error) {
+	if maxBytes <= 0 {
+		maxBytes = int64(maxFileSizeBytes)
+	}
 	file, err := os.Open(filePath)
-	_ = adviseSequential(file)
 	if err != nil {
 		return "", 0, err
 	}
+	_ = adviseSequential(file)
 	defer file.Close()
 
-	// Get file size
 	stat, err := file.Stat()
 	if err != nil {
 		return "", 0, err
 	}
 
-	var reader io.Reader = file
-
-	// Limit read size for large files
-	if stat.Size() > 50*1024*1024 { // 50MB
-		reader = io.LimitReader(file, 10*1024*1024) // Read first 10MB
-	} else if stat.Size() > 10*1024*1024 { // 10MB
-		reader = io.LimitReader(file, 5*1024*1024) // Read first 5MB
-	}
-
-	// Read content
-	content, err := io.ReadAll(reader)
+	content, err := io.ReadAll(io.LimitReader(file, maxBytes))
+	_ = adviseDontNeed(file)
 	if err != nil {
 		return "", 0, err
 	}
-
 	return string(content), stat.Size(), nil
 }
 

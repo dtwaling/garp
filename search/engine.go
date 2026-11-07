@@ -563,7 +563,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 
 				// Extract and verify distance for binary formats, including PDFs.
 				if extractor, exists := se.Registry.GetExtractor(ext); exists {
-					content, _, err := GetFileContent(filePath)
+					content, _, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
 					if err != nil {
 						if !se.Silent {
 							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
@@ -636,7 +636,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 				}
 
 				// Bounded extraction fallback under semaphore + timeout.
-				rawContent, _, err := GetFileContent(filePath)
+				rawContent, _, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
@@ -705,7 +705,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 		hasExcludeWords := false
 		if len(wordExcludes) > 0 && IsBinaryFormat(filePath) {
 			// For binary files, extract text (gated and timed)
-			rawContent, _, err := GetFileContent(filePath)
+			rawContent, _, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
 			if err != nil {
 				if !se.Silent {
 					fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
@@ -1015,7 +1015,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 
 		if IsBinaryFormat(filePath) {
 			// For binary files, extract text
-			rawContent, size, err := GetFileContent(filePath)
+			rawContent, size, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
 			if err != nil {
 				if !se.Silent {
 					fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
