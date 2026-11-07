@@ -538,6 +538,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 
 		// Check if file contains all search words
 		hasAllWords := true
+		var cleanedBinaryText string
 		if len(query.terms) > 1 {
 			if IsBinaryFormat(filePath) {
 				ext := filepath.Ext(filePath)
@@ -563,8 +564,10 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 
 				// Extract and verify distance for binary formats, including PDFs.
 				if extractor, exists := se.Registry.GetExtractor(ext); exists {
-					content, _, err := GetFileContent(filePath)
+					cm.Acquire()
+					content, _, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
 					if err != nil {
+						cm.Release()
 						if !se.Silent {
 							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
 						}
@@ -573,7 +576,6 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 					var extractedText string
 					var extErr error
 					startXT := time.Now()
-					cm.Acquire()
 					err = cm.ExecuteWithTimeout(func() {
 						extractedText, extErr = extractor.ExtractText([]byte(content))
 					}, se.FileTimeoutBinary)
@@ -598,7 +600,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 						}
 						return false
 					}
-					analysis, ok := analyzeRankedText(CleanContent(extractedText), query, se.Distance, se.Strict)
+					cleanedBinaryText = CleanContent(extractedText)
+					analysis, ok := analyzeRankedText(cleanedBinaryText, query, se.Distance, se.Strict)
 					if ok {
 						match.setAnalysis(analysis)
 					}
@@ -636,18 +639,19 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 				}
 
 				// Bounded extraction fallback under semaphore + timeout.
-				rawContent, _, err := GetFileContent(filePath)
-				if err != nil {
-					if !se.Silent {
-						fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
-					}
-					return false
-				}
 				if extractor, exists := se.Registry.GetExtractor(ext); exists {
+					cm.Acquire()
+					rawContent, _, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
+					if err != nil {
+						cm.Release()
+						if !se.Silent {
+							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
+						}
+						return false
+					}
 					var extractedText string
 					var extErr error
 					startXT := time.Now()
-					cm.Acquire()
 					err = cm.ExecuteWithTimeout(func() {
 						extractedText, extErr = extractor.ExtractText([]byte(rawContent))
 					}, se.FileTimeoutBinary)
@@ -671,7 +675,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 						}
 						return false
 					}
-					analysis, ok := analyzeRankedText(CleanContent(extractedText), query, se.Distance, se.Strict)
+					cleanedBinaryText = CleanContent(extractedText)
+					analysis, ok := analyzeRankedText(cleanedBinaryText, query, se.Distance, se.Strict)
 					if ok {
 						match.setAnalysis(analysis)
 					}
@@ -704,41 +709,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 		// Check if file contains any exclude words
 		hasExcludeWords := false
 		if len(wordExcludes) > 0 && IsBinaryFormat(filePath) {
-			// For binary files, extract text (gated and timed)
-			rawContent, _, err := GetFileContent(filePath)
-			if err != nil {
-				if !se.Silent {
-					fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
-				}
-				return false
-			}
-			ext := filepath.Ext(filePath)
-			if extractor, exists := se.Registry.GetExtractor(ext); exists {
-				var out string
-				var extErr error
-				cm.Acquire()
-				err := cm.ExecuteWithTimeout(func() {
-					out, extErr = extractor.ExtractText([]byte(rawContent))
-				}, se.FileTimeoutBinary)
-				cm.Release()
-				if err != nil || extErr != nil {
-					if !se.Silent {
-						if extErr != nil {
-							fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extErr)
-						} else {
-							fmt.Printf("Warning: Extraction timeout for %s\n", filePath)
-						}
-					}
-					return false
-				}
-				// Compute exclude words from extracted text (cleaned)
-				hasExcludeWords = CheckTextContainsExcludeWordsWithOptions(CleanContent(out), wordExcludes, se.queryOptions())
-			} else {
-				if !se.Silent {
-					fmt.Printf("Warning: No extractor for %s\n", ext)
-				}
-				return false
-			}
+			// Reuse the cleaned text already extracted for the query check.
+			hasExcludeWords = CheckTextContainsExcludeWordsWithOptions(cleanedBinaryText, wordExcludes, se.queryOptions())
 		} else if len(wordExcludes) > 0 {
 			ok2, err := checkFileContainsExcludeWordsWithOptions(filePath, wordExcludes, maxBytes, se.queryOptions())
 			if err != nil {
@@ -1015,7 +987,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 
 		if IsBinaryFormat(filePath) {
 			// For binary files, extract text
-			rawContent, size, err := GetFileContent(filePath)
+			rawContent, size, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
 			if err != nil {
 				if !se.Silent {
 					fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)

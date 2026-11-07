@@ -1,6 +1,9 @@
 package search
 
 import (
+	"archive/zip"
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +12,64 @@ import (
 	"testing"
 	"time"
 )
+
+func TestBinaryFileOver10MiBNotTruncatedWithinMaxFileSize(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	padding, err := zw.CreateHeader(&zip.FileHeader{Name: "padding", Method: zip.Store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(padding, strings.NewReader(strings.Repeat(" ", 11*1024*1024))); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := zw.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const text = "alpha beta clean document match"
+	if _, err := io.WriteString(doc, "<w:document><w:p><w:t>"+text+"</w:t></w:p></w:document>"); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := buf.Bytes()
+	if bytes.Index(data, []byte("word/document.xml")) <= 10*1024*1024 || bytes.Index(data, []byte("PK\x01\x02")) <= 10*1024*1024 {
+		t.Fatal("fixture XML and central directory must be past 10 MiB")
+	}
+	path := filepath.Join(t.TempDir(), "large.docx")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, words := range [][]string{{"alpha"}, {"alpha", "beta"}} {
+		t.Run(strings.Join(words, "-"), func(t *testing.T) {
+			engine := NewSearchEngine(words, []string{"forbidden"}, nil, false, 1, 1000)
+			engine.MaxFileSize = 25 * 1024 * 1024
+			engine.Silent = true
+			matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(matches) != 1 {
+				t.Fatalf("Stage 2 matches = %d, want 1", len(matches))
+			}
+			results, err := engine.ExtractAndBuildResults(matches)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("Stage 3 results = %d, want 1", len(results))
+			}
+			if results[0].FileSize != int64(len(data)) || results[0].CleanContent != text {
+				t.Fatalf("incorrect size or extracted text: %+v", results[0])
+			}
+			if got := strings.Join(results[0].RawExcerpts, " "); !strings.Contains(got, text) || strings.Contains(got, "PK") {
+				t.Fatalf("expected clean excerpt, got %q", got)
+			}
+		})
+	}
+}
 
 var binarySizePolicyExtensions = []string{
 	".pdf", ".doc", ".docx", ".odt", ".rtf", ".eml", ".mbox", ".msg",

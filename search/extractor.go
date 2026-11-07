@@ -300,21 +300,17 @@ func (e *DOCExtractor) ExtractText(data []byte) (string, error) {
 
 // ExtractText implements the Extractor interface for PDF files
 func (e *PDFExtractor) ExtractText(data []byte) (out string, err error) {
-	// Default to raw content so we always return something readable on failure.
-	out = string(data)
-
 	// Guard against any panics from the PDF library.
 	defer func() {
 		if r := recover(); r != nil {
-			// Keep the default 'out' (raw content) and no error.
-			err = nil
+			out = ""
+			err = fmt.Errorf("pdf extraction panic: %v", r)
 		}
 	}()
 
 	reader, rerr := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
 	if rerr != nil {
-		// Fall back to raw content on reader construction error.
-		return out, nil
+		return "", rerr
 	}
 
 	var b strings.Builder
@@ -327,7 +323,7 @@ func (e *PDFExtractor) ExtractText(data []byte) (out string, err error) {
 	}()
 
 	if pages <= 0 {
-		return out, nil
+		return "", fmt.Errorf("invalid or empty PDF: %d pages", pages)
 	}
 
 	// Extract positioned text page-by-page. GetPlainText can collapse adjacent
@@ -361,7 +357,7 @@ func (e *PDFExtractor) ExtractText(data []byte) (out string, err error) {
 			return s, nil
 		}
 	}
-	return out, nil
+	return "", nil
 }
 
 func pdfTextItemsToString(items []pdf.Text) string {
@@ -374,9 +370,13 @@ func pdfTextItemsToString(items []pdf.Text) string {
 	var b strings.Builder
 	var prev pdf.Text
 	havePrev := false
+	pendingSpace := false
 	for _, item := range text {
 		s := strings.TrimSpace(item.S)
 		if s == "" {
+			if item.S != "" {
+				pendingSpace = true
+			}
 			continue
 		}
 		if havePrev {
@@ -388,12 +388,13 @@ func pdfTextItemsToString(items []pdf.Text) string {
 				b.WriteByte('\n')
 			} else {
 				gap := item.X - (prev.X + prev.W)
-				if gap > item.FontSize*0.25 {
+				if pendingSpace || gap > item.FontSize*0.25 {
 					b.WriteByte(' ')
 				}
 			}
 		}
 		b.WriteString(s)
+		pendingSpace = false
 		prev = item
 		havePrev = true
 	}
@@ -564,26 +565,26 @@ type DOCXExtractor struct{}
 func (e *DOCXExtractor) ExtractText(data []byte) (string, error) {
 	zipReader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return string(data), nil
+		return "", err
 	}
 
 	for _, file := range zipReader.File {
 		if file.Name == "word/document.xml" {
 			rc, err := file.Open()
 			if err != nil {
-				continue
+				return "", err
 			}
 			content, err := io.ReadAll(rc)
 			rc.Close()
 			if err != nil {
-				continue
+				return "", err
 			}
 			text := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(string(content), " ")
 			return strings.TrimSpace(text), nil
 		}
 	}
 
-	return string(data), nil
+	return "", fmt.Errorf("docx archive missing word/document.xml")
 }
 
 // ODTExtractor extracts text from .odt files (OpenDocument Text)
@@ -593,26 +594,26 @@ type ODTExtractor struct{}
 func (e *ODTExtractor) ExtractText(data []byte) (string, error) {
 	zipReader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return string(data), nil
+		return "", err
 	}
 
 	for _, file := range zipReader.File {
 		if file.Name == "content.xml" {
 			rc, err := file.Open()
 			if err != nil {
-				continue
+				return "", err
 			}
 			content, err := io.ReadAll(rc)
 			rc.Close()
 			if err != nil {
-				continue
+				return "", err
 			}
 			text := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(string(content), " ")
 			return strings.TrimSpace(text), nil
 		}
 	}
 
-	return string(data), nil
+	return "", fmt.Errorf("odt archive missing content.xml")
 }
 
 // RTFExtractor extracts text from .rtf files (Rich Text Format)

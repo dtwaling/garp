@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -15,6 +16,162 @@ type rankingStaticExtractor struct {
 
 func (e rankingStaticExtractor) ExtractText([]byte) (string, error) {
 	return e.text, nil
+}
+
+type rankingCountingExtractor struct {
+	text  string
+	calls atomic.Int64
+}
+
+func (e *rankingCountingExtractor) ExtractText([]byte) (string, error) {
+	e.calls.Add(1)
+	return e.text, nil
+}
+
+type rankingBlockingExtractor struct {
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int64
+}
+
+func (e *rankingBlockingExtractor) ExtractText([]byte) (string, error) {
+	if e.calls.Add(1) == 1 {
+		close(e.entered)
+	}
+	<-e.release
+	return "alpha beta", nil
+}
+
+func TestFilterCandidatesBinaryReadHonorsHeavyConcurrency(t *testing.T) {
+	for _, terms := range [][]string{{"alpha"}, {"alpha", "beta"}} {
+		t.Run(strings.Join(terms, "-"), func(t *testing.T) {
+			root := t.TempDir()
+			first := filepath.Join(root, "first.pdf")
+			gate := filepath.Join(root, "gate.txt")
+			missing := filepath.Join(root, "missing.pdf")
+			last := filepath.Join(root, "last.pdf")
+			for _, path := range []string{first, gate, last} {
+				if err := os.WriteFile(path, []byte("alpha beta"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			extractor := &rankingBlockingExtractor{
+				entered: make(chan struct{}),
+				release: make(chan struct{}),
+			}
+			defer func() {
+				select {
+				case <-extractor.release:
+				default:
+					close(extractor.release)
+				}
+			}()
+			engine := NewSearchEngine(terms, nil, nil, false, 1, 1000)
+			engine.StartDir = root
+			engine.Silent = true
+			engine.FilterWorkers = 2
+			engine.HeavyConcurrency = 1
+			engine.FileTimeoutBinary = time.Minute
+			engine.Registry.extractors["pdf"] = extractor
+			gatePassed := make(chan struct{})
+			missingProcessed := make(chan struct{})
+			engine.OnProgress = func(_ string, _, _ int, path string) {
+				switch path {
+				case gate:
+					// Hold the second worker until the first owns the heavy slot.
+					<-extractor.entered
+					close(gatePassed)
+				case missing:
+					close(missingProcessed)
+				}
+			}
+			type result struct {
+				matches []candidateMatch
+				err     error
+			}
+			done := make(chan result, 1)
+			go func() {
+				matches, err := engine.FilterCandidates([]string{first, gate, missing, last}, 4, time.Now())
+				done <- result{matches, err}
+			}()
+			select {
+			case <-gatePassed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("workers did not reach the extraction gate")
+			}
+			// A missing PDF has no streaming prefilter. Its read error must wait
+			// for the occupied slot, not be processed before acquiring it.
+			select {
+			case <-missingProcessed:
+				t.Error("binary read completed while the heavy slot was occupied")
+			case <-time.After(100 * time.Millisecond):
+			}
+			close(extractor.release)
+			select {
+			case got := <-done:
+				if got.err != nil {
+					t.Fatal(got.err)
+				}
+				if len(got.matches) != 3 {
+					t.Errorf("matches = %d, want both PDFs and the text gate", len(got.matches))
+				}
+				if calls := extractor.calls.Load(); calls != 2 {
+					t.Errorf("extraction calls = %d, want 2 (missing file must not extract)", calls)
+				}
+				select {
+				case <-missingProcessed:
+				default:
+					t.Error("missing candidate was not processed")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("filtering deadlocked: heavy slot leaked after read or extraction")
+			}
+		})
+	}
+}
+
+func TestFilterCandidatesBinaryExcludeWordsExtractsOnce(t *testing.T) {
+	for _, query := range []struct {
+		name  string
+		terms []string
+	}{
+		{name: "single term", terms: []string{"alpha"}},
+		{name: "multiple terms", terms: []string{"alpha", "beta"}},
+	} {
+		for _, fixture := range []struct {
+			name string
+			text string
+			want int
+		}{
+			{name: "allowed", text: "alpha beta", want: 1},
+			{name: "excluded", text: "alpha beta forbidden", want: 0},
+		} {
+			t.Run(query.name+"/"+fixture.name, func(t *testing.T) {
+				root := t.TempDir()
+				path := filepath.Join(root, "binary.pdf")
+				// Only the extractor's output should drive matching and exclusions.
+				if err := os.WriteFile(path, []byte("opaque binary fixture"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				extractor := &rankingCountingExtractor{text: fixture.text}
+				engine := NewSearchEngine(query.terms, []string{"forbidden"}, nil, false, 1, 1000)
+				engine.StartDir = root
+				engine.Silent = true
+				engine.Registry.extractors["pdf"] = extractor
+
+				matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(matches) != fixture.want {
+					t.Errorf("matches = %d, want %d", len(matches), fixture.want)
+				}
+				if got := extractor.calls.Load(); got != 1 {
+					t.Errorf("ExtractText calls = %d, want 1", got)
+				}
+			})
+		}
+	}
 }
 
 func TestPathMatchCount(t *testing.T) {
