@@ -564,8 +564,10 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 
 				// Extract and verify distance for binary formats, including PDFs.
 				if extractor, exists := se.Registry.GetExtractor(ext); exists {
+					cm.Acquire()
 					content, _, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
 					if err != nil {
+						cm.Release()
 						if !se.Silent {
 							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
 						}
@@ -574,7 +576,6 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 					var extractedText string
 					var extErr error
 					startXT := time.Now()
-					cm.Acquire()
 					err = cm.ExecuteWithTimeout(func() {
 						extractedText, extErr = extractor.ExtractText([]byte(content))
 					}, se.FileTimeoutBinary)
@@ -638,18 +639,19 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 				}
 
 				// Bounded extraction fallback under semaphore + timeout.
-				rawContent, _, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
-				if err != nil {
-					if !se.Silent {
-						fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
-					}
-					return false
-				}
 				if extractor, exists := se.Registry.GetExtractor(ext); exists {
+					cm.Acquire()
+					rawContent, _, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
+					if err != nil {
+						cm.Release()
+						if !se.Silent {
+							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
+						}
+						return false
+					}
 					var extractedText string
 					var extErr error
 					startXT := time.Now()
-					cm.Acquire()
 					err = cm.ExecuteWithTimeout(func() {
 						extractedText, extErr = extractor.ExtractText([]byte(rawContent))
 					}, se.FileTimeoutBinary)
