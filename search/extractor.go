@@ -381,6 +381,7 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 	// Extract positioned text page-by-page. GetPlainText can collapse adjacent
 	// PDF text runs together, which breaks whole-word matching.
 	for i := 1; i <= pages; i++ {
+		var pageErr error
 		func() {
 			defer func() { _ = recover() }()
 			page := reader.Page(i)
@@ -388,13 +389,26 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				return
 			}
 			content := page.Content()
-			pageText := pdfTextItemsToString(content.Text)
+			remaining := limit - int64(b.Len())
+			if remaining <= 0 && len(content.Text) > 0 {
+				pageErr = ErrExtractionLimit
+				return
+			}
+			pageText, perr := pdfTextItemsToStringBounded(content.Text, remaining)
+			if perr != nil {
+				pageErr = perr
+				return
+			}
 			if pageText != "" {
+				if int64(b.Len()+len(pageText)+1) > limit {
+					pageErr = ErrExtractionLimit
+					return
+				}
 				b.WriteString(pageText)
-				b.WriteString("\n")
+				b.WriteByte('\n')
 			}
 		}()
-		if int64(b.Len()) > limit {
+		if pageErr != nil {
 			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, limit)
 		}
 	}
@@ -405,22 +419,55 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 	}
 
 	// Fallback to the library's plain text path if positioned text is empty.
-	if plain, gerr := reader.GetPlainText(); gerr == nil {
-		pb, lerr := readBoundedAll(plain, limit)
-		if lerr != nil {
-			return "", lerr
+	fonts := make(map[string]*pdf.Font)
+	var plainBuf strings.Builder
+	for i := 1; i <= pages; i++ {
+		var pagePlain string
+		var pageErr error
+		func() {
+			defer func() { _ = recover() }()
+			p := reader.Page(i)
+			if p.V.IsNull() {
+				return
+			}
+			for _, name := range p.Fonts() {
+				if _, ok := fonts[name]; !ok {
+					f := p.Font(name)
+					fonts[name] = &f
+				}
+			}
+			pagePlain, pageErr = p.GetPlainText(fonts)
+		}()
+		if pageErr != nil {
+			break
 		}
-		s := strings.TrimSpace(string(pb))
-		if s != "" {
-			return s, nil
+		if int64(plainBuf.Len()+len(pagePlain)) > limit {
+			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, limit)
 		}
+		plainBuf.WriteString(pagePlain)
+	}
+	if s := strings.TrimSpace(plainBuf.String()); s != "" {
+		return s, nil
 	}
 	return "", nil
 }
 
 func pdfTextItemsToString(items []pdf.Text) string {
+	text, _ := pdfTextItemsToStringBounded(items, DefaultMaxExtractedBytes)
+	return text
+}
+
+func pdfTextItemsToStringBounded(items []pdf.Text, maxBytes int64) (string, error) {
 	if len(items) == 0 {
-		return ""
+		return "", nil
+	}
+	// Reject oversized pages before allocating and sorting a copy of the items.
+	var rawBytes int64
+	for _, item := range items {
+		rawBytes += int64(len(strings.TrimSpace(item.S)))
+		if rawBytes > maxBytes {
+			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, maxBytes)
+		}
 	}
 	text := append([]pdf.Text(nil), items...)
 	sort.Sort(pdf.TextVertical(text))
@@ -437,26 +484,37 @@ func pdfTextItemsToString(items []pdf.Text) string {
 			}
 			continue
 		}
+		var separator byte
 		if havePrev {
 			lineThreshold := item.FontSize * 0.5
 			if lineThreshold < 2 {
 				lineThreshold = 2
 			}
 			if absFloat(item.Y-prev.Y) > lineThreshold {
-				b.WriteByte('\n')
+				separator = '\n'
 			} else {
 				gap := item.X - (prev.X + prev.W)
 				if pendingSpace || gap > item.FontSize*0.25 {
-					b.WriteByte(' ')
+					separator = ' '
 				}
 			}
+		}
+		nextBytes := int64(b.Len()) + int64(len(s))
+		if separator != 0 {
+			nextBytes++
+		}
+		if nextBytes > maxBytes {
+			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, maxBytes)
+		}
+		if separator != 0 {
+			b.WriteByte(separator)
 		}
 		b.WriteString(s)
 		pendingSpace = false
 		prev = item
 		havePrev = true
 	}
-	return strings.TrimSpace(b.String())
+	return strings.TrimSpace(b.String()), nil
 }
 
 func absFloat(v float64) float64 {
@@ -485,6 +543,9 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		streams := make(map[string][]byte)
 		var totalRead int64
 		for ent, err2 := cf.Next(); err2 == nil; ent, err2 = cf.Next() {
+			if len(ent.Path) != 0 {
+				continue
+			}
 			name := ent.Name
 			switch name {
 			case "__substg1.0_0037001F", "__substg1.0_0037001E", "__substg1.0_1000001F", "__substg1.0_1000001E", "__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102":

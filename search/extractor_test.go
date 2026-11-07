@@ -315,6 +315,161 @@ func TestMSGReaderAtSkipsAttachmentsAndBoundsCumulativeStreams(t *testing.T) {
 	}
 }
 
+// pdfWithPageStreams generates real xref offsets for arbitrary page operators.
+func pdfWithPageStreams(streams ...string) []byte {
+	objects := []string{"<< /Type /Catalog /Pages 2 0 R >>", "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"}
+	var kids strings.Builder
+	for i, stream := range streams {
+		pageID := 4 + 2*i
+		fmt.Fprintf(&kids, "%d 0 R ", pageID)
+		objects = append(objects,
+			fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R /Resources << /Font << /F1 3 0 R >> >> >>", pageID+1),
+			fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(stream), stream))
+	}
+	objects[1] = fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", kids.String(), len(streams))
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objects))
+	for i, obj := range objects {
+		offsets[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, obj)
+	}
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f\n", len(objects)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n\n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	return b.Bytes()
+}
+
+func TestPDFReaderAtPageTextBudgets(t *testing.T) {
+	const text = "BT /F1 12 Tf 72 720 Td (abcd) Tj ET\n"
+	for _, tc := range []struct {
+		name    string
+		streams []string
+		limit   int64
+		want    string
+	}{
+		{"single raw bytes", []string{text}, 3, ""},
+		{"single page newline", []string{text}, 4, ""},
+		{"single exact", []string{text}, 5, "abcd"},
+		{"space separator", []string{"BT /F1 12 Tf 72 720 Td (ab) Tj 100 0 Td (cd) Tj ET\n"}, 4, ""},
+		{"line separator", []string{"BT /F1 12 Tf 72 720 Td (ab) Tj 0 -20 Td (cd) Tj ET\n"}, 4, ""},
+		{"multiple raw bytes", []string{text, text}, 8, ""},
+		{"multiple exhausted", []string{text, text}, 5, ""},
+		{"multiple exact", []string{text, text}, 10, "abcd\nabcd"},
+		{"empty page after exhausted", []string{text, ""}, 5, "abcd"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := pdfWithPageStreams(tc.streams...)
+			got, err := (&search.PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), tc.limit)
+			if tc.want == "" {
+				if got != "" || !errors.Is(err, search.ErrExtractionLimit) {
+					t.Fatalf("extraction = (%q, %v), want extraction limit", got, err)
+				}
+				if !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", tc.limit)) {
+					t.Fatalf("error must report document budget: %v", err)
+				}
+			} else if err != nil || got != tc.want {
+				t.Fatalf("extraction = (%q, %v), want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestPDFReaderAtPlainTextFallbackBudgets(t *testing.T) {
+	// An unmatched Q panics in Content's graphics stack, but is ignored by
+	// GetPlainText. This forces the real fallback without test-only hooks.
+	const fallback = "Q BT /F1 12 Tf (abcd) Tj ET\n"
+	// Invalid Tj operands also fail GetPlainText. Eager document extraction
+	// would reach this page and discard all text instead of reporting the limit.
+	const broken = "Q BT Tj ET\n"
+	for _, tc := range []struct {
+		name    string
+		streams []string
+		limit   int64
+		want    string
+	}{
+		{"single limit before broken page", []string{fallback, broken}, 4, ""},
+		{"cumulative limit before broken page", []string{fallback, fallback, broken}, 9, ""},
+		{"exact single", []string{fallback}, 5, "abcd"},
+		{"exact cumulative", []string{fallback, fallback}, 10, "abcd\nabcd"},
+		{"retain preceding text on page error", []string{fallback, broken}, 10, "abcd"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := pdfWithPageStreams(tc.streams...)
+			got, err := (&search.PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), tc.limit)
+			if tc.want == "" {
+				if got != "" || !errors.Is(err, search.ErrExtractionLimit) {
+					t.Fatalf("extraction = (%q, %v), want extraction limit", got, err)
+				}
+			} else if err != nil || got != tc.want {
+				t.Fatalf("extraction = (%q, %v), want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// forbiddenSectorReader rejects reads of nested payload, while permitting the
+// directory sector after it. Discarding a nested read later is still a failure.
+type forbiddenSectorReader struct {
+	t *testing.T
+	*bytes.Reader
+}
+
+func (r *forbiddenSectorReader) ReadAt(p []byte, off int64) (int, error) {
+	if off < 27*512 && off+int64(len(p)) > 19*512 {
+		r.t.Errorf("read nested MSG payload at [%d, %d)", off, off+int64(len(p)))
+		return 0, fmt.Errorf("nested payload read")
+	}
+	return r.Reader.ReadAt(p, off)
+}
+
+func TestMSGReaderAtSkipsNestedAllowlistedStreams(t *testing.T) {
+	for _, name := range []string{
+		"__substg1.0_0037001F", "__substg1.0_0037001E",
+		"__substg1.0_1000001F", "__substg1.0_1000001E",
+		"__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102",
+	} {
+		t.Run(name, func(t *testing.T) {
+			data := append(readerAtMSG(), make([]byte, 512)...)
+			put16 := binary.LittleEndian.PutUint16
+			put32 := binary.LittleEndian.PutUint32
+			// Extend the directory chain to sector 26, and replace the old
+			// attachment stream with a storage whose child is entry 4.
+			put32(data[512+4:], 26)
+			put32(data[512+26*4:], 0xfffffffe)
+			storage := data[1024+3*128 : 1024+4*128]
+			storage[66] = 1
+			put32(storage[76:], 4)
+			put32(storage[116:], 0xfffffffe)
+			put32(storage[120:], 0)
+			nested := data[27*512 : 27*512+128]
+			for i, c := range name {
+				put16(nested[i*2:], uint16(c))
+			}
+			put16(nested[64:], uint16((len(name)+1)*2))
+			nested[66], nested[67] = 2, 1
+			for _, off := range []int{68, 72, 76} {
+				put32(nested[off:], 0xffffffff)
+			}
+			put32(nested[116:], 18)
+			put32(nested[120:], 4096)
+			// Distinct nested text would overwrite root properties if read.
+			copy(data[19*512:27*512], data[3*512:11*512])
+			put16(data[19*512+2:], 'X')
+			for _, limit := range []int64{8192, 12288} {
+				r := &forbiddenSectorReader{t: t, Reader: bytes.NewReader(data)}
+				got, err := (&search.MSGExtractor{}).ExtractReaderAt(r, int64(len(data)), limit)
+				if err != nil || got != "subject body" {
+					t.Fatalf("limit %d: extraction = (%q, %v)", limit, got, err)
+				}
+			}
+		})
+	}
+}
+
 const minimalPDFWithText = `%PDF-1.4
 1 0 obj
 << /Type /Catalog /Pages 2 0 R >>
