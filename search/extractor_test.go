@@ -3,6 +3,10 @@ package search_test
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,6 +112,206 @@ func TestExtractorsRejectCorruptedContainersWithoutRawByteFallback(t *testing.T)
 				}
 			})
 		}
+	}
+}
+
+// guardedReaderAt fails the test even if an extractor swallows the read error.
+type guardedReaderAt struct {
+	t      *testing.T
+	r      io.ReaderAt
+	base   int64
+	end    int64
+	maxEnd int64
+}
+
+func (r *guardedReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	end := off + int64(len(p))
+	if off < r.base || end > r.end {
+		r.t.Errorf("unexpected read [%d, %d), allowed [%d, %d)", off, end, r.base, r.end)
+		return 0, fmt.Errorf("read outside allowed region")
+	}
+	r.maxEnd = max(r.maxEnd, end)
+	return r.r.ReadAt(p, off-r.base)
+}
+
+func readerAtZIP(t *testing.T, name, text string, offset int64) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	zw.SetOffset(offset)
+	w, err := zw.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(w, text); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestReaderAtExtractorLargeVirtualDOCXAndODT(t *testing.T) {
+	const offset int64 = 120 * 1024 * 1024
+	for ext, name := range map[string]string{"docx": "word/document.xml", "odt": "content.xml"} {
+		t.Run(ext, func(t *testing.T) {
+			data := readerAtZIP(t, name, "<text>virtual container hit</text>", offset)
+			// Keep ZIP's EOF probe wholly in the tail while leaving the middle inaccessible.
+			tail := append(make([]byte, 64*1024), data...)
+			size := offset + int64(len(data))
+			r := &guardedReaderAt{t: t, r: bytes.NewReader(tail), base: offset - 64*1024, end: size}
+			e, _ := search.NewExtractorRegistry().GetExtractor(ext)
+			text, err := e.(search.ReaderAtExtractor).ExtractReaderAt(r, size, 4096)
+			if err != nil || text != "virtual container hit" {
+				t.Fatalf("extraction = (%q, %v)", text, err)
+			}
+		})
+	}
+}
+
+func TestReaderAtExtractorEnforcesMaxExtractedBytes(t *testing.T) {
+	for ext, name := range map[string]string{"docx": "word/document.xml", "odt": "content.xml"} {
+		t.Run(ext, func(t *testing.T) {
+			xml := "<text>" + strings.Repeat("a", 4096) + "</text>"
+			data := readerAtZIP(t, name, xml, 0)
+			e, _ := search.NewExtractorRegistry().GetExtractor(ext)
+			for _, limit := range []int64{1, 4096, int64(len(xml)) - 1} {
+				text, err := e.(search.ReaderAtExtractor).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), limit)
+				if text != "" || !errors.Is(err, search.ErrExtractionLimit) {
+					t.Fatalf("limit %d: extraction = (%q, %v)", limit, text, err)
+				}
+			}
+			for _, limit := range []int64{int64(len(xml)), 0, -1} {
+				text, err := e.(search.ReaderAtExtractor).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), limit)
+				if err != nil || text != strings.Repeat("a", 4096) {
+					t.Fatalf("limit %d: text length %d, error %v", limit, len(text), err)
+				}
+			}
+		})
+	}
+	t.Run("pdf", func(t *testing.T) {
+		text, err := (&search.PDFExtractor{}).ExtractReaderAt(strings.NewReader(minimalPDFWithText), int64(len(minimalPDFWithText)), 4)
+		if text != "" || !errors.Is(err, search.ErrExtractionLimit) {
+			t.Fatalf("extraction = (%q, %v)", text, err)
+		}
+	})
+}
+
+func TestDOCAndMSGReaderAtBoundedFallback(t *testing.T) {
+	for ext, e := range map[string]search.ReaderAtExtractor{"doc": &search.DOCExtractor{}, "msg": &search.MSGExtractor{}} {
+		t.Run(ext, func(t *testing.T) {
+			data := []byte("fallback prefix " + strings.Repeat(" ", 4096-len("fallback prefix ")))
+			r := &guardedReaderAt{t: t, r: bytes.NewReader(data), end: 4096}
+			text, err := e.ExtractReaderAt(r, 50*1024*1024, 4096)
+			if err != nil || text == "" {
+				t.Fatalf("extraction = (%q, %v)", text, err)
+			}
+			if r.maxEnd != 4096 {
+				t.Fatalf("prefix read ends at %d, want 4096", r.maxEnd)
+			}
+		})
+	}
+}
+
+func TestReaderAtExtractorsRejectInvalidInput(t *testing.T) {
+	for _, ext := range []string{"docx", "odt", "pdf", "doc", "msg"} {
+		t.Run(ext, func(t *testing.T) {
+			e, _ := search.NewExtractorRegistry().GetExtractor(ext)
+			ra, ok := e.(search.ReaderAtExtractor)
+			if !ok {
+				t.Fatal("missing ReaderAtExtractor capability")
+			}
+			if text, err := ra.ExtractReaderAt(nil, 0, 0); text != "" || err == nil {
+				t.Fatalf("nil reader: (%q, %v)", text, err)
+			}
+			if text, err := ra.ExtractReaderAt(bytes.NewReader(nil), -1, 0); text != "" || err == nil {
+				t.Fatalf("negative size: (%q, %v)", text, err)
+			}
+		})
+	}
+}
+
+// readerAtMSG builds a CFB v3 file with two 4096-byte text streams and an
+// attachment in the final eight sectors. No mini stream is needed.
+func readerAtMSG() []byte {
+	const free = uint32(0xffffffff)
+	const end = uint32(0xfffffffe)
+	data := make([]byte, 27*512)
+	put16 := binary.LittleEndian.PutUint16
+	put32 := binary.LittleEndian.PutUint32
+	copy(data, []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1})
+	put16(data[24:], 0x3e)
+	put16(data[26:], 3)
+	put16(data[28:], 0xfffe)
+	put16(data[30:], 9)
+	put16(data[32:], 6)
+	put32(data[44:], 1) // one FAT sector
+	put32(data[48:], 1) // directory sector
+	put32(data[56:], 4096)
+	put32(data[60:], end)
+	put32(data[68:], end)
+	for off := 76; off < 512; off += 4 {
+		put32(data[off:], free)
+	}
+	put32(data[76:], 0) // FAT is sector zero
+	fat := data[512:1024]
+	for off := 0; off < len(fat); off += 4 {
+		put32(fat[off:], free)
+	}
+	put32(fat, 0xfffffffd)
+	put32(fat[4:], end)
+	for start := 2; start <= 18; start += 8 {
+		for sn := start; sn < start+7; sn++ {
+			put32(fat[sn*4:], uint32(sn+1))
+		}
+		put32(fat[(start+7)*4:], end)
+	}
+	entry := func(id int, name string, kind byte, start, size, left, right, child uint32) {
+		d := data[1024+id*128 : 1024+(id+1)*128]
+		for i, c := range name {
+			put16(d[i*2:], uint16(c))
+		}
+		put16(d[64:], uint16((len(name)+1)*2))
+		d[66], d[67] = kind, 1
+		put32(d[68:], left)
+		put32(d[72:], right)
+		put32(d[76:], child)
+		put32(d[116:], start)
+		put32(d[120:], size)
+	}
+	entry(0, "Root Entry", 5, end, 0, free, free, 2)
+	entry(1, "__substg1.0_0037001F", 2, 2, 4096, free, free, free)
+	entry(2, "__substg1.0_1000001F", 2, 10, 4096, 1, 3, free)
+	entry(3, "__substg1.0_37010102", 2, 18, 4096, free, free, free)
+	for start, text := range map[int]string{3 * 512: "subject", 11 * 512: "body"} {
+		b := data[start : start+4096]
+		put16(b, 0xfeff)
+		for off := 2; off < len(b); off += 2 {
+			put16(b[off:], ' ')
+		}
+		for i, c := range text {
+			put16(b[2+i*2:], uint16(c))
+		}
+	}
+	return data
+}
+
+func TestMSGReaderAtSkipsAttachmentsAndBoundsCumulativeStreams(t *testing.T) {
+	data := readerAtMSG()
+	for _, limit := range []int64{8192, 8191, 4096, 4095} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			// Any attachment read is a test failure, even if later discarded.
+			r := &guardedReaderAt{t: t, r: bytes.NewReader(data), end: 19 * 512}
+			text, err := (&search.MSGExtractor{}).ExtractReaderAt(r, int64(len(data)), limit)
+			if limit == 8192 {
+				if err != nil || text != "subject body" {
+					t.Fatalf("extraction = (%q, %v)", text, err)
+				}
+			} else if text != "" || !errors.Is(err, search.ErrExtractionLimit) {
+				t.Fatalf("extraction = (%q, %v), want extraction limit", text, err)
+			}
+		})
 	}
 }
 

@@ -3,6 +3,7 @@ package search
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -22,6 +23,32 @@ import (
 type Extractor interface {
 	// ExtractText takes raw file bytes and returns extracted plain text
 	ExtractText(data []byte) (string, error)
+}
+
+const DefaultMaxExtractedBytes int64 = 8 * 1024 * 1024 // 8 MiB default extracted text/stream budget
+
+var ErrExtractionLimit = errors.New("extracted content exceeds maximum byte limit")
+
+// ReaderAtExtractor is an optional capability for extractors that can read
+// random-access container formats via io.ReaderAt without buffering the full file in memory.
+type ReaderAtExtractor interface {
+	Extractor
+	ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBytes int64) (string, error)
+}
+
+func effectiveMaxExtractedBytes(limit int64) int64 {
+	if limit <= 0 {
+		return DefaultMaxExtractedBytes
+	}
+	return limit
+}
+
+func readBoundedAll(r io.Reader, limit int64) ([]byte, error) {
+	buf, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if int64(len(buf)) > limit {
+		return nil, fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, limit)
+	}
+	return buf, err
 }
 
 // pdfPagesTruncated counts the number of PDF pages truncated for safety.
@@ -213,10 +240,22 @@ type DOCExtractor struct{}
 // - Try UTF-16 decode; else ASCII salvage replacing non-printables with spaces
 // - Collapse whitespace and return a concise plain-text representation
 func (e *DOCExtractor) ExtractText(data []byte) (string, error) {
-	// Open CFB from a byte reader
-	cf, err := mscfb.New(bytes.NewReader(data))
+	return e.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
+}
+
+// ExtractReaderAt extracts likely DOC streams and bounds fallback salvage.
+func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBytes int64) (string, error) {
+	if r == nil || size < 0 {
+		return "", fmt.Errorf("invalid reader or size: %d", size)
+	}
+	maxTotal := min(effectiveMaxExtractedBytes(maxExtractedBytes), 2*1024*1024)
+	cf, err := mscfb.New(r)
 	if err != nil {
 		// Fall back to crude ASCII salvage if we cannot parse CFB
+		data, readErr := io.ReadAll(io.NewSectionReader(r, 0, min(size, maxTotal)))
+		if readErr != nil {
+			return "", readErr
+		}
 		buf := make([]rune, 0, len(data))
 		for _, b := range data {
 			if b == 0x09 || b == 0x0a || b == 0x0d || (b >= 0x20 && b <= 0x7e) {
@@ -230,7 +269,7 @@ func (e *DOCExtractor) ExtractText(data []byte) (string, error) {
 	}
 
 	var out strings.Builder
-	const maxTotal = 2 * 1024 * 1024 // 2 MiB budget across streams
+
 	total := int64(0)
 	targetStreams := map[string]bool{
 		"WordDocument": true,
@@ -284,7 +323,11 @@ func (e *DOCExtractor) ExtractText(data []byte) (string, error) {
 
 	result := strings.TrimSpace(out.String())
 	if result == "" {
-		// last-resort fallback: plain ASCII salvage on the whole file
+		// Last-resort fallback: plain ASCII salvage on a bounded prefix.
+		data, readErr := io.ReadAll(io.NewSectionReader(r, 0, min(size, maxTotal)))
+		if readErr != nil {
+			return "", readErr
+		}
 		buf := make([]rune, 0, len(data))
 		for _, b := range data {
 			if b == 0x09 || b == 0x0a || b == 0x0d || (b >= 0x20 && b <= 0x7e) {
@@ -299,7 +342,12 @@ func (e *DOCExtractor) ExtractText(data []byte) (string, error) {
 }
 
 // ExtractText implements the Extractor interface for PDF files
-func (e *PDFExtractor) ExtractText(data []byte) (out string, err error) {
+func (e *PDFExtractor) ExtractText(data []byte) (string, error) {
+	return e.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
+}
+
+// ExtractReaderAt extracts PDF text page-by-page with a cumulative budget.
+func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBytes int64) (out string, err error) {
 	// Guard against any panics from the PDF library.
 	defer func() {
 		if r := recover(); r != nil {
@@ -308,7 +356,11 @@ func (e *PDFExtractor) ExtractText(data []byte) (out string, err error) {
 		}
 	}()
 
-	reader, rerr := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+	if r == nil || size < 0 {
+		return "", fmt.Errorf("invalid reader or size: %d", size)
+	}
+	limit := effectiveMaxExtractedBytes(maxExtractedBytes)
+	reader, rerr := pdf.NewReader(r, size)
 	if rerr != nil {
 		return "", rerr
 	}
@@ -342,6 +394,9 @@ func (e *PDFExtractor) ExtractText(data []byte) (out string, err error) {
 				b.WriteString("\n")
 			}
 		}()
+		if int64(b.Len()) > limit {
+			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, limit)
+		}
 	}
 
 	extracted := strings.TrimSpace(b.String())
@@ -351,7 +406,10 @@ func (e *PDFExtractor) ExtractText(data []byte) (out string, err error) {
 
 	// Fallback to the library's plain text path if positioned text is empty.
 	if plain, gerr := reader.GetPlainText(); gerr == nil {
-		pb, _ := io.ReadAll(plain)
+		pb, lerr := readBoundedAll(plain, limit)
+		if lerr != nil {
+			return "", lerr
+		}
 		s := strings.TrimSpace(string(pb))
 		if s != "" {
 			return s, nil
@@ -413,13 +471,31 @@ type MSGExtractor struct{}
 
 // ExtractText implements the Extractor interface for MSG files
 func (e *MSGExtractor) ExtractText(data []byte) (string, error) {
+	return e.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
+}
+
+// ExtractReaderAt reads only target MAPI streams and bounds fallback salvage.
+func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBytes int64) (string, error) {
+	if r == nil || size < 0 {
+		return "", fmt.Errorf("invalid reader or size: %d", size)
+	}
+	limit := effectiveMaxExtractedBytes(maxExtractedBytes)
 	// Attempt to parse the OLE compound file and extract Unicode Subject/Body first.
-	if cf, err := mscfb.New(bytes.NewReader(data)); err == nil {
+	if cf, err := mscfb.New(r); err == nil {
 		streams := make(map[string][]byte)
+		var totalRead int64
 		for ent, err2 := cf.Next(); err2 == nil; ent, err2 = cf.Next() {
 			name := ent.Name
-			// Read the entire stream content
-			b, _ := io.ReadAll(ent)
+			switch name {
+			case "__substg1.0_0037001F", "__substg1.0_0037001E", "__substg1.0_1000001F", "__substg1.0_1000001E", "__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102":
+			default:
+				continue
+			}
+			b, err := readBoundedAll(ent, limit-totalRead)
+			if err != nil {
+				return "", err
+			}
+			totalRead += int64(len(b))
 			if len(b) > 0 {
 				streams[name] = b
 			}
@@ -471,7 +547,12 @@ func (e *MSGExtractor) ExtractText(data []byte) (string, error) {
 		}
 	}
 
-	// Fallback: best-effort UTF-16, then ASCII salvage (spaces for non-printables)
+	// Fallback: bounded best-effort UTF-16, then ASCII salvage.
+	fallbackMax := min(limit, 2*1024*1024)
+	data, readErr := io.ReadAll(io.NewSectionReader(r, 0, min(size, fallbackMax)))
+	if readErr != nil {
+		return "", readErr
+	}
 	if s, ok := tryDecodeUTF16BestEffort(data); ok {
 		return strings.TrimSpace(s), nil
 	}
@@ -563,7 +644,16 @@ type DOCXExtractor struct{}
 
 // ExtractText implements the Extractor interface for DOCX files
 func (e *DOCXExtractor) ExtractText(data []byte) (string, error) {
-	zipReader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	return e.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
+}
+
+// ExtractReaderAt reads the bounded document XML without buffering media.
+func (e *DOCXExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBytes int64) (string, error) {
+	if r == nil || size < 0 {
+		return "", fmt.Errorf("invalid reader or size: %d", size)
+	}
+	limit := effectiveMaxExtractedBytes(maxExtractedBytes)
+	zipReader, err := zip.NewReader(r, size)
 	if err != nil {
 		return "", err
 	}
@@ -574,7 +664,7 @@ func (e *DOCXExtractor) ExtractText(data []byte) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			content, err := io.ReadAll(rc)
+			content, err := readBoundedAll(rc, limit)
 			rc.Close()
 			if err != nil {
 				return "", err
@@ -592,7 +682,16 @@ type ODTExtractor struct{}
 
 // ExtractText implements the Extractor interface for ODT files
 func (e *ODTExtractor) ExtractText(data []byte) (string, error) {
-	zipReader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	return e.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
+}
+
+// ExtractReaderAt reads the bounded content XML without buffering media.
+func (e *ODTExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBytes int64) (string, error) {
+	if r == nil || size < 0 {
+		return "", fmt.Errorf("invalid reader or size: %d", size)
+	}
+	limit := effectiveMaxExtractedBytes(maxExtractedBytes)
+	zipReader, err := zip.NewReader(r, size)
 	if err != nil {
 		return "", err
 	}
@@ -603,7 +702,7 @@ func (e *ODTExtractor) ExtractText(data []byte) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			content, err := io.ReadAll(rc)
+			content, err := readBoundedAll(rc, limit)
 			rc.Close()
 			if err != nil {
 				return "", err
