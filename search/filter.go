@@ -462,11 +462,11 @@ func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []s
 		maxBytes := options.TextMaxBytes()
 		overlap := discoveryMatcherOverlap(matcher)
 
-		f, openErr := os.Open(path)
-		_ = adviseSequential(f)
+		f, _, openErr := openRegularSearchFile(path)
 		if openErr != nil {
 			return nil
 		}
+		_ = adviseSequential(f)
 
 		// Early path for small files: read whole file at once, avoid chunk loop
 		if st, stErr := f.Stat(); stErr == nil && st.Size() <= chunkSize {
@@ -772,11 +772,11 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 			for p := range paths {
 				maybePaceForMemory()
 
-				f, openErr := os.Open(p)
-				_ = adviseSequential(f)
+				f, _, openErr := openRegularSearchFile(p)
 				if openErr != nil {
 					continue
 				}
+				_ = adviseSequential(f)
 
 				// Early path for small files: read whole file at once, avoid chunk loop
 				if st, stErr := f.Stat(); stErr == nil && st.Size() <= chunkSize {
@@ -925,7 +925,7 @@ func streamContainsAllWordsDecidedQuery(filePath string, query compiledQuery, ma
 	if maxBytes <= 0 {
 		maxBytes = defaultTextMaxBytes
 	}
-	f, err := os.Open(filePath)
+	f, _, err := openRegularSearchFile(filePath)
 	if err != nil {
 		return false, false
 	}
@@ -969,7 +969,7 @@ func streamContainsRankedWordsDecidedQuery(filePath string, query compiledQuery,
 	if maxBytes <= 0 {
 		maxBytes = defaultTextMaxBytes
 	}
-	f, err := os.Open(filePath)
+	f, _, err := openRegularSearchFile(filePath)
 	if err != nil {
 		return false, false
 	}
@@ -999,7 +999,7 @@ func streamContainsQueryDecidedWithCap(filePath string, query compiledQuery, str
 	if len(query.matchers) == 0 {
 		return true, true
 	}
-	f, err := os.Open(filePath)
+	f, _, err := openRegularSearchFile(filePath)
 	if err != nil {
 		return false, false
 	}
@@ -1175,11 +1175,11 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 		// If we can conclusively find all words: return (true, true)
 		// If we can conclusively determine absence at EOF: return (false, true)
 		// Otherwise (errors, missing entries, or cap reached): return (false, false)
-		f, err := os.Open(filePath)
-		_ = adviseSequential(f)
+		f, _, err := openRegularSearchFile(filePath)
 		if err != nil {
 			return false, false
 		}
+		_ = adviseSequential(f)
 		defer f.Close()
 
 		st, err := f.Stat()
@@ -1244,11 +1244,11 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 		// - Salvage text best-effort (UTF-16 if possible, else ASCII with whitespace normalization)
 		// - If all words are conclusively found within a capped budget: (true, true)
 		// - Otherwise: (false, false) — undecided (never mark as conclusively absent)
-		f, err := os.Open(filePath)
-		_ = adviseSequential(f)
+		f, _, err := openRegularSearchFile(filePath)
 		if err != nil {
 			return false, false
 		}
+		_ = adviseSequential(f)
 		defer f.Close()
 
 		cf, err := mscfb.New(f)
@@ -1444,11 +1444,11 @@ func readTextForStage2(filePath string, maxBytes int64) (string, error) {
 	if maxBytes <= 0 {
 		maxBytes = defaultTextMaxBytes
 	}
-	file, err := os.Open(filePath)
-	_ = adviseSequential(file)
+	file, _, err := openRegularSearchFile(filePath)
 	if err != nil {
 		return "", err
 	}
+	_ = adviseSequential(file)
 	defer file.Close()
 
 	content, err := io.ReadAll(io.LimitReader(file, maxBytes))
@@ -1466,17 +1466,13 @@ func readTextPrefix(filePath string, maxBytes int64) (string, int64, error) {
 		maxBytes = defaultTextMaxBytes
 	}
 
-	file, err := os.Open(filePath)
+	file, stat, err := openRegularSearchFile(filePath)
 	if err != nil {
 		return "", 0, err
 	}
 	defer file.Close()
 	_ = adviseSequential(file)
 
-	stat, err := file.Stat()
-	if err != nil {
-		return "", 0, err
-	}
 	content, err := io.ReadAll(io.LimitReader(file, maxBytes))
 	_ = adviseDontNeed(file)
 	if err != nil {
@@ -1496,17 +1492,12 @@ func GetFileContentWithLimit(filePath string, maxBytes int64) (string, int64, er
 	if maxBytes <= 0 {
 		maxBytes = int64(maxFileSizeBytes)
 	}
-	file, err := os.Open(filePath)
+	file, stat, err := openRegularSearchFile(filePath)
 	if err != nil {
 		return "", 0, err
 	}
 	_ = adviseSequential(file)
 	defer file.Close()
-
-	stat, err := file.Stat()
-	if err != nil {
-		return "", 0, err
-	}
 
 	content, err := io.ReadAll(io.LimitReader(file, maxBytes))
 	_ = adviseDontNeed(file)

@@ -3,7 +3,6 @@ package search
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -480,14 +479,8 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 	var extract func() (string, error)
 	var metadata string
 	if raExtractor, ok := extractor.(ReaderAtExtractor); ok {
-		file, err := os.Open(filePath)
+		file, stat, err := openRegularSearchFile(filePath)
 		if err != nil {
-			readErr = err
-			return
-		}
-		stat, err := file.Stat()
-		if err != nil {
-			file.Close()
 			readErr = err
 			return
 		}
@@ -512,16 +505,6 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 			return raExtractor.ExtractReaderAt(file, stat.Size(), DefaultMaxExtractedBytes)
 		}
 	} else {
-		stat, err := os.Stat(filePath)
-		if err != nil {
-			readErr = err
-			return
-		}
-		fileSize = stat.Size()
-		if se.MaxFileSize > 0 && fileSize > se.MaxFileSize {
-			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", fileSize, se.MaxFileSize)
-			return
-		}
 		rawContent, size, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
 		if err != nil {
 			readErr = err
