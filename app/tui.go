@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"garp/config"
+	"garp/internal/terminaltext"
 	"garp/search"
 )
 
@@ -280,7 +281,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case progressMsg:
 		// Update the top progress line (only shown while loading)
-		p := msg.Path
+		p := terminaltext.Sanitize(msg.Path)
 		// Update total only during discovery when provided
 		if strings.EqualFold(msg.Stage, "discovery") && msg.Total > 0 {
 			m.totalFiles = msg.Total
@@ -289,9 +290,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pdfSkipped = msg.PdfSkipped
 		m.pdfTruncated = msg.PdfTruncated
 		if msg.Total > 0 {
-			m.progressText = fmt.Sprintf("%s [%d/%d]: %s", strings.Title(msg.Stage), msg.Count, msg.Total, p)
+			m.progressText = fmt.Sprintf("%s [%d/%d]: %s", strings.Title(terminaltext.Sanitize(msg.Stage)), msg.Count, msg.Total, p)
 		} else {
-			m.progressText = fmt.Sprintf("%s [%d]: %s", strings.Title(msg.Stage), msg.Count, p)
+			m.progressText = fmt.Sprintf("%s [%d]: %s", strings.Title(terminaltext.Sanitize(msg.Stage)), msg.Count, p)
 		}
 		// Keep polling progress while loading
 		return m, pollProgress()
@@ -304,7 +305,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		progressMu.Unlock()
 
 		if hv {
-			p := lp.Path
+			p := terminaltext.Sanitize(lp.Path)
 			// Update total only during discovery when provided
 			if strings.EqualFold(lp.Stage, "discovery") && lp.Total > 0 {
 				m.totalFiles = lp.Total
@@ -313,9 +314,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pdfSkipped = lp.PdfSkipped
 			m.pdfTruncated = lp.PdfTruncated
 			if lp.Total > 0 {
-				m.progressText = fmt.Sprintf("%s [%d/%d]: %s", strings.Title(lp.Stage), lp.Count, lp.Total, p)
+				m.progressText = fmt.Sprintf("%s [%d/%d]: %s", strings.Title(terminaltext.Sanitize(lp.Stage)), lp.Count, lp.Total, p)
 			} else {
-				m.progressText = fmt.Sprintf("%s [%d]: %s", strings.Title(lp.Stage), lp.Count, p)
+				m.progressText = fmt.Sprintf("%s [%d]: %s", strings.Title(terminaltext.Sanitize(lp.Stage)), lp.Count, p)
 			}
 		}
 		return m, pollProgress()
@@ -355,7 +356,7 @@ func (m model) View() string {
 	// Search terms (full list, wrapped)
 	{
 		// Build full comma-separated list and wrap
-		searchLine := wrapTextWithIndent("🔍 Searching: ", strings.Join(m.searchWords, ", "), width-4)
+		searchLine := wrapTextWithIndent("🔍 Searching: ", terminaltext.Sanitize(strings.Join(m.searchWords, ", ")), width-4)
 
 		// Append excluded non-extension words (full list)
 		var exWords []string
@@ -365,7 +366,7 @@ func (m model) View() string {
 			}
 		}
 		if len(exWords) > 0 {
-			searchLine += "  🚫 " + strings.Join(exWords, ", ")
+			searchLine += "  🚫 " + terminaltext.Sanitize(strings.Join(exWords, ", "))
 		}
 		headerLines = append(headerLines, subHeaderStyle.Render(searchLine))
 	}
@@ -394,7 +395,7 @@ func (m model) View() string {
 		}
 		suffix = "  🚫 " + strings.Join(shown, ", ")
 	}
-	headerLines = append(headerLines, targetStyled.Render(wrapTextWithIndent(targetPrefix, targetDesc+suffix, width-4)))
+	headerLines = append(headerLines, targetStyled.Render(wrapTextWithIndent(targetPrefix, terminaltext.Sanitize(targetDesc+suffix), width-4)))
 
 	// Engine line with cores + RAM/CPU live (aligned)
 	engineContent := fmt.Sprintf("Workers %d • Concurrent %d%s", m.filterWorkers, m.heavyConcurrency, m.memUsageText)
@@ -432,7 +433,7 @@ func (m model) View() string {
 		var txt string
 		if m.progressText != "" {
 			// Show aligned progress with wrapping
-			txt = wrapTextWithIndent("⏳ Progress:  ", m.progressText, width-4)
+			txt = wrapTextWithIndent("⏳ Progress:  ", terminaltext.Sanitize(m.progressText), width-4)
 		} else {
 			txt = "⏳ Progress:  "
 		}
@@ -467,21 +468,26 @@ func (m model) View() string {
 	} else {
 		// Display current result
 		result := m.results[m.currentPage]
-		boxContent = fmt.Sprintf("File: %s (%s) • Score: %d (%d/%d terms)\n\n", result.FilePath, formatFileSize(result.FileSize), result.Score, result.TermCount, len(m.searchWords))
+		boxContent = fmt.Sprintf("File: %s (%s) • Score: %d (%d/%d terms)\n\n", terminaltext.Sanitize(result.FilePath), formatFileSize(result.FileSize), result.Score, result.TermCount, len(m.searchWords))
 
 		// Add email metadata if available
 		if result.EmailSubject != "" {
-			boxContent += fmt.Sprintf("Subject: %s\n", result.EmailSubject)
+			boxContent += fmt.Sprintf("Subject: %s\n", terminaltext.Sanitize(result.EmailSubject))
 		}
 		if result.EmailDate != "" {
-			boxContent += fmt.Sprintf("Date: %s\n", result.EmailDate)
+			boxContent += fmt.Sprintf("Date: %s\n", terminaltext.Sanitize(result.EmailDate))
 		}
 		if result.EmailSubject != "" || result.EmailDate != "" {
 			boxContent += "\n"
 		}
 
-		// Add excerpts (single wrapped line with colored label)
-		for i, excerpt := range result.Excerpts {
+		// Rebuild highlighting from sanitized text, never trust embedded styles.
+		excerpts := result.RawExcerpts
+		if len(excerpts) == 0 {
+			excerpts = result.Excerpts
+		}
+		for i, excerpt := range excerpts {
+			excerpt = terminaltext.Sanitize(excerpt)
 			labelText := fmt.Sprintf("Excerpt %d: ", i+1)
 			if start := excerptStartLineAt(result.StartLines, i); start > 0 {
 				labelText = fmt.Sprintf("Excerpt %d (%s): ", i+1, formatLine(start))
@@ -534,13 +540,14 @@ func (m model) View() string {
 							}
 						}
 						if extra != "" {
-							extra = search.HighlightTermsWithOptions(extra, m.searchWords, m.partial, options)
+							extra = terminaltext.Sanitize(extra)
 							excerpt = excerpt + "\n" + extra
 						}
 					}
 				}
 			}
 
+			excerpt = search.HighlightTermsWithOptions(excerpt, m.searchWords, m.partial, search.QueryOptions{CaseSensitive: m.caseSensitive, SmartForms: m.smartForms})
 			boxContent += wrapTextWithIndent(label, excerpt, innerWidth) + "\n"
 		}
 

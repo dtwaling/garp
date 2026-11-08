@@ -286,7 +286,7 @@ func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int, r
 		return nil, 0, nil
 	}
 	if !se.Silent {
-		fmt.Printf("Finding files with '%s'...\n", query.terms[0])
+		fmt.Printf("Finding files with %q...\n", query.terms[0])
 	}
 	candidates := make([]discoveredCandidate, 0, 128)
 	candidateIndex := make(map[string]int)
@@ -337,12 +337,12 @@ func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int, r
 	total := len(candidates)
 	if len(candidates) == 0 {
 		if !se.Silent {
-			fmt.Printf("No files found containing '%s'\n", query.terms[0])
+			fmt.Printf("No files found containing %q\n", query.terms[0])
 		}
 		return nil, total, nil
 	}
 	if !se.Silent {
-		fmt.Printf("Found %s files containing '%s'\n", formatNumber(len(candidates)), query.terms[0])
+		fmt.Printf("Found %s files containing %q\n", formatNumber(len(candidates)), query.terms[0])
 	}
 	return candidates, total, nil
 }
@@ -592,10 +592,10 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 	// Print exclusion info
 	if !se.Silent {
 		if len(extExcludes) > 0 {
-			fmt.Printf("Excluding types: %s\n", strings.Join(extExcludes, ", "))
+			fmt.Printf("Excluding types: %q\n", strings.Join(extExcludes, ", "))
 		}
 		if len(wordExcludes) > 0 {
-			fmt.Printf("Excluding words: %s\n", strings.Join(wordExcludes, ", "))
+			fmt.Printf("Excluding words: %q\n", strings.Join(wordExcludes, ", "))
 		}
 	}
 
@@ -666,7 +666,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 					extractedText, _, _, _, timedOut, err, extErr := se.extractBinaryFile(cm, filePath, ext, extractor, false)
 					if err != nil {
 						if !se.Silent {
-							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
+							fmt.Printf("Warning: Error reading file %q: %q\n", filePath, err)
 						}
 						return false
 					}
@@ -674,9 +674,9 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 						if !se.Silent {
 							if extErr != nil {
 								// underlying extractor error
-								fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extErr)
+								fmt.Printf("Warning: Error extracting text from %q: %q\n", filePath, extErr)
 							} else {
-								fmt.Printf("Warning: Extraction timeout for %s\n", filePath)
+								fmt.Printf("Warning: Extraction timeout for %q\n", filePath)
 							}
 						}
 						return false
@@ -689,7 +689,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 					hasAllWords = ok
 				} else {
 					if !se.Silent {
-						fmt.Printf("Warning: No extractor for %s\n", ext)
+						fmt.Printf("Warning: No extractor for %q\n", ext)
 					}
 					return false
 				}
@@ -698,7 +698,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 				analysis, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
 				if err != nil {
 					if !se.Silent {
-						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
+						fmt.Printf("Warning: Error checking file %q: %q\n", filePath, err)
 					}
 					return false
 				}
@@ -724,16 +724,16 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 					extractedText, _, _, _, timedOut, err, extErr := se.extractBinaryFile(cm, filePath, ext, extractor, false)
 					if err != nil {
 						if !se.Silent {
-							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
+							fmt.Printf("Warning: Error reading file %q: %q\n", filePath, err)
 						}
 						return false
 					}
 					if timedOut || extErr != nil {
 						if !se.Silent {
 							if extErr != nil {
-								fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extErr)
+								fmt.Printf("Warning: Error extracting text from %q: %q\n", filePath, extErr)
 							} else {
-								fmt.Printf("Warning: Extraction timeout for %s\n", filePath)
+								fmt.Printf("Warning: Extraction timeout for %q\n", filePath)
 							}
 						}
 						return false
@@ -746,7 +746,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 					hasAllWords = ok
 				} else {
 					if !se.Silent {
-						fmt.Printf("Warning: No extractor for %s\n", ext)
+						fmt.Printf("Warning: No extractor for %q\n", ext)
 					}
 					return false
 				}
@@ -754,7 +754,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 				analysis, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
 				if err != nil {
 					if !se.Silent {
-						fmt.Printf("Warning: Error checking file %s: %v\n", filePath, err)
+						fmt.Printf("Warning: Error checking file %q: %q\n", filePath, err)
 					}
 					return false
 				}
@@ -778,7 +778,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 			ok2, err := checkFileContainsExcludeWordsWithOptions(filePath, wordExcludes, maxBytes, se.queryOptions())
 			if err != nil {
 				if !se.Silent {
-					fmt.Printf("Warning: Error checking exclude words in %s: %v\n", filePath, err)
+					fmt.Printf("Warning: Error checking exclude words in %q: %q\n", filePath, err)
 				}
 				return false
 			}
@@ -1056,7 +1056,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 				content, fileSize, emailDate, emailSubject, timedOut, err, extractErr = se.extractBinaryFile(cm, filePath, ext, extractor, true)
 				if err != nil {
 					if !se.Silent {
-						fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
+						fmt.Printf("Warning: Error reading file %q: %q\n", filePath, err)
 					}
 					outcome.Matches--
 					continue
@@ -1067,9 +1067,9 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 				if timedOut || extractErr != nil {
 					if !se.Silent {
 						if extractErr != nil {
-							fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extractErr)
+							fmt.Printf("Warning: Error extracting text from %q: %q\n", filePath, extractErr)
 						} else {
-							fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, err)
+							fmt.Printf("Warning: Error extracting text from %q: %q\n", filePath, err)
 						}
 					}
 					outcome.Matches--
@@ -1080,7 +1080,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 				}
 			} else {
 				if !se.Silent {
-					fmt.Printf("Warning: No extractor for %s\n", ext)
+					fmt.Printf("Warning: No extractor for %q\n", ext)
 				}
 				outcome.Matches--
 				continue
@@ -1089,7 +1089,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 			content, fileSize, err = readTextPrefix(filePath, se.walkOptions().TextMaxBytes())
 			if err != nil {
 				if !se.Silent {
-					fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
+					fmt.Printf("Warning: Error reading file %q: %q\n", filePath, err)
 				}
 				outcome.Matches--
 				continue

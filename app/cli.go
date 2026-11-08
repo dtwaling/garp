@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"garp/config"
+	"garp/internal/terminaltext"
 	"garp/search"
 )
 
@@ -886,7 +887,7 @@ func runJSON(args *Arguments) int {
 
 	outcome, err := se.ExecuteDetailed()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
+		fmt.Fprintln(os.Stderr, "Error: "+terminaltext.Sanitize(err.Error()))
 		return 1
 	}
 
@@ -898,7 +899,7 @@ func runJSON(args *Arguments) int {
 	// far more readable as raw characters, and stdout consumers don't need HTML safety.
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(out); err != nil {
-		fmt.Fprintln(os.Stderr, "Error encoding JSON: "+err.Error())
+		fmt.Fprintln(os.Stderr, "Error encoding JSON: "+terminaltext.Sanitize(err.Error()))
 		return 1
 	}
 	return 0
@@ -984,7 +985,7 @@ func runPlain(args *Arguments) int {
 
 	outcome, err := se.ExecuteDetailed()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
+		fmt.Fprintln(os.Stderr, "Error: "+terminaltext.Sanitize(err.Error()))
 		return 1
 	}
 	writePlainOutput(os.Stdout, args, outcome)
@@ -1039,7 +1040,7 @@ func runPathOnly(args *Arguments) int {
 
 	results, err := se.Execute()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
+		fmt.Fprintln(os.Stderr, "Error: "+terminaltext.Sanitize(err.Error()))
 		return 1
 	}
 
@@ -1085,7 +1086,7 @@ func Run() int {
 	// Parse args
 	args := parseArguments(os.Args[1:])
 	if args.ParseErr != nil {
-		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.ParseErr.Error()))
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+terminaltext.Sanitize(args.ParseErr.Error())))
 		return 1
 	}
 	switch args.infoRequest {
@@ -1102,27 +1103,27 @@ func Run() int {
 	}
 	// Exit early on flag validation errors
 	if args.StartDirErr != nil {
-		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.StartDirErr.Error()))
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+terminaltext.Sanitize(args.StartDirErr.Error())))
 		return 1
 	}
 	if args.MaxResultsErr != nil {
-		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.MaxResultsErr.Error()))
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+terminaltext.Sanitize(args.MaxResultsErr.Error())))
 		return 1
 	}
 	if args.MaxFileSizeErr != nil {
-		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.MaxFileSizeErr.Error()))
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+terminaltext.Sanitize(args.MaxFileSizeErr.Error())))
 		return 1
 	}
 	if args.PathScopeErr != nil {
-		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.PathScopeErr.Error()))
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+terminaltext.Sanitize(args.PathScopeErr.Error())))
 		return 1
 	}
 	if args.PartialErr != nil {
-		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+args.PartialErr.Error()))
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+terminaltext.Sanitize(args.PartialErr.Error())))
 		return 1
 	}
 	if err := prepareArgumentStartRoots(args); err != nil {
-		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+err.Error()))
+		fmt.Fprintln(os.Stderr, errorStyle.Render("Error: "+terminaltext.Sanitize(err.Error())))
 		return 1
 	}
 	// Path-only output mode: emit distinct matching file paths (one per line) and exit.
@@ -1170,7 +1171,7 @@ func Run() int {
 	startWall = time.Now()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		fmt.Println("Error:", err)
+		fmt.Println("Error:", terminaltext.Sanitize(err.Error()))
 		return 1
 	}
 	return 0
