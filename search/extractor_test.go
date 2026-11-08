@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,6 +166,28 @@ func TestReaderAtExtractorLargeVirtualDOCXAndODT(t *testing.T) {
 			text, err := e.(search.ReaderAtExtractor).ExtractReaderAt(r, size, 4096)
 			if err != nil || text != "virtual container hit" {
 				t.Fatalf("extraction = (%q, %v)", text, err)
+			}
+		})
+	}
+}
+
+func TestReaderAtExtractorMaxInt64Budget(t *testing.T) {
+	for _, ext := range []string{"docx", "odt", "msg"} {
+		t.Run(ext, func(t *testing.T) {
+			data := readerAtMSG()
+			want := "subject body"
+			if ext != "msg" {
+				name := "word/document.xml"
+				if ext == "odt" {
+					name = "content.xml"
+				}
+				want = "maximum budget text"
+				data = readerAtZIP(t, name, "<text>"+want+"</text>", 0)
+			}
+			e, _ := search.NewExtractorRegistry().GetExtractor(ext)
+			text, err := e.(search.ReaderAtExtractor).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), math.MaxInt64)
+			if err != nil || text != want {
+				t.Fatalf("extraction = (%q, %v), want (%q, nil)", text, err, want)
 			}
 		})
 	}

@@ -512,12 +512,26 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 			return raExtractor.ExtractReaderAt(file, stat.Size(), DefaultMaxExtractedBytes)
 		}
 	} else {
+		stat, err := os.Stat(filePath)
+		if err != nil {
+			readErr = err
+			return
+		}
+		fileSize = stat.Size()
+		if se.MaxFileSize > 0 && fileSize > se.MaxFileSize {
+			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", fileSize, se.MaxFileSize)
+			return
+		}
 		rawContent, size, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
 		if err != nil {
 			readErr = err
 			return
 		}
 		fileSize = size
+		if se.MaxFileSize > 0 && size > se.MaxFileSize {
+			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", size, se.MaxFileSize)
+			return
+		}
 		if wantEmailMeta && (strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg")) {
 			metadata = rawContent
 		}

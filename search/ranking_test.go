@@ -111,6 +111,38 @@ func TestEngineBinaryExtractorDispatch(t *testing.T) {
 	}
 }
 
+func TestLegacyBinaryExtractorRejectsOversizedFiles(t *testing.T) {
+	for _, terms := range [][]string{{"alpha"}, {"alpha", "beta"}} {
+		for _, stage := range []string{"filter", "extract"} {
+			t.Run(strings.Join(terms, "-")+"/"+stage, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "oversized.eml")
+				if err := os.WriteFile(path, []byte("opaque binary fixture"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				legacy := &rankingCountingExtractor{text: "alpha beta"}
+				engine := NewSearchEngine(terms, nil, nil, false, 1, 1000)
+				engine.Silent = true
+				engine.MaxFileSize = 10
+				engine.Registry.extractors["eml"] = legacy
+				if stage == "filter" {
+					matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+					if err != nil || len(matches) != 0 {
+						t.Errorf("Stage 2 matches = %d, err = %v; want 0, nil", len(matches), err)
+					}
+				} else {
+					results, err := engine.ExtractAndBuildResults([]candidateMatch{{filePath: path}})
+					if err != nil || len(results) != 0 {
+						t.Errorf("Stage 3 results = %d, err = %v; want 0, nil", len(results), err)
+					}
+				}
+				if calls := legacy.calls.Load(); calls != 0 {
+					t.Errorf("legacy ExtractText calls = %d, want 0", calls)
+				}
+			})
+		}
+	}
+}
+
 func TestStage3BinaryEmailMetadata(t *testing.T) {
 	for _, fixture := range []struct {
 		name, ext, raw, date, subject string

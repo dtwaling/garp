@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -44,7 +45,11 @@ func effectiveMaxExtractedBytes(limit int64) int64 {
 }
 
 func readBoundedAll(r io.Reader, limit int64) ([]byte, error) {
-	buf, err := io.ReadAll(io.LimitReader(r, limit+1))
+	readLimit := limit
+	if readLimit < math.MaxInt64 {
+		readLimit++
+	}
+	buf, err := io.ReadAll(io.LimitReader(r, readLimit))
 	if int64(len(buf)) > limit {
 		return nil, fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, limit)
 	}
