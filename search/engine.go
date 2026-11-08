@@ -136,21 +136,25 @@ func (cm *ConcurrencyManager) Release() {
 	<-cm.sem
 }
 
-// ExecuteWithTimeout includes admission in the deadline. The worker, not the
-// waiting caller, owns the slot until fn returns, including after a timeout.
-// Functions that cannot cooperate with cancellation remain bounded by sem.
+// ExecuteWithTimeout bounds slot admission and starts a fresh deadline for fn
+// after acquiring a slot. The worker, not the waiting caller, owns the slot
+// until fn returns, including after a timeout. Functions that cannot cooperate
+// with cancellation remain bounded by sem.
 func (cm *ConcurrencyManager) ExecuteWithTimeout(fn func(context.Context), timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	admitCtx, admitCancel := context.WithTimeout(context.Background(), timeout)
+	defer admitCancel()
 	select {
 	case cm.sem <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-admitCtx.Done():
+		return admitCtx.Err()
 	}
-	if err := ctx.Err(); err != nil {
+	if err := admitCtx.Err(); err != nil {
 		cm.Release()
 		return err
 	}
+
+	execCtx, execCancel := context.WithTimeout(context.Background(), timeout)
+	defer execCancel()
 	done := make(chan error, 1)
 	go func() {
 		var err error
@@ -161,13 +165,13 @@ func (cm *ConcurrencyManager) ExecuteWithTimeout(fn func(context.Context), timeo
 			cm.Release()
 			done <- err
 		}()
-		fn(ctx)
+		fn(execCtx)
 	}()
 	select {
 	case err := <-done:
 		return err
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-execCtx.Done():
+		return execCtx.Err()
 	}
 }
 

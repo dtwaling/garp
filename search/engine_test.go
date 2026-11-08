@@ -292,3 +292,47 @@ func TestExecuteWithTimeoutCancellationAndPanicCleanup(t *testing.T) {
 		t.Fatal("expired deadline leaked slot")
 	}
 }
+
+type delayedContextExtractor struct {
+	delay time.Duration
+}
+
+func (e *delayedContextExtractor) ExtractText([]byte) (string, error) {
+	return "alpha beta", nil
+}
+
+func (e *delayedContextExtractor) ExtractReaderAt(r io.ReaderAt, _, _ int64) (string, error) {
+	ctx := r.(contextReaderAt).ctx
+	select {
+	case <-time.After(e.delay):
+		return "alpha beta", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func TestAdmissionWaitDoesNotConsumeExtractionDeadline(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.pdf")
+	second := filepath.Join(dir, "second.pdf")
+	for _, p := range []string{first, second} {
+		if err := os.WriteFile(p, []byte("alpha beta"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// With 1 heavy slot, 2 filter workers, and a 250ms timeout, two 150ms
+	// extractions take ~300ms wall-clock total but each fits within 250ms once
+	// admitted. Stage 2 must retain both candidates.
+	engine := NewSearchEngineWithWorkers([]string{"alpha", "beta"}, nil, nil, false, 1, 250, 2)
+	engine.Silent = true
+	engine.Registry.extractors["pdf"] = &delayedContextExtractor{delay: 150 * time.Millisecond}
+
+	matches, err := engine.FilterCandidates([]string{first, second}, 2, time.Now())
+	if err != nil {
+		t.Fatalf("FilterCandidates failed: %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("matched %d candidates, want 2 (second candidate timed out from admission wait)", len(matches))
+	}
+}
