@@ -109,12 +109,22 @@ func (match *candidateMatch) setAnalysis(analysis rankedTextAnalysis) {
 // ProgressFunc is an optional callback to report progress like: processed, total, path
 type ProgressFunc func(stage string, processed, total int, path string)
 
+const (
+	// MaxWorkers matches the discovery worker ceiling in filter.go.
+	MaxWorkers = 16
+	// MaxHeavyConcurrency matches the CLI's automatic heavy extraction ceiling.
+	MaxHeavyConcurrency = 8
+	// MaxFileTimeoutBinary caps binary extraction waits at one minute, in milliseconds.
+	MaxFileTimeoutBinary = 60_000
+)
+
 // ConcurrencyManager handles bounded concurrency for heavy operations
 type ConcurrencyManager struct {
 	sem chan struct{}
 }
 
 func NewConcurrencyManager(slots int) *ConcurrencyManager {
+	slots = max(1, min(slots, MaxHeavyConcurrency))
 	return &ConcurrencyManager{sem: make(chan struct{}, slots)}
 }
 
@@ -238,6 +248,8 @@ type SearchEngine struct {
 
 // NewSearchEngine creates a new search engine instance
 func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, includeCode bool, heavyConcurrency int, fileTimeoutBinary int) *SearchEngine {
+	// Bound milliseconds before conversion to avoid time.Duration overflow.
+	fileTimeoutBinary = max(0, min(fileTimeoutBinary, MaxFileTimeoutBinary))
 	return &SearchEngine{
 		SearchWords:       append([]string(nil), searchWords...),
 		ExcludeWords:      excludeWords,
@@ -246,7 +258,7 @@ func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, inc
 		Registry:          NewExtractorRegistry(),
 		Distance:          5000,
 		Silent:            false,
-		HeavyConcurrency:  heavyConcurrency,
+		HeavyConcurrency:  max(1, min(heavyConcurrency, MaxHeavyConcurrency)),
 		FilterWorkers:     2,
 		FileTimeoutBinary: time.Duration(fileTimeoutBinary) * time.Millisecond,
 		MaxExcerpts:       1,
@@ -273,7 +285,7 @@ func (se *SearchEngine) walkOptions() WalkOptions {
 func NewSearchEngineWithWorkers(searchWords, excludeWords []string, fileTypes []string, includeCode bool, heavyConcurrency int, fileTimeoutBinary int, filterWorkers int) *SearchEngine {
 	se := NewSearchEngine(searchWords, excludeWords, fileTypes, includeCode, heavyConcurrency, fileTimeoutBinary)
 	if filterWorkers > 0 {
-		se.FilterWorkers = filterWorkers
+		se.FilterWorkers = min(filterWorkers, MaxWorkers)
 	}
 	return se
 }
@@ -513,7 +525,7 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 	startXT := time.Now()
 	err := cm.ExecuteWithTimeout(func(ctx context.Context) {
 		text, size, date, subject, readFailure, extractFailure = se.extractBinaryFileWorker(ctx, filePath, ext, extractor, wantEmailMeta)
-	}, se.FileTimeoutBinary)
+	}, min(se.FileTimeoutBinary, time.Duration(MaxFileTimeoutBinary)*time.Millisecond))
 	durXT := time.Since(startXT)
 	switch strings.ToLower(ext) {
 	case ".eml":
@@ -652,10 +664,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 	cm := se.extractionManager()
 
 	// Worker pool for Stage 2 text filtering
-	workers := se.FilterWorkers
-	if workers < 1 {
-		workers = 1
-	}
+	// Public fields can be changed after construction; clamp before allocation.
+	workers := max(1, min(se.FilterWorkers, MaxWorkers))
 	jobs := make(chan discoveredCandidate, workers*4)
 	var wg sync.WaitGroup
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,6 +12,83 @@ import (
 	"testing"
 	"time"
 )
+
+func TestSearchEngineResourceBounds(t *testing.T) {
+	for _, value := range []int{math.MinInt, -1, 0, 1, 2, MaxHeavyConcurrency, MaxWorkers, MaxFileTimeoutBinary, MaxFileTimeoutBinary + 1, math.MaxInt} {
+		se := NewSearchEngineWithWorkers(nil, nil, nil, false, value, value, value)
+		wantWorkers := min(value, MaxWorkers)
+		if value <= 0 {
+			wantWorkers = 2
+		}
+		if se.FilterWorkers != wantWorkers {
+			t.Fatalf("workers(%d) = %d, want %d", value, se.FilterWorkers, wantWorkers)
+		}
+		wantHeavy := max(1, min(value, MaxHeavyConcurrency))
+		if se.HeavyConcurrency != wantHeavy {
+			t.Fatalf("heavy(%d) = %d, want %d", value, se.HeavyConcurrency, wantHeavy)
+		}
+		wantTimeout := time.Duration(max(0, min(value, MaxFileTimeoutBinary))) * time.Millisecond
+		if se.FileTimeoutBinary != wantTimeout {
+			t.Fatalf("timeout(%d) = %v, want %v", value, se.FileTimeoutBinary, wantTimeout)
+		}
+		cm := NewConcurrencyManager(value)
+		if cap(cm.sem) != wantHeavy {
+			t.Fatalf("semaphore(%d) capacity = %d, want %d", value, cap(cm.sem), wantHeavy)
+		}
+		if err := cm.ExecuteWithTimeout(func(context.Context) {}, time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMutatedEngineResourceBounds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.txt")
+	if err := os.WriteFile(path, []byte("alpha beta"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, workers := range []int{math.MinInt, 0, 1, MaxWorkers, MaxWorkers + 1, math.MaxInt} {
+		se := NewSearchEngine([]string{"alpha"}, nil, nil, false, 1, 1000)
+		se.Silent = true
+		se.FilterWorkers = workers
+		se.HeavyConcurrency = math.MaxInt
+		matches, err := se.FilterCandidates([]string{path}, 1, time.Now())
+		if err != nil || len(matches) != 1 {
+			t.Fatalf("workers %d: matches=%v error=%v", workers, matches, err)
+		}
+		if cap(se.extractionManager().sem) != MaxHeavyConcurrency {
+			t.Fatal("mutated heavy concurrency was not bounded")
+		}
+	}
+}
+
+type deadlineObservingExtractor struct{ remaining time.Duration }
+
+func (e *deadlineObservingExtractor) ExtractText([]byte) (string, error) { return "alpha", nil }
+func (e *deadlineObservingExtractor) ExtractReaderAt(r io.ReaderAt, _, _ int64) (string, error) {
+	deadline, ok := r.(contextReaderAt).ctx.Deadline()
+	if !ok {
+		return "", errors.New("missing deadline")
+	}
+	e.remaining = time.Until(deadline)
+	return "alpha", nil
+}
+
+func TestMutatedEngineTimeoutBound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.pdf")
+	if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	se := NewSearchEngine(nil, nil, nil, false, 1, 1000)
+	se.FileTimeoutBinary = time.Duration(math.MaxInt64)
+	extractor := &deadlineObservingExtractor{}
+	text, _, _, _, timedOut, readErr, extractErr := se.extractBinaryFile(se.extractionManager(), path, ".pdf", extractor, false)
+	if text != "alpha" || timedOut || readErr != nil || extractErr != nil {
+		t.Fatalf("extraction: %q %v %v %v", text, timedOut, readErr, extractErr)
+	}
+	if extractor.remaining <= 0 || extractor.remaining > time.Duration(MaxFileTimeoutBinary)*time.Millisecond {
+		t.Fatalf("unbounded deadline: %v", extractor.remaining)
+	}
+}
 
 // Gates, rather than sleeps or process-wide goroutine counts, track precisely
 // which extraction workers are alive. Deadlines are only bounded wait guards.
