@@ -2,6 +2,8 @@ package search
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -470,6 +472,103 @@ func projectedCandidatePath(candidate discoveredCandidate) (displayPath, ranking
 	return filepath.Join(candidate.rankingRoot.LogicalPath, rankingRelative), rankingRelative
 }
 
+// extractBinaryFile gates file I/O and extraction, preferring random access for containers.
+func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext string, extractor Extractor, wantEmailMeta bool) (extractedText string, fileSize int64, emailDate, emailSubject string, timedOut bool, readErr, extractErr error) {
+	cm.Acquire()
+	defer cm.Release()
+
+	var extract func() (string, error)
+	var metadata string
+	if raExtractor, ok := extractor.(ReaderAtExtractor); ok {
+		file, err := os.Open(filePath)
+		if err != nil {
+			readErr = err
+			return
+		}
+		stat, err := file.Stat()
+		if err != nil {
+			file.Close()
+			readErr = err
+			return
+		}
+		fileSize = stat.Size()
+		if se.MaxFileSize > 0 && fileSize > se.MaxFileSize {
+			file.Close()
+			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", fileSize, se.MaxFileSize)
+			return
+		}
+		if wantEmailMeta && strings.EqualFold(ext, ".msg") {
+			prefix, err := io.ReadAll(io.LimitReader(io.NewSectionReader(file, 0, fileSize), 256*1024))
+			if err != nil {
+				file.Close()
+				readErr = err
+				return
+			}
+			metadata = string(prefix)
+		}
+		extract = func() (string, error) {
+			// A timed-out worker still owns its handle until extraction finishes.
+			defer file.Close()
+			return raExtractor.ExtractReaderAt(file, stat.Size(), DefaultMaxExtractedBytes)
+		}
+	} else {
+		stat, err := os.Stat(filePath)
+		if err != nil {
+			readErr = err
+			return
+		}
+		fileSize = stat.Size()
+		if se.MaxFileSize > 0 && fileSize > se.MaxFileSize {
+			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", fileSize, se.MaxFileSize)
+			return
+		}
+		rawContent, size, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
+		if err != nil {
+			readErr = err
+			return
+		}
+		fileSize = size
+		if se.MaxFileSize > 0 && size > se.MaxFileSize {
+			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", size, se.MaxFileSize)
+			return
+		}
+		if wantEmailMeta && (strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg")) {
+			metadata = rawContent
+		}
+		extract = func() (string, error) {
+			return extractor.ExtractText([]byte(rawContent))
+		}
+	}
+	if m := emailDateRe.FindStringSubmatch(metadata); m != nil {
+		emailDate = strings.TrimSpace(m[1])
+	}
+	if m := emailSubjectRe.FindStringSubmatch(metadata); m != nil {
+		emailSubject = strings.TrimSpace(m[1])
+	}
+
+	// Only read worker-owned values after successful completion. On timeout,
+	// the worker may still write them, but cannot mutate our return values.
+	var text string
+	var err error
+	startXT := time.Now()
+	timedOut = cm.ExecuteWithTimeout(func() {
+		text, err = extract()
+	}, se.FileTimeoutBinary) != nil
+	durXT := time.Since(startXT)
+	switch strings.ToLower(ext) {
+	case ".eml":
+		atomic.AddInt64(&se.emlExtractCount, 1)
+		atomic.AddInt64(&se.emlExtractDurNanos, durXT.Nanoseconds())
+	case ".msg":
+		atomic.AddInt64(&se.msgExtractCount, 1)
+		atomic.AddInt64(&se.msgExtractDurNanos, durXT.Nanoseconds())
+	}
+	if !timedOut {
+		extractedText, extractErr = text, err
+	}
+	return
+}
+
 func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []discoveredCandidate, total int, startTime time.Time) ([]candidateMatch, error) {
 	if len(query.terms) == 0 {
 		return nil, nil
@@ -564,32 +663,14 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 
 				// Extract and verify distance for binary formats, including PDFs.
 				if extractor, exists := se.Registry.GetExtractor(ext); exists {
-					cm.Acquire()
-					content, _, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
+					extractedText, _, _, _, timedOut, err, extErr := se.extractBinaryFile(cm, filePath, ext, extractor, false)
 					if err != nil {
-						cm.Release()
 						if !se.Silent {
 							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
 						}
 						return false
 					}
-					var extractedText string
-					var extErr error
-					startXT := time.Now()
-					err = cm.ExecuteWithTimeout(func() {
-						extractedText, extErr = extractor.ExtractText([]byte(content))
-					}, se.FileTimeoutBinary)
-					cm.Release()
-					durXT := time.Since(startXT)
-					switch strings.ToLower(ext) {
-					case ".eml":
-						atomic.AddInt64(&se.emlExtractCount, 1)
-						atomic.AddInt64(&se.emlExtractDurNanos, durXT.Nanoseconds())
-					case ".msg":
-						atomic.AddInt64(&se.msgExtractCount, 1)
-						atomic.AddInt64(&se.msgExtractDurNanos, durXT.Nanoseconds())
-					}
-					if err != nil || extErr != nil {
+					if timedOut || extErr != nil {
 						if !se.Silent {
 							if extErr != nil {
 								// underlying extractor error
@@ -640,32 +721,14 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 
 				// Bounded extraction fallback under semaphore + timeout.
 				if extractor, exists := se.Registry.GetExtractor(ext); exists {
-					cm.Acquire()
-					rawContent, _, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
+					extractedText, _, _, _, timedOut, err, extErr := se.extractBinaryFile(cm, filePath, ext, extractor, false)
 					if err != nil {
-						cm.Release()
 						if !se.Silent {
 							fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
 						}
 						return false
 					}
-					var extractedText string
-					var extErr error
-					startXT := time.Now()
-					err = cm.ExecuteWithTimeout(func() {
-						extractedText, extErr = extractor.ExtractText([]byte(rawContent))
-					}, se.FileTimeoutBinary)
-					cm.Release()
-					durXT := time.Since(startXT)
-					switch strings.ToLower(ext) {
-					case ".eml":
-						atomic.AddInt64(&se.emlExtractCount, 1)
-						atomic.AddInt64(&se.emlExtractDurNanos, durXT.Nanoseconds())
-					case ".msg":
-						atomic.AddInt64(&se.msgExtractCount, 1)
-						atomic.AddInt64(&se.msgExtractDurNanos, durXT.Nanoseconds())
-					}
-					if err != nil || extErr != nil {
+					if timedOut || extErr != nil {
 						if !se.Silent {
 							if extErr != nil {
 								fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extErr)
@@ -986,34 +1049,22 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		var emailDate, emailSubject string
 
 		if IsBinaryFormat(filePath) {
-			// For binary files, extract text
-			rawContent, size, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
-			if err != nil {
-				if !se.Silent {
-					fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
-				}
-				outcome.Matches--
-				continue
-			}
-			fileSize = size
 			ext := filepath.Ext(filePath)
-
-			// Best-effort email metadata for EML/MSG from raw headers (without heavy parsing)
-			if strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg") {
-				if m := emailDateRe.FindStringSubmatch(rawContent); m != nil {
-					emailDate = strings.TrimSpace(m[1])
-				}
-				if m := emailSubjectRe.FindStringSubmatch(rawContent); m != nil {
-					emailSubject = strings.TrimSpace(m[1])
-				}
-			}
-
 			if extractor, exists := se.Registry.GetExtractor(ext); exists {
+				var timedOut bool
 				var extractErr error
-				err = cm.ExecuteWithTimeout(func() {
-					content, extractErr = extractor.ExtractText([]byte(rawContent))
-				}, se.FileTimeoutBinary)
-				if err != nil || extractErr != nil {
+				content, fileSize, emailDate, emailSubject, timedOut, err, extractErr = se.extractBinaryFile(cm, filePath, ext, extractor, true)
+				if err != nil {
+					if !se.Silent {
+						fmt.Printf("Warning: Error reading file %s: %v\n", filePath, err)
+					}
+					outcome.Matches--
+					continue
+				}
+				if timedOut {
+					err = fmt.Errorf("operation timed out")
+				}
+				if timedOut || extractErr != nil {
 					if !se.Silent {
 						if extractErr != nil {
 							fmt.Printf("Warning: Error extracting text from %s: %v\n", filePath, extractErr)

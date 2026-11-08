@@ -13,6 +13,98 @@ import (
 	"time"
 )
 
+func TestBinaryContainerOver100MiBExtractedViaReaderAtWhenMaxFileSizeOmitted(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "large.docx")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	zw := zip.NewWriter(file)
+	padding, err := zw.CreateHeader(&zip.FileHeader{Name: "padding", Method: zip.Store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stream padding to disk without allocating a container-sized buffer.
+	chunk := make([]byte, 1024*1024)
+	for i := 0; i < 105; i++ {
+		if _, err := padding.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc, err := zw.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const text = "alpha beta clean document match"
+	if _, err := io.WriteString(doc, "<w:document><w:p><w:t>"+text+"</w:t></w:p></w:document>"); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const oldCap = 100 * 1024 * 1024
+	zr, err := zip.NewReader(file, stat.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	offset, err := zr.File[1].DataOffset()
+	if err != nil || offset <= oldCap || stat.Size() <= oldCap {
+		t.Fatalf("fixture XML offset = %d, size = %d, err = %v", offset, stat.Size(), err)
+	}
+	tail := make([]byte, 4096)
+	if _, err := file.ReadAt(tail, stat.Size()-int64(len(tail))); err != nil {
+		t.Fatal(err)
+	}
+	central := bytes.Index(tail, []byte("PK\x01\x02"))
+	if central < 0 || stat.Size()-int64(len(tail))+int64(central) <= oldCap {
+		t.Fatal("fixture central directory must be past 100 MiB")
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, words := range [][]string{{"alpha"}, {"alpha", "beta"}} {
+		t.Run(strings.Join(words, "-"), func(t *testing.T) {
+			engine := NewSearchEngine(words, []string{"forbidden"}, nil, false, 1, 1000)
+			engine.StartDir = root
+			engine.Silent = true
+			if engine.MaxFileSize != 0 {
+				t.Fatal("omitted max-filesize must default to zero")
+			}
+			results, err := engine.Execute()
+			if err != nil || len(results) != 1 {
+				t.Fatalf("end-to-end results = %+v, err = %v", results, err)
+			}
+			if results[0].FileSize != stat.Size() || results[0].CleanContent != text || !strings.Contains(strings.Join(results[0].RawExcerpts, " "), text) {
+				t.Fatalf("incorrect size, content or excerpt: %+v", results[0])
+			}
+			matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+			if err != nil || len(matches) != 1 {
+				t.Fatalf("Stage 2 matches = %+v, err = %v", matches, err)
+			}
+			engine.MaxFileSize = 10 * 1024 * 1024
+			results, err = engine.Execute()
+			if err != nil || len(results) != 0 {
+				t.Fatalf("explicit-limit results = %+v, err = %v", results, err)
+			}
+			// Bypass admission to verify both extraction stages recheck the limit.
+			limited, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+			if err != nil || len(limited) != 0 {
+				t.Fatalf("explicit-limit Stage 2 matches = %+v, err = %v", limited, err)
+			}
+			outcome, err := engine.extractAndBuildResultsDetailed(compileQuery(words, PartialModeOff), matches)
+			if err != nil || outcome.Matches != 0 || len(outcome.Results) != 0 {
+				t.Fatalf("explicit-limit Stage 3 outcome = %+v, err = %v", outcome, err)
+			}
+		})
+	}
+}
+
 func TestBinaryFileOver10MiBNotTruncatedWithinMaxFileSize(t *testing.T) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)

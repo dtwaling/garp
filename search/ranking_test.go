@@ -1,6 +1,9 @@
 package search
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +29,221 @@ type rankingCountingExtractor struct {
 func (e *rankingCountingExtractor) ExtractText([]byte) (string, error) {
 	e.calls.Add(1)
 	return e.text, nil
+}
+
+type rankingReaderAtExtractor struct {
+	rankingCountingExtractor
+	readerCalls atomic.Int64
+}
+
+func (e *rankingReaderAtExtractor) ExtractReaderAt(r io.ReaderAt, size, limit int64) (string, error) {
+	e.readerCalls.Add(1)
+	file, ok := r.(*os.File)
+	if !ok {
+		return "", fmt.Errorf("expected *os.File, got %T", r)
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	if size != stat.Size() || limit != DefaultMaxExtractedBytes {
+		return "", fmt.Errorf("incorrect size or budget: %d, %d", size, limit)
+	}
+	return e.text, nil
+}
+
+func TestEngineBinaryExtractorDispatch(t *testing.T) {
+	for _, readerAt := range []bool{false, true} {
+		for _, terms := range [][]string{{"alpha"}, {"alpha", "beta"}} {
+			for _, excluded := range []bool{false, true} {
+				t.Run(fmt.Sprintf("readerAt=%v/%s/excluded=%v", readerAt, strings.Join(terms, "-"), excluded), func(t *testing.T) {
+					path := filepath.Join(t.TempDir(), "binary.pdf")
+					if err := os.WriteFile(path, []byte("opaque binary fixture"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					legacy := &rankingCountingExtractor{text: "alpha beta"}
+					if excluded {
+						legacy.text += " forbidden"
+					}
+					ra := &rankingReaderAtExtractor{}
+					ra.text = legacy.text
+					engine := NewSearchEngine(terms, []string{"forbidden"}, nil, false, 1, 1000)
+					engine.Silent = true
+					engine.Registry.extractors["pdf"] = legacy
+					if readerAt {
+						engine.Registry.extractors["pdf"] = ra
+					}
+					checkCalls := func(want int64) {
+						t.Helper()
+						if readerAt {
+							if ra.readerCalls.Load() != want || ra.calls.Load() != 0 {
+								t.Fatalf("ReaderAt calls = %d, ExtractText calls = %d; want %d, 0", ra.readerCalls.Load(), ra.calls.Load(), want)
+							}
+						} else if legacy.calls.Load() != want {
+							t.Fatalf("legacy calls = %d, want %d", legacy.calls.Load(), want)
+						}
+					}
+					matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+					if err != nil {
+						t.Fatal(err)
+					}
+					checkCalls(1)
+					if excluded {
+						if len(matches) != 0 {
+							t.Fatal("excluded binary matched")
+						}
+						return
+					}
+					if len(matches) != 1 {
+						t.Fatalf("Stage 2 matches = %d, want 1", len(matches))
+					}
+					results, err := engine.ExtractAndBuildResults(matches)
+					if err != nil || len(results) != 1 {
+						t.Fatalf("Stage 3 results = %+v, err = %v", results, err)
+					}
+					checkCalls(2)
+					if results[0].CleanContent != "alpha beta" || len(results[0].RawExcerpts) == 0 || atomic.LoadInt64(&engine.pdfProcessed) != 1 {
+						t.Fatalf("incorrect extracted result or PDF count: %+v", results[0])
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestLegacyBinaryExtractorRejectsOversizedFiles(t *testing.T) {
+	for _, terms := range [][]string{{"alpha"}, {"alpha", "beta"}} {
+		for _, stage := range []string{"filter", "extract"} {
+			t.Run(strings.Join(terms, "-")+"/"+stage, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "oversized.eml")
+				if err := os.WriteFile(path, []byte("opaque binary fixture"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				legacy := &rankingCountingExtractor{text: "alpha beta"}
+				engine := NewSearchEngine(terms, nil, nil, false, 1, 1000)
+				engine.Silent = true
+				engine.MaxFileSize = 10
+				engine.Registry.extractors["eml"] = legacy
+				if stage == "filter" {
+					matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+					if err != nil || len(matches) != 0 {
+						t.Errorf("Stage 2 matches = %d, err = %v; want 0, nil", len(matches), err)
+					}
+				} else {
+					results, err := engine.ExtractAndBuildResults([]candidateMatch{{filePath: path}})
+					if err != nil || len(results) != 0 {
+						t.Errorf("Stage 3 results = %d, err = %v; want 0, nil", len(results), err)
+					}
+				}
+				if calls := legacy.calls.Load(); calls != 0 {
+					t.Errorf("legacy ExtractText calls = %d, want 0", calls)
+				}
+			})
+		}
+	}
+}
+
+func TestStage3BinaryEmailMetadata(t *testing.T) {
+	for _, fixture := range []struct {
+		name, ext, raw, date, subject string
+		readerAt                      bool
+	}{
+		{"msg prefix", ".MSG", "Date: today\nSubject: prefix\n", "today", "prefix", true},
+		{"msg beyond cap", ".msg", strings.Repeat(" ", 256*1024) + "\nDate: late\nSubject: late\n", "", "", true},
+		{"legacy eml", ".eml", "Date: today\nSubject: legacy\n", "today", "legacy", false},
+		{"legacy msg", ".msg", "Date: today\nSubject: legacy\n", "today", "legacy", false},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "email"+fixture.ext)
+			if err := os.WriteFile(path, []byte(fixture.raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			engine := NewSearchEngine([]string{"alpha"}, nil, nil, false, 1, 1000)
+			engine.Silent = true
+			var extractor Extractor = &rankingCountingExtractor{text: "alpha beta"}
+			if fixture.readerAt {
+				ra := &rankingReaderAtExtractor{}
+				ra.text = "alpha beta"
+				extractor = ra
+			}
+			engine.Registry.extractors[strings.TrimPrefix(strings.ToLower(fixture.ext), ".")] = extractor
+			results, err := engine.ExtractAndBuildResults([]candidateMatch{{filePath: path}})
+			if err != nil || len(results) != 1 {
+				t.Fatalf("results = %+v, err = %v", results, err)
+			}
+			if results[0].EmailDate != fixture.date || results[0].EmailSubject != fixture.subject {
+				t.Fatalf("metadata = %q, %q; want %q, %q", results[0].EmailDate, results[0].EmailSubject, fixture.date, fixture.subject)
+			}
+			if engine.emlExtractCount+engine.msgExtractCount != 1 {
+				t.Fatal("Stage 3 email extraction was not counted")
+			}
+		})
+	}
+}
+
+type rankingTimeoutReaderAtExtractor struct {
+	rankingCountingExtractor
+	entered chan *os.File
+	release chan struct{}
+	readErr chan error
+}
+
+func (e *rankingTimeoutReaderAtExtractor) ExtractReaderAt(r io.ReaderAt, _, _ int64) (string, error) {
+	e.entered <- r.(*os.File)
+	<-e.release
+	var buf [1]byte
+	_, err := r.ReadAt(buf[:], 0)
+	e.readErr <- err
+	return "alpha", err
+}
+
+func TestExtractBinaryFileTimeoutKeepsReaderOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "binary.pdf")
+	if err := os.WriteFile(path, []byte("alpha"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	extractor := &rankingTimeoutReaderAtExtractor{
+		entered: make(chan *os.File, 1), release: make(chan struct{}), readErr: make(chan error, 1),
+	}
+	defer close(extractor.release)
+	engine := NewSearchEngine([]string{"alpha"}, nil, nil, false, 1, 1000)
+	engine.FileTimeoutBinary = 20 * time.Millisecond
+	cm := NewConcurrencyManager(1)
+	text, _, _, _, timedOut, readErr, extractErr := engine.extractBinaryFile(cm, path, ".pdf", extractor, false)
+	if !timedOut || readErr != nil || extractErr != nil || text != "" {
+		t.Fatalf("timeout result = %q, %v, %v, %v", text, timedOut, readErr, extractErr)
+	}
+	if len(cm.sem) != 0 {
+		t.Fatal("timeout leaked the heavy slot")
+	}
+	var file *os.File
+	select {
+	case file = <-extractor.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("extractor never started")
+	}
+	if _, err := file.Stat(); err != nil {
+		t.Fatalf("handle closed while extractor was active: %v", err)
+	}
+	extractor.release <- struct{}{}
+	select {
+	case err := <-extractor.readErr:
+		if err != nil {
+			t.Fatalf("ReadAt after timeout: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("extractor did not finish")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := file.Stat(); errors.Is(err, os.ErrClosed) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("completed worker did not close its handle")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 type rankingBlockingExtractor struct {
