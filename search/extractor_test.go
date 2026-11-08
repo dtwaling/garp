@@ -383,6 +383,7 @@ func TestPDFReaderAtPageTextBudgets(t *testing.T) {
 		{"multiple exhausted", []string{text, text}, 5, ""},
 		{"multiple exact", []string{text, text}, 10, "abcd\nabcd"},
 		{"empty page after exhausted", []string{text, ""}, 5, "abcd"},
+		{"whitespace page after exhausted", []string{text, "BT /F1 12 Tf 72 720 Td (   ) Tj ET\n"}, 5, "abcd"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := pdfWithPageStreams(tc.streams...)

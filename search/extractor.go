@@ -395,10 +395,6 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			}
 			content := page.Content()
 			remaining := limit - int64(b.Len())
-			if remaining <= 0 && len(content.Text) > 0 {
-				pageErr = ErrExtractionLimit
-				return
-			}
 			pageText, perr := pdfTextItemsToStringBounded(content.Text, remaining)
 			if perr != nil {
 				pageErr = perr
@@ -473,6 +469,9 @@ func pdfTextItemsToStringBounded(items []pdf.Text, maxBytes int64) (string, erro
 		if rawBytes > maxBytes {
 			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, maxBytes)
 		}
+	}
+	if rawBytes == 0 {
+		return "", nil
 	}
 	text := append([]pdf.Text(nil), items...)
 	sort.Sort(pdf.TextVertical(text))
