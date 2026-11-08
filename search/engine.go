@@ -120,12 +120,17 @@ const (
 
 // ConcurrencyManager handles bounded concurrency for heavy operations
 type ConcurrencyManager struct {
-	sem chan struct{}
+	sem      chan struct{}
+	mu       sync.Mutex
+	progress chan struct{}
 }
 
 func NewConcurrencyManager(slots int) *ConcurrencyManager {
 	slots = max(1, min(slots, MaxHeavyConcurrency))
-	return &ConcurrencyManager{sem: make(chan struct{}, slots)}
+	return &ConcurrencyManager{
+		sem:      make(chan struct{}, slots),
+		progress: make(chan struct{}),
+	}
 }
 
 func (cm *ConcurrencyManager) Acquire() {
@@ -134,25 +139,54 @@ func (cm *ConcurrencyManager) Acquire() {
 
 func (cm *ConcurrencyManager) Release() {
 	<-cm.sem
+	cm.notifyProgress()
+}
+
+func (cm *ConcurrencyManager) progressChan() <-chan struct{} {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.progress == nil {
+		cm.progress = make(chan struct{})
+	}
+	return cm.progress
+}
+
+func (cm *ConcurrencyManager) notifyProgress() {
+	cm.mu.Lock()
+	ch := cm.progress
+	cm.progress = make(chan struct{})
+	cm.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
 }
 
 // ExecuteWithTimeout bounds slot admission and starts a fresh deadline for fn
-// after acquiring a slot. The worker, not the waiting caller, owns the slot
-// until fn returns, including after a timeout. Functions that cannot cooperate
-// with cancellation remain bounded by sem.
+// after acquiring a slot. Queued callers reset their admission wait whenever an
+// active worker releases a slot, so ordinary multi-worker contention does not
+// expire queued candidates while slots are making forward progress. The worker,
+// not the waiting caller, owns the slot until fn returns, including after a
+// timeout. Functions that cannot cooperate with cancellation remain bounded by sem.
 func (cm *ConcurrencyManager) ExecuteWithTimeout(fn func(context.Context), timeout time.Duration) error {
-	admitCtx, admitCancel := context.WithTimeout(context.Background(), timeout)
-	defer admitCancel()
-	select {
-	case cm.sem <- struct{}{}:
-	case <-admitCtx.Done():
-		return admitCtx.Err()
+	if timeout <= 0 {
+		return context.DeadlineExceeded
 	}
-	if err := admitCtx.Err(); err != nil {
-		cm.Release()
-		return err
+	for {
+		progress := cm.progressChan()
+		admitCtx, admitCancel := context.WithTimeout(context.Background(), timeout)
+		select {
+		case cm.sem <- struct{}{}:
+			admitCancel()
+			goto admitted
+		case <-progress:
+			admitCancel()
+		case <-admitCtx.Done():
+			admitCancel()
+			return admitCtx.Err()
+		}
 	}
 
+admitted:
 	execCtx, execCancel := context.WithTimeout(context.Background(), timeout)
 	defer execCancel()
 	done := make(chan error, 1)

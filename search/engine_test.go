@@ -313,26 +313,31 @@ func (e *delayedContextExtractor) ExtractReaderAt(r io.ReaderAt, _, _ int64) (st
 
 func TestAdmissionWaitDoesNotConsumeExtractionDeadline(t *testing.T) {
 	dir := t.TempDir()
-	first := filepath.Join(dir, "first.pdf")
-	second := filepath.Join(dir, "second.pdf")
-	for _, p := range []string{first, second} {
+	candidates := []string{
+		filepath.Join(dir, "first.pdf"),
+		filepath.Join(dir, "second.pdf"),
+		filepath.Join(dir, "third.pdf"),
+		filepath.Join(dir, "fourth.pdf"),
+	}
+	for _, p := range candidates {
 		if err := os.WriteFile(p, []byte("alpha beta"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// With 1 heavy slot, 2 filter workers, and a 250ms timeout, two 150ms
-	// extractions take ~300ms wall-clock total but each fits within 250ms once
-	// admitted. Stage 2 must retain both candidates.
-	engine := NewSearchEngineWithWorkers([]string{"alpha", "beta"}, nil, nil, false, 1, 250, 2)
+	// With 1 heavy slot, 4 filter workers, and a 250ms timeout, four simultaneous
+	// 150ms extractions take ~600ms wall-clock total (and the 3rd/4th wait >=300ms
+	// before admission), but each slot turn finishes within 250ms. Stage 2 must
+	// retain all four candidates.
+	engine := NewSearchEngineWithWorkers([]string{"alpha", "beta"}, nil, nil, false, 1, 250, len(candidates))
 	engine.Silent = true
 	engine.Registry.extractors["pdf"] = &delayedContextExtractor{delay: 150 * time.Millisecond}
 
-	matches, err := engine.FilterCandidates([]string{first, second}, 2, time.Now())
+	matches, err := engine.FilterCandidates(candidates, len(candidates), time.Now())
 	if err != nil {
 		t.Fatalf("FilterCandidates failed: %v", err)
 	}
-	if len(matches) != 2 {
-		t.Fatalf("matched %d candidates, want 2 (second candidate timed out from admission wait)", len(matches))
+	if len(matches) != len(candidates) {
+		t.Fatalf("matched %d candidates, want %d (queued candidates timed out under multi-worker contention)", len(matches), len(candidates))
 	}
 }
