@@ -365,4 +365,36 @@ func TestTUIViewPreservesValidatedMatchRangesAcrossSanitization(t *testing.T) {
 			t.Fatalf("expected truncated 5th term 'omega' to be augmented and highlighted in TUI View:\n%s", e2eView)
 		}
 	})
+
+	t.Run("sanitization does not manufacture CleanContent matches from stripped invalid bytes", func(t *testing.T) {
+		lastContentHeight, lastExcerptInnerWidth = 0, 0
+		// "ome\x80ga" becomes "omega" after sanitization, but was not a match in
+		// the source CleanContent. Augmentation must skip the fabricated match
+		// and select the window around the actual "omega" match later in CleanContent.
+		clean := "ome\x80ga bogus prefix " + strings.Repeat("x ", 120) + "actual omega target suffix"
+		result := search.SearchResult{
+			FilePath:       "invalid_utf8_clean.txt",
+			FileSize:       int64(len(clean)),
+			Score:          10,
+			TermCount:      2,
+			MatchedTerms:   []string{"alpha", "omega"},
+			RawExcerpts:    []string{"alpha"},
+			ExcerptMatches: [][]search.MatchRange{{{Start: 0, End: len("alpha"), Term: "alpha"}}},
+			CleanContent:   clean,
+		}
+		m := model{
+			results:     []search.SearchResult{result},
+			searchWords: []string{"alpha", "omega"},
+			width:       200,
+			height:      80,
+		}
+		view := m.View()
+		assertSafeTerminalView(t, view)
+		if !strings.Contains(view, "actual \x1b[1;31momega\x1b[0m target suffix") {
+			t.Fatalf("expected augmentation window around actual 'omega' match, got view:\n%s", view)
+		}
+		if strings.Contains(view, "bogus prefix") {
+			t.Fatalf("augmentation falsely selected fabricated 'ome\\x80ga' occurrence:\n%s", view)
+		}
+	})
 }
