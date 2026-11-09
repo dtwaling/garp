@@ -55,6 +55,54 @@ func TestExcerptLineWindowHonorsCallerDistance(t *testing.T) {
 	}
 }
 
+func TestExcerptLinesBalancedRemovedAndCreatedMatches(t *testing.T) {
+	raw := "<script>alpha</script>\n" + strings.Repeat("padding.\n", 100) +
+		"alpha beta\n" + strings.Repeat("padding.\n", 100) + "ALPHA2\n"
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	cleaned := CleanContent(raw)
+	if len(query.matchers[0].findAll(raw)) != 2 || len(query.matchers[0].findAll(cleaned)) != 2 {
+		t.Fatal("fixture must balance removed and created alpha occurrences")
+	}
+	spans := extractRankedExcerptSpansQuery(cleaned, query, 1, 2, 2, false, 200)
+	if len(spans) != 1 || !strings.Contains(spans[0].text, "alpha beta") {
+		t.Fatalf("expected alpha beta cluster: %#v", spans)
+	}
+	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{102}) {
+		t.Fatalf("balanced-transform anchors = %v, want [102]", got)
+	}
+}
+
+func TestExcerptLinesCursorPassesEntireCluster(t *testing.T) {
+	for _, markup := range []bool{false, true} {
+		t.Run(fmt.Sprintf("markup=%t", markup), func(t *testing.T) {
+			middle := "gamma"
+			if markup {
+				middle = "<script>gamma</script>"
+			}
+			raw := "alpha " + middle + " beta\n" + strings.Repeat("padding.\n", 100) +
+				"alpha gamma\n" + strings.Repeat("padding.\n", 100) + "alpha\n"
+			query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
+			cleaned := CleanContent(raw)
+			// Markup exercises the reported removed-gamma case. Plain text keeps
+			// the first cluster exact; clear the second cluster's identities below
+			// to independently exercise the exact-to-fallback cursor.
+			spans := extractRankedExcerptSpansQuery(cleaned, query, 2, 2, 2, false, 200)
+			if len(spans) != 2 {
+				t.Fatalf("expected two clusters: %#v", spans)
+			}
+			slices.SortFunc(spans, func(a, b excerptSpan) int { return a.left - b.left })
+			if !markup {
+				for j := range spans[1].matches {
+					spans[1].matches[j].occurrence = 0
+				}
+			}
+			if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{1, 102}) {
+				t.Fatalf("cluster cursor anchors = %v, want [1 102]", got)
+			}
+		})
+	}
+}
+
 func lineSpans(termSets ...[]int) []excerptSpan {
 	spans := make([]excerptSpan, len(termSets))
 	for i, terms := range termSets {

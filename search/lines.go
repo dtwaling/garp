@@ -86,25 +86,36 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		return best, found
 	}
 
-	// cursor keeps multi-excerpt output in document order: each excerpt prefers an anchor
-	// at or after the previous excerpt's anchor.
+	// Only the minimal cleaner is eligible for ordinal resolution. General
+	// cleaning can remove and create matches while leaving their counts equal.
+	normalizedRaw := CleanContentCode(raw)
+	// The fallback prefers anchors beyond every match in the previous cluster.
+	// Exact identities may still resolve excerpts emitted in ranking order.
 	cursor := 0
 	for i, span := range spans {
-		// Cleaning changes byte offsets but normally preserves per-term occurrence
-		// order. Resolve the emitted matches by identity before using the legacy
-		// coverage heuristic. Only trust ordinals when occurrence counts agree;
-		// markup removal can otherwise shift them relative to the raw source.
+		// Equal counts alone do not prove correspondence. Require minimal-cleaner
+		// equivalence and verify each ordinal's normalized source prefix as well.
 		sourceCounts := make([]int, len(query.matchers))
 		for _, match := range span.sourceMatches {
 			sourceCounts[match.term]++
 		}
-		lo, exact := len(raw), len(span.matches) > 0
+		lo, hi := len(raw), -1
+		exact := len(span.matches) > 0 && span.sourceText == normalizedRaw
 		for _, match := range span.matches {
+			if !exact {
+				break
+			}
 			found := false
 			for _, info := range infos {
 				if info.index == match.term && match.occurrence > 0 &&
 					match.occurrence <= len(info.offsets) && sourceCounts[match.term] == len(info.offsets) {
-					lo = min(lo, info.offsets[match.occurrence-1])
+					offset := info.offsets[match.occurrence-1]
+					if match.source.start < 0 || match.source.start > len(span.sourceText) ||
+						CleanContentCode(raw[:offset]) != strings.TrimSpace(span.sourceText[:match.source.start]) {
+						break
+					}
+					lo = min(lo, offset)
+					hi = max(hi, offset)
 					found = true
 					break
 				}
@@ -113,7 +124,7 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		}
 		if exact {
 			out[i] = li.lineOf(lo)
-			cursor = lo + 1
+			cursor = hi + 1
 			continue
 		}
 		// Determine which terms appear in this excerpt, and pick the rarest (fewest raw
@@ -168,15 +179,17 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 			continue
 		}
 
-		// Start line = the earliest present-term occurrence in the chosen cluster.
-		lo = bestPos
+		// Use the earliest occurrence for the line and the latest for the cursor,
+		// just as in the exact path, so later fallbacks cannot reuse this cluster.
+		lo, hi = bestPos, bestPos
 		for _, p := range present {
-			if o, ok := nearest(p.offsets, bestPos); ok && o < lo {
-				lo = o
+			if o, ok := nearest(p.offsets, bestPos); ok {
+				lo = min(lo, o)
+				hi = max(hi, o)
 			}
 		}
 		out[i] = li.lineOf(lo)
-		cursor = bestPos + 1
+		cursor = hi + 1
 	}
 	return out
 }
