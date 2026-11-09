@@ -1002,6 +1002,14 @@ func runPlain(args *Arguments) int {
 	return 0
 }
 
+// escapeOutputLine uses Go string escaping without surrounding quotes so data
+// cannot introduce output lines or terminal controls. Backslashes are escaped
+// too, keeping literal escape sequences distinct from encoded controls.
+func escapeOutputLine(s string) string {
+	quoted := strconv.Quote(s)
+	return quoted[1 : len(quoted)-1]
+}
+
 func writePlainOutput(w io.Writer, args *Arguments, outcome search.ExecutionResult) {
 	if args.Partial != search.PartialModeOff {
 		fmt.Fprintf(w, "Mode: partial (%s)\n", args.Partial)
@@ -1012,14 +1020,15 @@ func writePlainOutput(w io.Writer, args *Arguments, outcome search.ExecutionResu
 		return
 	}
 
-	// Use RawExcerpts (pre-highlight) -- no ANSI stripping needed.
+	// Use RawExcerpts (pre-highlight), escaping untrusted data per line.
 	// Excerpt headers carry per-chunk ranked quality when the chunk framed a
 	// ranked window; the old "[L<start>]" form is kept for quality-less chunks.
 	for i, r := range outcome.Results {
 		fmt.Fprintf(w, "MATCH %d/%d [Score: %d (%d/%d terms)]\n", i+1, outcome.Returned, r.Score, r.TermCount, len(args.SearchWords))
-		fmt.Fprintf(w, "FILE: %s\n", r.FilePath)
+		fmt.Fprintf(w, "FILE: %s\n", escapeOutputLine(r.FilePath))
 		fmt.Fprintf(w, "SIZE: %d\n", r.FileSize)
 		for j, ex := range r.RawExcerpts {
+			ex = escapeOutputLine(ex)
 			score := excerptChunkScoreAt(r.ChunkScores, j)
 			terms := excerptChunkTermCountAt(r.ChunkTermCounts, j)
 			switch {
@@ -1063,7 +1072,7 @@ func runPathOnly(args *Arguments) int {
 			continue
 		}
 		seen[r.FilePath] = struct{}{}
-		fmt.Println(r.FilePath)
+		fmt.Println(escapeOutputLine(r.FilePath))
 	}
 	return 0
 }
