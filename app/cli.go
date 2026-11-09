@@ -184,6 +184,17 @@ func positiveInt(flag, value string) (int, error) {
 	return number, nil
 }
 
+func boundedPositiveInt(flag, value string, maximum int) (int, error) {
+	number, err := positiveInt(flag, value)
+	if err != nil {
+		return 0, err
+	}
+	if number > maximum {
+		return 0, fmt.Errorf("%s: value must be at most %d", flag, maximum)
+	}
+	return number, nil
+}
+
 var onlyTypePattern = regexp.MustCompile(`^[a-z0-9_+-]+$`)
 
 func appendOnlyTypes(current []string, flag, value string) ([]string, error) {
@@ -326,20 +337,20 @@ func parseArguments(args []string) *Arguments {
 				}
 				setParseError(parseErr)
 			case "--heavy-concurrency":
-				number, parseErr := positiveInt(flag, value)
+				number, parseErr := boundedPositiveInt(flag, value, search.MaxHeavyConcurrency)
 				if parseErr == nil {
 					result.HeavyConcurrency = number
 					heavyProvided = true
 				}
 				setParseError(parseErr)
 			case "--file-timeout-binary":
-				number, parseErr := positiveInt(flag, value)
+				number, parseErr := boundedPositiveInt(flag, value, search.MaxFileTimeoutBinary)
 				if parseErr == nil {
 					result.FileTimeoutBinary = number
 				}
 				setParseError(parseErr)
 			case "--workers", "-workers":
-				number, parseErr := positiveInt(flag, value)
+				number, parseErr := boundedPositiveInt(flag, value, search.MaxWorkers)
 				if parseErr == nil {
 					result.FilterWorkers = number
 				}
@@ -528,8 +539,8 @@ func parseArguments(args []string) *Arguments {
 		if derived > ramBound {
 			derived = ramBound
 		}
-		if derived > 8 {
-			derived = 8
+		if derived > search.MaxHeavyConcurrency {
+			derived = search.MaxHeavyConcurrency
 		}
 		result.HeavyConcurrency = derived
 	}
@@ -631,9 +642,9 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum excerpts per file; >=90% new content (up to 10% overlap; default 1, max 50)"))
 	fmt.Println(infoStyle.Render("  --max-results N         Maximum matching files; 0 = unlimited."))
 	fmt.Println(infoStyle.Render("                          Defaults: --json 50, --plain 50, --pathonly 0, TUI 0."))
-	fmt.Println(infoStyle.Render("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted)"))
-	fmt.Println(infoStyle.Render("  --workers N             Stage 2 text filter workers (default 4)"))
-	fmt.Println(infoStyle.Render("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000)"))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted, max %d)", search.MaxHeavyConcurrency)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  --workers N             Stage 2 text filter workers (default 4); max %d", search.MaxWorkers)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000, max %d)", search.MaxFileTimeoutBinary)))
 	fmt.Println(infoStyle.Render("  --smart-forms           Enable smart word forms (s, es, ed, ing, al, tion/ation)"))
 	fmt.Println(infoStyle.Render("  -t, --type, --only TYPE Restrict file types; repeat or use comma-separated values"))
 	fmt.Println(infoStyle.Render("  --startdir PATH         Comma-separated search roots; specify this flag once"))
@@ -991,6 +1002,14 @@ func runPlain(args *Arguments) int {
 	return 0
 }
 
+// escapeOutputLine uses Go string escaping without surrounding quotes so data
+// cannot introduce output lines or terminal controls. Backslashes are escaped
+// too, keeping literal escape sequences distinct from encoded controls.
+func escapeOutputLine(s string) string {
+	quoted := strconv.Quote(s)
+	return quoted[1 : len(quoted)-1]
+}
+
 func writePlainOutput(w io.Writer, args *Arguments, outcome search.ExecutionResult) {
 	if args.Partial != search.PartialModeOff {
 		fmt.Fprintf(w, "Mode: partial (%s)\n", args.Partial)
@@ -1001,14 +1020,15 @@ func writePlainOutput(w io.Writer, args *Arguments, outcome search.ExecutionResu
 		return
 	}
 
-	// Use RawExcerpts (pre-highlight) -- no ANSI stripping needed.
+	// Use RawExcerpts (pre-highlight), escaping untrusted data per line.
 	// Excerpt headers carry per-chunk ranked quality when the chunk framed a
 	// ranked window; the old "[L<start>]" form is kept for quality-less chunks.
 	for i, r := range outcome.Results {
 		fmt.Fprintf(w, "MATCH %d/%d [Score: %d (%d/%d terms)]\n", i+1, outcome.Returned, r.Score, r.TermCount, len(args.SearchWords))
-		fmt.Fprintf(w, "FILE: %s\n", r.FilePath)
+		fmt.Fprintf(w, "FILE: %s\n", escapeOutputLine(r.FilePath))
 		fmt.Fprintf(w, "SIZE: %d\n", r.FileSize)
 		for j, ex := range r.RawExcerpts {
+			ex = escapeOutputLine(ex)
 			score := excerptChunkScoreAt(r.ChunkScores, j)
 			terms := excerptChunkTermCountAt(r.ChunkTermCounts, j)
 			switch {
@@ -1052,7 +1072,7 @@ func runPathOnly(args *Arguments) int {
 			continue
 		}
 		seen[r.FilePath] = struct{}{}
-		fmt.Println(r.FilePath)
+		fmt.Println(escapeOutputLine(r.FilePath))
 	}
 	return 0
 }

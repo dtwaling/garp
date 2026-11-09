@@ -1,6 +1,8 @@
 package search
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -107,13 +109,28 @@ func (match *candidateMatch) setAnalysis(analysis rankedTextAnalysis) {
 // ProgressFunc is an optional callback to report progress like: processed, total, path
 type ProgressFunc func(stage string, processed, total int, path string)
 
+const (
+	// MaxWorkers matches the discovery worker ceiling in filter.go.
+	MaxWorkers = 16
+	// MaxHeavyConcurrency matches the CLI's automatic heavy extraction ceiling.
+	MaxHeavyConcurrency = 8
+	// MaxFileTimeoutBinary caps binary extraction waits at one minute, in milliseconds.
+	MaxFileTimeoutBinary = 60_000
+)
+
 // ConcurrencyManager handles bounded concurrency for heavy operations
 type ConcurrencyManager struct {
-	sem chan struct{}
+	sem      chan struct{}
+	mu       sync.Mutex
+	progress chan struct{}
 }
 
 func NewConcurrencyManager(slots int) *ConcurrencyManager {
-	return &ConcurrencyManager{sem: make(chan struct{}, slots)}
+	slots = max(1, min(slots, MaxHeavyConcurrency))
+	return &ConcurrencyManager{
+		sem:      make(chan struct{}, slots),
+		progress: make(chan struct{}),
+	}
 }
 
 func (cm *ConcurrencyManager) Acquire() {
@@ -122,33 +139,88 @@ func (cm *ConcurrencyManager) Acquire() {
 
 func (cm *ConcurrencyManager) Release() {
 	<-cm.sem
+	cm.notifyProgress()
 }
 
-func (cm *ConcurrencyManager) ExecuteWithTimeout(fn func(), timeout time.Duration) error {
-	done := make(chan struct{}, 1) // Buffered so goroutine can always send
-	interrupted := make(chan struct{}, 1)
-
-	go func() {
-		defer func() { _ = recover() }()
-		fn()
-		select {
-		case <-interrupted:
-			// Function was interrupted, exit gracefully
-		case done <- struct{}{}:
-			// Function completed normally, signal done
-		}
-	}()
-
-	select {
-	case <-done:
-		// Clean up any lingering goroutine state
-		close(interrupted)
-		return nil
-	case <-time.After(timeout):
-		// Signal interruption and return immediately
-		close(interrupted)
-		return fmt.Errorf("operation timed out")
+func (cm *ConcurrencyManager) progressChan() <-chan struct{} {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.progress == nil {
+		cm.progress = make(chan struct{})
 	}
+	return cm.progress
+}
+
+func (cm *ConcurrencyManager) notifyProgress() {
+	cm.mu.Lock()
+	ch := cm.progress
+	cm.progress = make(chan struct{})
+	cm.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+// ExecuteWithTimeout bounds slot admission and starts a fresh deadline for fn
+// after acquiring a slot. Queued callers reset their admission wait whenever an
+// active worker releases a slot, so ordinary multi-worker contention does not
+// expire queued candidates while slots are making forward progress. The worker,
+// not the waiting caller, owns the slot until fn returns, including after a
+// timeout. Functions that cannot cooperate with cancellation remain bounded by sem.
+func (cm *ConcurrencyManager) ExecuteWithTimeout(fn func(context.Context), timeout time.Duration) error {
+	if timeout <= 0 {
+		return context.DeadlineExceeded
+	}
+	for {
+		progress := cm.progressChan()
+		admitCtx, admitCancel := context.WithTimeout(context.Background(), timeout)
+		select {
+		case cm.sem <- struct{}{}:
+			admitCancel()
+			goto admitted
+		case <-progress:
+			admitCancel()
+		case <-admitCtx.Done():
+			admitCancel()
+			return admitCtx.Err()
+		}
+	}
+
+admitted:
+	execCtx, execCancel := context.WithTimeout(context.Background(), timeout)
+	defer execCancel()
+	done := make(chan error, 1)
+	go func() {
+		var err error
+		defer func() {
+			if p := recover(); p != nil {
+				err = fmt.Errorf("extraction panicked: %v", p)
+			}
+			cm.Release()
+			done <- err
+		}()
+		fn(execCtx)
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-execCtx.Done():
+		return execCtx.Err()
+	}
+}
+
+// Cancellation is checked between random-access reads. It cannot interrupt an
+// in-flight OS read or CPU-only parser; those keep their slot until they exit.
+type contextReaderAt struct {
+	ctx context.Context
+	r   io.ReaderAt
+}
+
+func (r contextReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.ReadAt(p, off)
 }
 
 // heavySem is a single-slot semaphore to bound concurrent binary extractions
@@ -156,6 +228,8 @@ var heavySem = make(chan struct{}, 1)
 
 // SearchEngine handles the multi-word search logic
 type SearchEngine struct {
+	heavyOnce         sync.Once
+	heavyManager      *ConcurrencyManager
 	SearchWords       []string
 	ExcludeWords      []string
 	FileTypes         []string
@@ -212,6 +286,8 @@ type SearchEngine struct {
 
 // NewSearchEngine creates a new search engine instance
 func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, includeCode bool, heavyConcurrency int, fileTimeoutBinary int) *SearchEngine {
+	// Bound milliseconds before conversion to avoid time.Duration overflow.
+	fileTimeoutBinary = max(0, min(fileTimeoutBinary, MaxFileTimeoutBinary))
 	return &SearchEngine{
 		SearchWords:       append([]string(nil), searchWords...),
 		ExcludeWords:      excludeWords,
@@ -220,7 +296,7 @@ func NewSearchEngine(searchWords, excludeWords []string, fileTypes []string, inc
 		Registry:          NewExtractorRegistry(),
 		Distance:          5000,
 		Silent:            false,
-		HeavyConcurrency:  heavyConcurrency,
+		HeavyConcurrency:  max(1, min(heavyConcurrency, MaxHeavyConcurrency)),
 		FilterWorkers:     2,
 		FileTimeoutBinary: time.Duration(fileTimeoutBinary) * time.Millisecond,
 		MaxExcerpts:       1,
@@ -247,7 +323,7 @@ func (se *SearchEngine) walkOptions() WalkOptions {
 func NewSearchEngineWithWorkers(searchWords, excludeWords []string, fileTypes []string, includeCode bool, heavyConcurrency int, fileTimeoutBinary int, filterWorkers int) *SearchEngine {
 	se := NewSearchEngine(searchWords, excludeWords, fileTypes, includeCode, heavyConcurrency, fileTimeoutBinary)
 	if filterWorkers > 0 {
-		se.FilterWorkers = filterWorkers
+		se.FilterWorkers = min(filterWorkers, MaxWorkers)
 	}
 	return se
 }
@@ -472,10 +548,47 @@ func projectedCandidatePath(candidate discoveredCandidate) (displayPath, ranking
 	return filepath.Join(candidate.rankingRoot.LogicalPath, rankingRelative), rankingRelative
 }
 
+func (se *SearchEngine) extractionManager() *ConcurrencyManager {
+	// Share admission across stages and repeated searches, even when a previous
+	// stage returned with a non-cooperative extractor still running.
+	se.heavyOnce.Do(func() { se.heavyManager = NewConcurrencyManager(se.HeavyConcurrency) })
+	return se.heavyManager
+}
+
 // extractBinaryFile gates file I/O and extraction, preferring random access for containers.
 func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext string, extractor Extractor, wantEmailMeta bool) (extractedText string, fileSize int64, emailDate, emailSubject string, timedOut bool, readErr, extractErr error) {
-	cm.Acquire()
-	defer cm.Release()
+	var text, date, subject string
+	var size int64
+	var readFailure, extractFailure error
+	startXT := time.Now()
+	err := cm.ExecuteWithTimeout(func(ctx context.Context) {
+		text, size, date, subject, readFailure, extractFailure = se.extractBinaryFileWorker(ctx, filePath, ext, extractor, wantEmailMeta)
+	}, min(se.FileTimeoutBinary, time.Duration(MaxFileTimeoutBinary)*time.Millisecond))
+	durXT := time.Since(startXT)
+	switch strings.ToLower(ext) {
+	case ".eml":
+		atomic.AddInt64(&se.emlExtractCount, 1)
+		atomic.AddInt64(&se.emlExtractDurNanos, durXT.Nanoseconds())
+	case ".msg":
+		atomic.AddInt64(&se.msgExtractCount, 1)
+		atomic.AddInt64(&se.msgExtractDurNanos, durXT.Nanoseconds())
+	}
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			timedOut = true
+		} else {
+			extractErr = err
+		}
+		return
+	}
+	// Completion synchronizes worker-owned values. Never read them on timeout.
+	return text, size, date, subject, false, readFailure, extractFailure
+}
+
+func (se *SearchEngine) extractBinaryFileWorker(ctx context.Context, filePath, ext string, extractor Extractor, wantEmailMeta bool) (extractedText string, fileSize int64, emailDate, emailSubject string, readErr, extractErr error) {
+	if readErr = ctx.Err(); readErr != nil {
+		return
+	}
 
 	file, stat, err := openRegularSearchFile(filePath)
 	if err != nil {
@@ -492,19 +605,17 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 	var extract func() (string, error)
 	var metadata string
 	if raExtractor, ok := extractor.(ReaderAtExtractor); ok {
+		defer file.Close()
 		if wantEmailMeta && strings.EqualFold(ext, ".msg") {
-			prefix, err := io.ReadAll(io.LimitReader(io.NewSectionReader(file, 0, fileSize), 256*1024))
+			prefix, err := io.ReadAll(io.LimitReader(io.NewSectionReader(contextReaderAt{ctx, file}, 0, fileSize), 256*1024))
 			if err != nil {
-				file.Close()
 				readErr = err
 				return
 			}
 			metadata = string(prefix)
 		}
 		extract = func() (string, error) {
-			// A timed-out worker still owns its handle until extraction finishes.
-			defer file.Close()
-			return raExtractor.ExtractReaderAt(file, stat.Size(), DefaultMaxExtractedBytes)
+			return raExtractor.ExtractReaderAt(contextReaderAt{ctx, file}, stat.Size(), DefaultMaxExtractedBytes)
 		}
 	} else {
 		_ = adviseSequential(file)
@@ -544,25 +655,8 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 		emailSubject = strings.TrimSpace(m[1])
 	}
 
-	// Only read worker-owned values after successful completion. On timeout,
-	// the worker may still write them, but cannot mutate our return values.
-	var text string
-	var workerErr error
-	startXT := time.Now()
-	timedOut = cm.ExecuteWithTimeout(func() {
-		text, workerErr = extract()
-	}, se.FileTimeoutBinary) != nil
-	durXT := time.Since(startXT)
-	switch strings.ToLower(ext) {
-	case ".eml":
-		atomic.AddInt64(&se.emlExtractCount, 1)
-		atomic.AddInt64(&se.emlExtractDurNanos, durXT.Nanoseconds())
-	case ".msg":
-		atomic.AddInt64(&se.msgExtractCount, 1)
-		atomic.AddInt64(&se.msgExtractDurNanos, durXT.Nanoseconds())
-	}
-	if !timedOut {
-		extractedText, extractErr = text, workerErr
+	if extractErr = ctx.Err(); extractErr == nil {
+		extractedText, extractErr = extract()
 	}
 	return
 }
@@ -605,13 +699,11 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 	var processed int64
 
 	// Concurrency manager for heavy extraction gating
-	cm := NewConcurrencyManager(se.HeavyConcurrency)
+	cm := se.extractionManager()
 
 	// Worker pool for Stage 2 text filtering
-	workers := se.FilterWorkers
-	if workers < 1 {
-		workers = 1
-	}
+	// Public fields can be changed after construction; clamp before allocation.
+	workers := max(1, min(se.FilterWorkers, MaxWorkers))
 	jobs := make(chan discoveredCandidate, workers*4)
 	var wg sync.WaitGroup
 
@@ -1029,7 +1121,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		resultCapacity = min(resultCapacity, se.MaxResults)
 	}
 	results := make([]SearchResult, 0, resultCapacity)
-	cm := NewConcurrencyManager(se.HeavyConcurrency)
+	cm := se.extractionManager()
 
 	for _, match := range matchingFiles {
 		if se.MaxResults > 0 && len(results) >= se.MaxResults {

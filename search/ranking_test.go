@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -38,10 +39,11 @@ type rankingReaderAtExtractor struct {
 
 func (e *rankingReaderAtExtractor) ExtractReaderAt(r io.ReaderAt, size, limit int64) (string, error) {
 	e.readerCalls.Add(1)
-	file, ok := r.(*os.File)
+	reader, ok := r.(contextReaderAt)
 	if !ok {
-		return "", fmt.Errorf("expected *os.File, got %T", r)
+		return "", fmt.Errorf("expected cancellation-aware ReaderAt, got %T", r)
 	}
+	file := reader.r.(*os.File)
 	stat, err := file.Stat()
 	if err != nil {
 		return "", err
@@ -205,7 +207,7 @@ type rankingTimeoutReaderAtExtractor struct {
 }
 
 func (e *rankingTimeoutReaderAtExtractor) ExtractReaderAt(r io.ReaderAt, _, _ int64) (string, error) {
-	e.entered <- r.(*os.File)
+	e.entered <- r.(contextReaderAt).r.(*os.File)
 	<-e.release
 	var buf [1]byte
 	_, err := r.ReadAt(buf[:], 0)
@@ -229,8 +231,8 @@ func TestExtractBinaryFileTimeoutKeepsReaderOpen(t *testing.T) {
 	if !timedOut || readErr != nil || extractErr != nil || text != "" {
 		t.Fatalf("timeout result = %q, %v, %v, %v", text, timedOut, readErr, extractErr)
 	}
-	if len(cm.sem) != 0 {
-		t.Fatal("timeout leaked the heavy slot")
+	if len(cm.sem) != 1 {
+		t.Fatal("timeout released the active worker's heavy slot")
 	}
 	var file *os.File
 	select {
@@ -244,7 +246,7 @@ func TestExtractBinaryFileTimeoutKeepsReaderOpen(t *testing.T) {
 	extractor.release <- struct{}{}
 	select {
 	case err := <-extractor.readErr:
-		if err != nil {
+		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("ReadAt after timeout: %v", err)
 		}
 	case <-time.After(5 * time.Second):

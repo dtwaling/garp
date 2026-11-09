@@ -299,36 +299,53 @@ func patternIndicesAtRoot(
 	patternIndex, rootIndex int,
 	foldCase bool,
 ) []int {
-	if rootIndex == len(rootParts) {
-		return []int{patternIndex}
+	// Visit each pair at most once, bounding segment transitions and space
+	// by O(N*M), apart from the cost of individual path.Match calls. An
+	// explicit DFS stack preserves first-discovery order without recursion.
+	type state struct{ pattern, root int }
+	stack := []state{{patternIndex, rootIndex}}
+	visited := make(map[state]bool)
+	emitted := make([]bool, len(patternParts)+1)
+	var indices []int
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if visited[current] {
+			continue
+		}
+		visited[current] = true
+		pi, ri := current.pattern, current.root
+		if ri == len(rootParts) || pi == len(patternParts) {
+			if !emitted[pi] {
+				emitted[pi] = true
+				indices = append(indices, pi)
+			}
+			continue
+		}
+		part := patternParts[pi]
+		if part == "**" {
+			nextRoot := ri + 1
+			if pi+1 < len(patternParts) && patternParts[pi+1] == "**" {
+				// Collapse adjacent globstar consumption: the next globstar
+				// explores all suffixes first. Only this globstar's terminal
+				// offset is new; keep it for callers slicing the original pattern.
+				nextRoot = len(rootParts)
+			}
+			// Push consumption first so skipping is explored first, as in
+			// the original recursive traversal.
+			stack = append(stack, state{pi, nextRoot}, state{pi + 1, ri})
+			continue
+		}
+		rootPart := rootParts[ri]
+		if foldCase {
+			part, rootPart = strings.ToLower(part), strings.ToLower(rootPart)
+		}
+		matched, err := path.Match(part, rootPart)
+		if err == nil && matched {
+			stack = append(stack, state{pi + 1, ri + 1})
+		}
 	}
-	if patternIndex == len(patternParts) {
-		return []int{patternIndex}
-	}
-	if patternParts[patternIndex] == "**" {
-		indices := patternIndicesAtRoot(
-			patternParts,
-			rootParts,
-			patternIndex+1,
-			rootIndex,
-			foldCase,
-		)
-		return append(
-			indices,
-			patternIndicesAtRoot(patternParts, rootParts, patternIndex, rootIndex+1, foldCase)...,
-		)
-	}
-	patternPart := patternParts[patternIndex]
-	rootPart := rootParts[rootIndex]
-	if foldCase {
-		patternPart = strings.ToLower(patternPart)
-		rootPart = strings.ToLower(rootPart)
-	}
-	matched, err := path.Match(patternPart, rootPart)
-	if err != nil || !matched {
-		return nil
-	}
-	return patternIndicesAtRoot(patternParts, rootParts, patternIndex+1, rootIndex+1, foldCase)
+	return indices
 }
 
 func relativeContainedPathForPlatform(root, candidate string, windows bool) (string, bool) {

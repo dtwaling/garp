@@ -268,31 +268,41 @@ func splitPathScopeParts(s string) []string {
 }
 
 func pathScopePartsMatch(patternParts, relParts []string) bool {
-	if len(patternParts) == 0 {
-		return len(relParts) == 0
-	}
-
-	part := patternParts[0]
-	if part == "**" {
-		if pathScopePartsMatch(patternParts[1:], relParts) {
-			return true
+	// reachable[j] means the pattern prefix matches the first j path parts.
+	// Visit each (pattern, path) state once: O(N*M) segment transitions and
+	// O(M) space, in addition to the cost of individual path.Match calls.
+	reachable := make([]bool, len(relParts)+1)
+	reachable[0] = true
+	for i, part := range patternParts {
+		if part == "**" {
+			// Normalize consecutive globstars as we consume the pattern. The
+			// shared splitter also handles literal paths, which must not collapse.
+			if i > 0 && patternParts[i-1] == "**" {
+				continue
+			}
+			for j := 1; j < len(reachable); j++ {
+				// Either consume no part, or extend this globstar by one part.
+				reachable[j] = reachable[j] || reachable[j-1]
+			}
+			continue
 		}
-		for i := range relParts {
-			if pathScopePartsMatch(patternParts[1:], relParts[i+1:]) {
-				return true
+
+		// Descend so the preceding pattern row is not overwritten before use.
+		anyReachable := false
+		for j := len(relParts); j > 0; j-- {
+			reachable[j] = false
+			if reachable[j-1] {
+				matched, err := path.Match(part, relParts[j-1])
+				reachable[j] = err == nil && matched
+				anyReachable = anyReachable || reachable[j]
 			}
 		}
-		return false
+		reachable[0] = false
+		if !anyReachable {
+			return false
+		}
 	}
-
-	if len(relParts) == 0 {
-		return false
-	}
-	matched, err := path.Match(part, relParts[0])
-	if err != nil || !matched {
-		return false
-	}
-	return pathScopePartsMatch(patternParts[1:], relParts[1:])
+	return reachable[len(relParts)]
 }
 
 func pathScopeLiteralPrefix(pattern string) string {
