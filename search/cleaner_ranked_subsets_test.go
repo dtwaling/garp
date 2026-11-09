@@ -79,6 +79,62 @@ func TestRankedExcerptSpansDenseLowerQualityNeighborhoodCollapses(t *testing.T) 
 	requireBoundedNovelSpans(t, content, spans, "alpha")
 }
 
+func TestRankedExcerptSpansRespectDistance(t *testing.T) {
+	content := "alpha beta " + strings.Repeat("padding ", 150) + "gamma"
+	query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
+	const distance = 20
+	analysis, ok := analyzeRankedText(content, query, distance, false)
+	if !ok || analysis.TermCount != 2 {
+		t.Fatalf("Stage 2 = %#v, %v; want two-term match", analysis, ok)
+	}
+	// Also use a higher target to prove distance rejection independently of the cap.
+	for _, target := range []int{analysis.TermCount, 3} {
+		for _, isCode := range []bool{false, true} {
+			spans := extractRankedExcerptSpansQuery(content, query, 3, target, 2, isCode, distance)
+			if len(spans) != 1 {
+				t.Fatalf("target=%d code=%v: got %d spans, want 1", target, isCode, len(spans))
+			}
+			if spans[0].termCount != 2 || spans[0].score != analysis.Score || strings.Contains(spans[0].text, "gamma") {
+				t.Fatalf("target=%d code=%v: stitched distant term or wrong quality: %#v", target, isCode, spans[0])
+			}
+		}
+	}
+}
+
+func TestRankedExcerptSpansCapCoverageAtTarget(t *testing.T) {
+	content := "alpha beta gamma"
+	query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
+	spans := extractRankedExcerptSpansQuery(content, query, 3, 2, 2, false, len(content))
+	if len(spans) != 1 || spans[0].termCount != 2 || spans[0].score != len("alpha")+len("beta") {
+		t.Fatalf("spans = %#v, want one two-term candidate capped at target", spans)
+	}
+}
+
+func TestRankedExcerptSpansRequirePrimaryTerm(t *testing.T) {
+	query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
+	for _, content := range []string{
+		"beta gamma",
+		"alpha " + strings.Repeat("padding ", 150) + "beta gamma",
+	} {
+		spans := extractRankedExcerptSpansQuery(content, query, 3, 2, 2, false, 20)
+		if len(spans) != 0 {
+			t.Fatalf("spans = %#v, want no relaxed candidates without nearby primary term", spans)
+		}
+	}
+}
+
+func TestRankedExcerptSpansDistanceBoundary(t *testing.T) {
+	const content = "alpha beta"
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	for _, distance := range []int{0, 5, 6} {
+		_, qualifies := analyzeRankedText(content, query, distance, true)
+		spans := extractRankedExcerptSpansQuery(content, query, 1, 2, 0, false, distance)
+		if (len(spans) == 1) != qualifies {
+			t.Fatalf("distance=%d: got %d spans, Stage 2 qualifies=%v", distance, len(spans), qualifies)
+		}
+	}
+}
+
 func TestRankedExcerptSpansRespectMaxExcerpts(t *testing.T) {
 	SetExcerptContextLimit(100)
 	t.Cleanup(func() { SetExcerptContextLimit(0) })

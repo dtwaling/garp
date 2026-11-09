@@ -1221,7 +1221,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		var excerpts []string
 		var spans []excerptSpan
 		// Per-file ranked subset: every coverage level from the query's minimum
-		// match requirement up to the full term set can seed a chunk, so a file's
+		// match requirement up to its Stage 2 term count can seed a chunk, so a file's
 		// best cluster no longer suppresses separate lower-quality clusters.
 		// minTerms mirrors Strategy A: relaxed 3+ term queries seed from 2-term
 		// clusters up; strict (and 1-2 term) queries require the full set.
@@ -1230,10 +1230,10 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 			minTerms = 2
 		}
 		if isCode {
-			spans = extractRankedExcerptSpansQuery(cleanContent, query, maxExcerpts, match.termCount, minTerms, true)
+			spans = extractRankedExcerptSpansQuery(cleanContent, query, maxExcerpts, match.termCount, minTerms, true, se.Distance)
 			excerpts = excerptSpanTexts(spans)
 		} else {
-			spans = extractRankedExcerptSpansQuery(cleanContent, query, maxExcerpts, match.termCount, minTerms, false)
+			spans = extractRankedExcerptSpansQuery(cleanContent, query, maxExcerpts, match.termCount, minTerms, false, se.Distance)
 			excerpts = excerptSpanTexts(spans)
 		}
 

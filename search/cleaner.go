@@ -473,11 +473,11 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 }
 
 func extractExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetScore int, isCode bool) []excerptSpan {
-	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetScore, 0, isCode)
+	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetScore, 0, isCode, -1)
 }
 
 // extractRankedExcerptSpans emits per-file chunks ranked best-first. Every
-// coverage level from minTerms up to the full distinct-term count can seed a
+// coverage level from minTerms up to targetScore can seed a
 // chunk, so a file's best cluster no longer suppresses its other, separate
 // lower-quality clusters (the per-file result subset).
 func extractRankedExcerptSpans(content string, searchTerms []string, maxExcerpts int, targetScore int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
@@ -489,11 +489,12 @@ func extractRankedExcerptSpans(content string, searchTerms []string, maxExcerpts
 // legacy single-level behavior runs otherwise.
 func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
 	query := compileQuery(searchTerms, partial)
-	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetScore, minTerms, isCode)
+	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetScore, minTerms, isCode, -1)
 }
 
 // extractRankedExcerptSpansQuery reuses the execution's exact matcher ranges.
-func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetScore int, minTerms int, isCode bool) []excerptSpan {
+// A negative distance preserves unconstrained legacy helper behavior.
+func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetScore int, minTerms int, isCode bool, distance int) []excerptSpan {
 	var cleaned string
 	if isCode {
 		// Minimal cleaning: preserve every code token; only normalize control chars/whitespace.
@@ -524,12 +525,11 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 		targetScore = len(query.matchers)
 	}
 	// Coverage levels that can seed a chunk. Ranked mode (minTerms > 0) spans
-	// minTerms up to the full term set so every quality tier of cluster is
+	// minTerms up to the Stage 2 term count so every allowed quality tier is
 	// eligible; the legacy single-level path pins the level to targetScore.
 	levelMin, levelMax := targetScore, targetScore
 	if minTerms > 0 {
 		levelMin = max(1, minTerms)
-		levelMax = len(query.matchers)
 	}
 
 	// Clamp window for scanning sentence boundaries around each match
@@ -595,7 +595,9 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 					counts[mm.idx]++
 					r++
 				}
-				if covered == level {
+				// Match Stage 2's inclusive start-to-start proximity window.
+				if covered == level && (minTerms <= 0 || counts[0] > 0) &&
+					(distance < 0 || all[r-1].start-all[l].start <= distance) {
 					right := all[l].end
 					score, termCount := 0, 0
 					for i := l; i < r; i++ {
@@ -749,6 +751,11 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 		if len(excerpts) > 0 {
 			return excerpts
 		}
+	}
+
+	// Do not let the legacy sentence fallback bypass ranked constraints.
+	if distance >= 0 || minTerms > 0 {
+		return excerpts
 	}
 
 	// Ensure at least one sentence per term (when possible)
