@@ -6,11 +6,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"garp/config"
+	"garp/internal/terminaltext"
 	"garp/search"
 )
 
@@ -280,7 +282,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case progressMsg:
 		// Update the top progress line (only shown while loading)
-		p := msg.Path
+		p := terminaltext.Sanitize(msg.Path)
 		// Update total only during discovery when provided
 		if strings.EqualFold(msg.Stage, "discovery") && msg.Total > 0 {
 			m.totalFiles = msg.Total
@@ -289,9 +291,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pdfSkipped = msg.PdfSkipped
 		m.pdfTruncated = msg.PdfTruncated
 		if msg.Total > 0 {
-			m.progressText = fmt.Sprintf("%s [%d/%d]: %s", strings.Title(msg.Stage), msg.Count, msg.Total, p)
+			m.progressText = fmt.Sprintf("%s [%d/%d]: %s", strings.Title(terminaltext.Sanitize(msg.Stage)), msg.Count, msg.Total, p)
 		} else {
-			m.progressText = fmt.Sprintf("%s [%d]: %s", strings.Title(msg.Stage), msg.Count, p)
+			m.progressText = fmt.Sprintf("%s [%d]: %s", strings.Title(terminaltext.Sanitize(msg.Stage)), msg.Count, p)
 		}
 		// Keep polling progress while loading
 		return m, pollProgress()
@@ -304,7 +306,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		progressMu.Unlock()
 
 		if hv {
-			p := lp.Path
+			p := terminaltext.Sanitize(lp.Path)
 			// Update total only during discovery when provided
 			if strings.EqualFold(lp.Stage, "discovery") && lp.Total > 0 {
 				m.totalFiles = lp.Total
@@ -313,9 +315,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pdfSkipped = lp.PdfSkipped
 			m.pdfTruncated = lp.PdfTruncated
 			if lp.Total > 0 {
-				m.progressText = fmt.Sprintf("%s [%d/%d]: %s", strings.Title(lp.Stage), lp.Count, lp.Total, p)
+				m.progressText = fmt.Sprintf("%s [%d/%d]: %s", strings.Title(terminaltext.Sanitize(lp.Stage)), lp.Count, lp.Total, p)
 			} else {
-				m.progressText = fmt.Sprintf("%s [%d]: %s", strings.Title(lp.Stage), lp.Count, p)
+				m.progressText = fmt.Sprintf("%s [%d]: %s", strings.Title(terminaltext.Sanitize(lp.Stage)), lp.Count, p)
 			}
 		}
 		return m, pollProgress()
@@ -355,7 +357,7 @@ func (m model) View() string {
 	// Search terms (full list, wrapped)
 	{
 		// Build full comma-separated list and wrap
-		searchLine := wrapTextWithIndent("🔍 Searching: ", strings.Join(m.searchWords, ", "), width-4)
+		searchLine := wrapTextWithIndent("🔍 Searching: ", terminaltext.Sanitize(strings.Join(m.searchWords, ", ")), width-4)
 
 		// Append excluded non-extension words (full list)
 		var exWords []string
@@ -365,7 +367,7 @@ func (m model) View() string {
 			}
 		}
 		if len(exWords) > 0 {
-			searchLine += "  🚫 " + strings.Join(exWords, ", ")
+			searchLine += "  🚫 " + terminaltext.Sanitize(strings.Join(exWords, ", "))
 		}
 		headerLines = append(headerLines, subHeaderStyle.Render(searchLine))
 	}
@@ -394,7 +396,7 @@ func (m model) View() string {
 		}
 		suffix = "  🚫 " + strings.Join(shown, ", ")
 	}
-	headerLines = append(headerLines, targetStyled.Render(wrapTextWithIndent(targetPrefix, targetDesc+suffix, width-4)))
+	headerLines = append(headerLines, targetStyled.Render(wrapTextWithIndent(targetPrefix, terminaltext.Sanitize(targetDesc+suffix), width-4)))
 
 	// Engine line with cores + RAM/CPU live (aligned)
 	engineContent := fmt.Sprintf("Workers %d • Concurrent %d%s", m.filterWorkers, m.heavyConcurrency, m.memUsageText)
@@ -432,7 +434,7 @@ func (m model) View() string {
 		var txt string
 		if m.progressText != "" {
 			// Show aligned progress with wrapping
-			txt = wrapTextWithIndent("⏳ Progress:  ", m.progressText, width-4)
+			txt = wrapTextWithIndent("⏳ Progress:  ", terminaltext.Sanitize(m.progressText), width-4)
 		} else {
 			txt = "⏳ Progress:  "
 		}
@@ -467,21 +469,32 @@ func (m model) View() string {
 	} else {
 		// Display current result
 		result := m.results[m.currentPage]
-		boxContent = fmt.Sprintf("File: %s (%s) • Score: %d (%d/%d terms)\n\n", result.FilePath, formatFileSize(result.FileSize), result.Score, result.TermCount, len(m.searchWords))
+		boxContent = fmt.Sprintf("File: %s (%s) • Score: %d (%d/%d terms)\n\n", terminaltext.Sanitize(result.FilePath), formatFileSize(result.FileSize), result.Score, result.TermCount, len(m.searchWords))
 
 		// Add email metadata if available
 		if result.EmailSubject != "" {
-			boxContent += fmt.Sprintf("Subject: %s\n", result.EmailSubject)
+			boxContent += fmt.Sprintf("Subject: %s\n", terminaltext.Sanitize(result.EmailSubject))
 		}
 		if result.EmailDate != "" {
-			boxContent += fmt.Sprintf("Date: %s\n", result.EmailDate)
+			boxContent += fmt.Sprintf("Date: %s\n", terminaltext.Sanitize(result.EmailDate))
 		}
 		if result.EmailSubject != "" || result.EmailDate != "" {
 			boxContent += "\n"
 		}
 
-		// Add excerpts (single wrapped line with colored label)
-		for i, excerpt := range result.Excerpts {
+		// Rebuild highlighting from sanitized text, never trust embedded styles.
+		excerpts := result.RawExcerpts
+		if len(excerpts) == 0 {
+			excerpts = result.Excerpts
+		}
+		options := search.QueryOptions{CaseSensitive: m.caseSensitive, SmartForms: m.smartForms}
+		for i, rawExcerpt := range excerpts {
+			hasValidatedMatches := i < len(result.ExcerptMatches)
+			var validatedMatches []search.MatchRange
+			if hasValidatedMatches {
+				validatedMatches = result.ExcerptMatches[i]
+			}
+			excerpt := sanitizeAndHighlightExcerpt(rawExcerpt, validatedMatches, hasValidatedMatches, m.searchWords, m.partial, options)
 			labelText := fmt.Sprintf("Excerpt %d: ", i+1)
 			if start := excerptStartLineAt(result.StartLines, i); start > 0 {
 				labelText = fmt.Sprintf("Excerpt %d (%s): ", i+1, formatLine(start))
@@ -494,48 +507,51 @@ func (m model) View() string {
 
 			// Minimal augmentation for Excerpt 1: if excerpts are short and some terms are missing,
 			// append small windows from CleanContent to ensure all terms are visible without blowing up layout.
-			if i == 0 && len(result.Excerpts) > 0 && result.CleanContent != "" {
+			if i == 0 && len(excerpts) > 0 && result.CleanContent != "" {
 				totalLen := 0
-				for _, ex := range result.Excerpts {
+				for _, ex := range excerpts {
 					totalLen += len(ex)
 				}
 				if totalLen < 400 {
 					// Find missing terms with the engine's active matching semantics.
-					options := search.QueryOptions{CaseSensitive: m.caseSensitive, SmartForms: m.smartForms}
 					missing := make([]string, 0, len(result.MatchedTerms))
 					for _, term := range result.MatchedTerms {
-						if search.FindTermIndex(excerpt, term, m.partial, options) == nil {
+						if !excerptContainsTerm(rawExcerpt, validatedMatches, hasValidatedMatches, result, term, m.partial, options) {
 							missing = append(missing, term)
 						}
 					}
 					// Append small windows around missing terms from CleanContent
 					if len(missing) > 0 {
-						extra := ""
+						rawCleanRanges := search.FindMatchRangesWithOptions(result.CleanContent, m.searchWords, m.partial, options)
+						cleanContent, cleanOffsets := terminaltext.SanitizeWithOffsets(result.CleanContent)
+						cleanRanges := translateMatchRanges(rawCleanRanges, cleanOffsets, len(result.CleanContent))
+						var extraParts []string
+						rawExtraLen := 0
 						budget := 400
 						for _, term := range missing {
-							if len(extra) >= budget {
+							if rawExtraLen >= budget {
 								break
 							}
-							loc := search.FindTermIndex(result.CleanContent, term, m.partial, options)
-							if loc != nil {
-								start := loc[0] - 120
-								if start < 0 {
-									start = 0
+							loc, ok := firstTermMatchRange(cleanRanges, term, options)
+							if !ok {
+								rawTermRanges := search.FindMatchRangesWithOptions(result.CleanContent, []string{term}, m.partial, options)
+								termRanges := translateMatchRanges(rawTermRanges, cleanOffsets, len(result.CleanContent))
+								cleanRanges = append(cleanRanges, termRanges...)
+								loc, ok = firstTermMatchRange(termRanges, term, options)
+							}
+							if ok {
+								start, end := alignUTF8SliceBounds(cleanContent, loc.Start-120, loc.End+120)
+								frag := cleanContent[start:end]
+								if len(extraParts) > 0 {
+									rawExtraLen += len(" ... ")
 								}
-								end := loc[1] + 120
-								if end > len(result.CleanContent) {
-									end = len(result.CleanContent)
-								}
-								frag := result.CleanContent[start:end]
-								if extra != "" {
-									extra += " ... "
-								}
-								extra += frag
+								rawExtraLen += len(frag)
+								fragRanges := sliceMatchRanges(cleanRanges, start, end)
+								extraParts = append(extraParts, search.HighlightRanges(frag, fragRanges))
 							}
 						}
-						if extra != "" {
-							extra = search.HighlightTermsWithOptions(extra, m.searchWords, m.partial, options)
-							excerpt = excerpt + "\n" + extra
+						if len(extraParts) > 0 {
+							excerpt = excerpt + "\n" + strings.Join(extraParts, " ... ")
 						}
 					}
 				}
@@ -806,6 +822,108 @@ func wrapTextWithIndent(prefix, text string, width int) string {
 	indent := strings.Repeat(" ", prefixWidth)
 	wrapped := lipgloss.NewStyle().Width(width - prefixWidth).Render(text)
 	return prefix + strings.ReplaceAll(wrapped, "\n", "\n"+indent)
+}
+
+func sanitizeAndHighlightExcerpt(raw string, matches []search.MatchRange, hasValidatedMatches bool, searchWords []string, partial search.PartialMode, options search.QueryOptions) string {
+	if !hasValidatedMatches {
+		matches = search.FindMatchRangesWithOptions(raw, searchWords, partial, options)
+	}
+	sanitized, offsets := terminaltext.SanitizeWithOffsets(raw)
+	return search.HighlightRanges(sanitized, translateMatchRanges(matches, offsets, len(raw)))
+}
+
+func translateMatchRanges(matches []search.MatchRange, offsets []int, rawLen int) []search.MatchRange {
+	translated := make([]search.MatchRange, 0, len(matches))
+	for _, m := range matches {
+		start := max(0, min(m.Start, rawLen))
+		end := max(start, min(m.End, rawLen))
+		if offsets[end] > offsets[start] {
+			translated = append(translated, search.MatchRange{
+				Start: offsets[start],
+				End:   offsets[end],
+				Term:  m.Term,
+			})
+		}
+	}
+	return translated
+}
+
+func matchRangeMatchesTerm(rangeTerm, queryTerm string, options search.QueryOptions) bool {
+	if rangeTerm == queryTerm || (!options.CaseSensitive && strings.EqualFold(rangeTerm, queryTerm)) {
+		return true
+	}
+	norm := search.NormalizeQueryTermsWithOptions([]string{queryTerm}, options)
+	if len(norm) == 1 {
+		return rangeTerm == norm[0] || (!options.CaseSensitive && strings.EqualFold(rangeTerm, norm[0]))
+	}
+	return false
+}
+
+func firstTermMatchRange(ranges []search.MatchRange, term string, options search.QueryOptions) (search.MatchRange, bool) {
+	for _, r := range ranges {
+		if r.End > r.Start && r.Term != "" && matchRangeMatchesTerm(r.Term, term, options) {
+			return r, true
+		}
+	}
+	return search.MatchRange{}, false
+}
+
+func sliceMatchRanges(ranges []search.MatchRange, start, end int) []search.MatchRange {
+	var local []search.MatchRange
+	for _, r := range ranges {
+		if r.Start >= start && r.End <= end && r.End > r.Start {
+			local = append(local, search.MatchRange{
+				Start: r.Start - start,
+				End:   r.End - start,
+				Term:  r.Term,
+			})
+		}
+	}
+	return local
+}
+
+func alignUTF8SliceBounds(s string, start, end int) (int, int) {
+	start = max(0, min(start, len(s)))
+	end = max(start, min(end, len(s)))
+	for start < end && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	for end > start && end < len(s) && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return start, end
+}
+
+func excerptContainsTerm(rawExcerpt string, matches []search.MatchRange, hasValidatedMatches bool, result search.SearchResult, term string, partial search.PartialMode, options search.QueryOptions) bool {
+	if !hasValidatedMatches {
+		matches = search.FindMatchRangesWithOptions(rawExcerpt, []string{term}, partial, options)
+	}
+	_, offsets := terminaltext.SanitizeWithOffsets(rawExcerpt)
+	for _, m := range matches {
+		start := max(0, min(m.Start, len(rawExcerpt)))
+		end := max(start, min(m.End, len(rawExcerpt)))
+		if end <= start || offsets[end] <= offsets[start] {
+			continue
+		}
+		if m.Term != "" {
+			if matchRangeMatchesTerm(m.Term, term, options) {
+				return true
+			}
+			continue
+		}
+		sub := rawExcerpt[start:end]
+		if search.FindTermIndex(sub, term, partial, options) != nil {
+			return true
+		}
+		if strings.ContainsAny(term, "*?") && result.CleanContent != "" {
+			for _, full := range search.FindMatchRangesWithOptions(result.CleanContent, []string{term}, partial, options) {
+				if full.Start >= 0 && full.End <= len(result.CleanContent) && strings.HasPrefix(result.CleanContent[full.Start:full.End], sub) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (m model) memUsageTick() tea.Cmd {

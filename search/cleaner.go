@@ -1017,6 +1017,14 @@ func containsWholeWord(text, word string) bool {
 	return getWordRegex(pattern).MatchString(text)
 }
 
+// MatchRange is a half-open byte range [Start, End) of a source-validated match,
+// along with the canonical query Term that produced it when known.
+type MatchRange struct {
+	Start int
+	End   int
+	Term  string
+}
+
 // HighlightTerms highlights search terms in text with legacy whole-word matching.
 func HighlightTerms(text string, searchTerms []string) string {
 	return HighlightTermsPartial(text, searchTerms, PartialModeOff)
@@ -1033,12 +1041,69 @@ func HighlightTermsWithOptions(text string, searchTerms []string, partial Partia
 	return highlightTermsQuery(text, compileQueryWithOptions(searchTerms, partial, options))
 }
 
+// FindMatchRangesWithOptions returns source-validated byte ranges for all search
+// terms in text under the given matching mode and options.
+func FindMatchRangesWithOptions(text string, searchTerms []string, partial PartialMode, options QueryOptions) []MatchRange {
+	query := compileQueryWithOptions(searchTerms, partial, options)
+	var ranges []MatchRange
+	for i, matcher := range query.matchers {
+		var term string
+		if i < len(query.terms) {
+			term = query.terms[i]
+		}
+		for _, loc := range matcher.findAll(text) {
+			ranges = append(ranges, MatchRange{Start: loc.start, End: loc.end, Term: term})
+		}
+	}
+	return ranges
+}
+
+// HighlightRanges applies ANSI highlight styling to pre-validated byte ranges in text.
+func HighlightRanges(text string, ranges []MatchRange) string {
+	if len(ranges) == 0 {
+		return text
+	}
+	exact := make([]matchRange, 0, len(ranges))
+	for _, r := range ranges {
+		start := max(0, min(r.Start, len(text)))
+		end := max(start, min(r.End, len(text)))
+		if utf8.ValidString(text) {
+			for start < end && !utf8.RuneStart(text[start]) {
+				start++
+			}
+			for end > start && end < len(text) && !utf8.RuneStart(text[end]) {
+				end--
+			}
+		}
+		if end > start {
+			exact = append(exact, matchRange{start: start, end: end})
+		}
+	}
+	return highlightExactRanges(text, exact)
+}
+
 func highlightTermsQuery(text string, query compiledQuery) string {
 	var ranges []matchRange
 	for _, matcher := range query.matchers {
 		ranges = append(ranges, matcher.findAll(text)...)
 	}
 	return highlightExactRanges(text, ranges)
+}
+
+func excerptSpanMatchRanges(span excerptSpan, query compiledQuery) []MatchRange {
+	ranges := make([]MatchRange, len(span.matches))
+	for i, match := range span.matches {
+		var term string
+		if match.term >= 0 && match.term < len(query.terms) {
+			term = query.terms[match.term]
+		}
+		ranges[i] = MatchRange{
+			Start: match.start,
+			End:   match.end,
+			Term:  term,
+		}
+	}
+	return ranges
 }
 
 func highlightExcerptSpan(span excerptSpan) string {
