@@ -55,8 +55,8 @@ func TestPartialStreamingPrefilters(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			found, decided := search.BinaryStreamingPrefilterDecidedPartial(path, tt.words, 0, tt.partial)
-			if !decided {
-				t.Fatal("prefilter was inconclusive for a small candidate")
+			if decided != tt.want {
+				t.Fatalf("decided = %v, want %v (raw misses require extraction)", decided, tt.want)
 			}
 			if found != tt.want {
 				t.Fatalf("BinaryStreamingPrefilterDecidedPartial() = %v, want %v", found, tt.want)
