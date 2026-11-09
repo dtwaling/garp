@@ -756,16 +756,36 @@ func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQu
 				}
 				parts := make([]string, 0, len(query.matchers))
 				partMatches := make([]excerptMatch, 0, len(query.matchers))
+				locations := make([]matchRange, 0, len(query.matchers))
 				for i := range query.matchers {
-					loc, ok := firstRangeWithin(rangesByMatcher[i], c.left, c.right)
-					if !ok {
-						continue
+					if loc, ok := firstRangeWithin(rangesByMatcher[i], c.left, c.right); ok {
+						locations = append(locations, loc)
 					}
+				}
+				sort.Slice(locations, func(i, j int) bool { return locations[i].start < locations[j].start })
+				windows := make([]matchRange, 0, len(locations))
+				for _, loc := range locations {
 					center := loc.start + (loc.end-loc.start)/2
 					partLeft := max(0, center-perTerm/2)
 					partRight := min(len(cleaned), center+perTerm/2)
 					partLeft, partRight = normalizeExcerptBounds(cleaned, partLeft, partRight)
-					frag, fragMatches := formatMultipartExcerptText(cleaned, partLeft, partRight, allExactMatches)
+					windows = append(windows, matchRange{start: partLeft, end: partRight})
+				}
+				// Nested matches can have centers in a different order than their
+				// starts. Merge context windows in source order before formatting
+				// so neither text nor match metadata is duplicated at overlaps.
+				sort.Slice(windows, func(i, j int) bool { return windows[i].start < windows[j].start })
+				merged := windows[:0]
+				for _, part := range windows {
+					if len(merged) > 0 && part.start <= merged[len(merged)-1].end {
+						last := &merged[len(merged)-1]
+						last.end = max(last.end, part.end)
+					} else {
+						merged = append(merged, part)
+					}
+				}
+				for _, part := range merged {
+					frag, fragMatches := formatMultipartExcerptText(cleaned, part.start, part.end, allExactMatches)
 					if frag != "" {
 						shift := 0
 						if len(parts) > 0 {
