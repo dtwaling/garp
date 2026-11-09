@@ -2,7 +2,6 @@ package search
 
 import (
 	"regexp"
-	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -196,8 +195,8 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		for k, l := range locs {
 			offs[k] = l.start
 		}
-		// A term with no raw occurrences can never be an anchor; skip it here so the
-		// per-excerpt loop below doesn't have to filter empty-offset entries.
+		// Code and heuristic anchors need raw occurrences. Document byte mappings
+		// can anchor retained matches even when cleaning created their boundaries.
 		if len(offs) > 0 {
 			infos = append(infos, termInfo{index: index, offsets: offs})
 		}
@@ -272,33 +271,48 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 			if !exact {
 				break
 			}
+			if match.source.start < 0 || match.source.start >= len(span.sourceText) {
+				exact = false
+				break
+			}
+			if document != nil {
+				start, end := match.source.start, match.source.end
+				if end <= start || end > len(span.sourceText) || end > len(document.offsets) {
+					exact = false
+					break
+				}
+				offset := document.offsets[start]
+				if offset < 0 || offset >= len(raw) || end-start > len(raw)-offset {
+					exact = false
+					break
+				}
+				// Cleaning can create word boundaries around retained bytes. Trust
+				// their identity, not raw matcher membership, but reject any match
+				// containing synthetic bytes or crossing a removed raw segment.
+				for j := start; j < end; j++ {
+					if document.offsets[j] != offset+j-start {
+						exact = false
+						break
+					}
+				}
+				if !exact {
+					break
+				}
+				lo = min(lo, offset)
+				hi = max(hi, offset)
+				continue
+			}
 			found := false
 			for _, info := range infos {
 				if info.index != match.term {
 					continue
 				}
-				if match.source.start < 0 || match.source.start >= len(span.sourceText) {
+				if match.occurrence <= 0 || match.occurrence > len(info.offsets) || sourceCounts[match.term] != len(info.offsets) {
 					break
 				}
-				var offset int
-				if document != nil {
-					if match.source.start >= len(document.offsets) {
-						break
-					}
-					// Both mappings use raw byte offsets. Removed occurrences shift
-					// ordinals, but surviving bytes retain their exact identities.
-					offset = document.offsets[match.source.start]
-					if _, ok := slices.BinarySearch(info.offsets, offset); !ok {
-						break
-					}
-				} else {
-					if match.occurrence <= 0 || match.occurrence > len(info.offsets) || sourceCounts[match.term] != len(info.offsets) {
-						break
-					}
-					offset = info.offsets[match.occurrence-1]
-					if !prefixes[offset].corresponds(normalizedRaw, len(strings.TrimSpace(span.sourceText[:match.source.start]))) {
-						break
-					}
+				offset := info.offsets[match.occurrence-1]
+				if !prefixes[offset].corresponds(normalizedRaw, len(strings.TrimSpace(span.sourceText[:match.source.start]))) {
+					break
 				}
 				lo = min(lo, offset)
 				hi = max(hi, offset)

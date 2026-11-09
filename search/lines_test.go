@@ -245,20 +245,82 @@ func TestExcerptLinesDocumentInvalidMatchStart(t *testing.T) {
 	raw := "<b>noise</b>\nALPHA2\nalpha\n"
 	query := compileQuery([]string{"alpha"}, PartialModeOff)
 	mapped := documentCorrespondence(raw, true)
-	for _, start := range []int{strings.Index(mapped.text, "ALPHA"), -1, len(mapped.text)} {
-		t.Run(fmt.Sprintf("start=%d", start), func(t *testing.T) {
-			match := excerptMatch{term: 0, source: matchRange{start: start}, occurrence: 1}
+	start := strings.Index(mapped.text, "ALPHA")
+	if mapped.offsets[start+5] != -1 {
+		t.Fatal("fixture must insert a synthetic space after ALPHA")
+	}
+	for _, tc := range []struct {
+		name             string
+		start, end, want int
+	}{
+		{"retained word", start, start + 5, 2},
+		{"negative start", -1, 4, 0}, // Fallback treats -1 as absent metadata.
+		{"past end", len(mapped.text), len(mapped.text) + 5, 3},
+		{"synthetic start", start + 5, start + 6, 3},
+		{"synthetic interior", start, start + 7, 3},
+		{"empty match", start, start, 3},
+		{"reversed range", start, start - 1, 3},
+		{"end out of bounds", start, len(mapped.text) + 1, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			match := excerptMatch{term: 0, source: matchRange{start: tc.start, end: tc.end}, occurrence: 1}
 			span := excerptSpan{sourceText: mapped.text, sourceMatches: []excerptMatch{match}, matches: []excerptMatch{match}}
-			// ALPHA2 is split by cleaning, but its raw offset is not a whole-term
-			// match start. Invalid offsets must likewise fall back safely.
-			want := 3
-			if start == -1 {
-				want = 0 // The fallback treats -1 as absent source metadata.
-			}
-			if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{span}, query, 200); !slices.Equal(got, []int{want}) {
-				t.Fatalf("fallback anchors = %v, want [%d]", got, want)
+			if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{span}, query, 200); !slices.Equal(got, []int{tc.want}) {
+				t.Fatalf("anchors = %v, want [%d]", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestExcerptLinesDocumentCleaningInducedWordBoundary(t *testing.T) {
+	// Lowercase identifiers remain unchanged; OCR splitting is uppercase-only.
+	if got := CleanContent("2alpha"); got != "2alpha" {
+		t.Fatalf("lowercase identifier = %q, want 2alpha", got)
+	}
+	for _, term := range []string{"ALPHA2", "2ALPHA", "--alpha--"} {
+		for _, later := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/later=%t", term, later), func(t *testing.T) {
+				raw := "<b>noise</b>\n" + term + "\n"
+				want := []int{2}
+				if later {
+					raw += strings.Repeat("padding.\n", 100) + "alpha\n"
+					want = append(want, 103)
+				}
+				query := compileQuery([]string{"alpha"}, PartialModeOff)
+				if !later && term != "--alpha--" && len(query.matchers[0].findAll(raw)) != 0 {
+					t.Fatal("fixture must have no raw whole-word matches")
+				}
+				spans := extractRankedExcerptSpansQuery(CleanContent(raw), query, 2, 1, 1, false, 200)
+				if len(spans) != len(want) {
+					t.Fatalf("got %d excerpts, want %d", len(spans), len(want))
+				}
+				slices.SortFunc(spans, func(a, b excerptSpan) int { return a.left - b.left })
+				if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, want) {
+					t.Fatalf("anchors = %v, want %v", got, want)
+				}
+				slices.Reverse(spans)
+				slices.Reverse(want)
+				if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, want) {
+					t.Fatalf("reverse anchors = %v, want %v", got, want)
+				}
+			})
+		}
+	}
+}
+
+func TestExcerptLinesDocumentNoncontiguousMatch(t *testing.T) {
+	// Removing a script joins retained bytes without inserting a synthetic byte.
+	raw := "<b>noise</b>\nal<script>noise</script>pha\nalpha\n"
+	query := compileQuery([]string{"alpha"}, PartialModeOff)
+	mapped := documentCorrespondence(raw, true)
+	start := strings.Index(mapped.text, "alpha")
+	if mapped.offsets[start+2] < 0 || mapped.offsets[start+2] == mapped.offsets[start]+2 {
+		t.Fatal("fixture must join noncontiguous retained bytes")
+	}
+	match := excerptMatch{term: 0, source: matchRange{start: start, end: start + 5}, occurrence: 1}
+	span := excerptSpan{sourceText: mapped.text, sourceMatches: []excerptMatch{match}, matches: []excerptMatch{match}}
+	if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{span}, query, 200); !slices.Equal(got, []int{3}) {
+		t.Fatalf("noncontiguous fallback = %v, want [3]", got)
 	}
 }
 
