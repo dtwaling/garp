@@ -130,71 +130,79 @@ func documentReplace(text string, re *regexp.Regexp, replacement string) (string
 	return out.String(), docStep{locs: locs, replacement: replacement}
 }
 
-func resolveDocumentOffsets(text string, steps []docStep, offsets map[int]int) {
-	active := make([]int, 0, len(offsets))
+// sourceOffsets maps intact half-open source ranges to their raw start. A
+// rejected range has value -1. Storage scales with requested words, not bytes.
+type sourceOffsets map[matchRange]int
+
+func resolveDocumentOffsets(text string, steps []docStep, offsets sourceOffsets) {
 	for k := range offsets {
 		offsets[k] = -1
-		if k >= 0 && k < len(text) {
-			offsets[k] = k
-			active = append(active, k)
+		if k.start >= 0 && k.end > k.start && k.end <= len(text) {
+			offsets[k] = k.start
 		}
 	}
-	sort.Ints(active)
-	for i := len(steps) - 1; i >= 0 && len(active) > 0; i-- {
+	// Reuse step scratch. Each segment describes contiguous copied bytes;
+	// synthetic bytes and deletions leave breaks, even if text happens to match.
+	type segment struct{ start, end, raw int }
+	var segments []segment
+	for i := len(steps) - 1; i >= 0; i-- {
 		step := steps[i]
+		maxEnd := 0
+		for k, pos := range offsets {
+			if pos >= 0 {
+				maxEnd = max(maxEnd, pos+k.end-k.start)
+			}
+		}
+		if maxEnd == 0 {
+			break
+		}
 		if len(step.locs) == 0 {
-			for _, k := range active {
-				offsets[k] += step.trimLeft
+			for k, pos := range offsets {
+				if pos >= 0 {
+					offsets[k] = pos + step.trimLeft
+				}
 			}
 			continue
 		}
-		cursor, kept, inLast, outLast := 0, 0, 0, 0
+		segments = segments[:0]
+		inLast, outLast := 0, 0
 		mapRange := func(start, length int) {
-			end := outLast + length
-			for cursor < len(active) && offsets[active[cursor]] < end {
-				k := active[cursor]
-				pos := offsets[k]
-				cursor++
-				offsets[k] = -1
-				if start >= 0 {
-					offsets[k] = start + pos - outLast
-					active[kept] = k
-					kept++
+			if start >= 0 && length > 0 {
+				if n := len(segments); n > 0 && segments[n-1].end == outLast &&
+					segments[n-1].raw+segments[n-1].end-segments[n-1].start == start {
+					segments[n-1].end += length
+				} else {
+					segments = append(segments, segment{outLast, outLast + length, start})
 				}
 			}
-			outLast = end
+			outLast += length
 		}
 		for _, loc := range step.locs {
 			mapRange(inLast, loc[0]-inLast)
-			if cursor == len(active) {
-				break
-			}
 			replacementRanges(loc, step.replacement, mapRange)
 			inLast = loc[1]
-			if cursor == len(active) {
+			if outLast >= maxEnd {
 				break
 			}
 		}
-		for cursor < len(active) {
-			k := active[cursor]
-			cursor++
-			offsets[k] = inLast + offsets[k] - outLast
-			active[kept] = k
-			kept++
-		}
-		active = active[:kept]
-		// Captures can repeat or reorder input ranges. Restore position order
-		// before the next linear reverse pass (normally already sorted).
-		less := func(a, b int) bool { return offsets[active[a]] < offsets[active[b]] }
-		if !sort.SliceIsSorted(active, less) {
-			sort.Slice(active, less)
+		mapRange(inLast, max(0, maxEnd-outLast))
+		for k, pos := range offsets {
+			if pos < 0 {
+				continue
+			}
+			j := sort.Search(len(segments), func(j int) bool { return segments[j].end > pos })
+			offsets[k] = -1
+			if j < len(segments) && segments[j].start <= pos &&
+				k.end-k.start <= segments[j].end-pos {
+				offsets[k] = segments[j].raw + pos - segments[j].start
+			}
 		}
 	}
 }
 
 // documentCorrespondence mirrors CleanContent followed by excerpt prep, or
 // prep alone, resolving only requested final-text byte offsets back to raw.
-func documentCorrespondence(raw string, clean bool, offsets map[int]int) string {
+func documentCorrespondence(raw string, clean bool, offsets sourceOffsets) string {
 	text := raw
 	var steps []docStep
 	replace := func(re *regexp.Regexp, replacement string) {
@@ -236,7 +244,7 @@ func documentCorrespondence(raw string, clean bool, offsets map[int]int) string 
 
 // codeCorrespondence uses the same sparse reverse mapping as documents. This
 // avoids ordinal raw-match assumptions when normalization creates phrase matches.
-func codeCorrespondence(raw string, offsets map[int]int) string {
+func codeCorrespondence(raw string, offsets sourceOffsets) string {
 	text, controls := documentReplace(raw, controlCharRegex, " ")
 	text, spaces := documentReplace(text, whitespaceRegex, " ")
 	left := len(text) - len(strings.TrimLeftFunc(text, unicode.IsSpace))
@@ -248,7 +256,7 @@ func codeCorrespondence(raw string, offsets map[int]int) string {
 // mappedMatchOffset permits normalized whitespace between retained bytes, but
 // never accepts synthetic word bytes or gaps caused by removed markup. The raw
 // gap must consist solely of runes normalized to ASCII space by the code cleaner.
-func mappedMatchOffset(raw, source string, match matchRange, offsets map[int]int) (int, bool) {
+func mappedMatchOffset(raw, source string, match matchRange, offsets sourceOffsets) (int, bool) {
 	start, end := match.start, match.end
 	if start < 0 || end <= start || end > len(source) {
 		return 0, false
@@ -259,8 +267,10 @@ func mappedMatchOffset(raw, source string, match matchRange, offsets map[int]int
 			spaced = true
 			continue
 		}
-		pos, ok := offsets[j]
-		if !ok || pos < 0 || pos >= len(raw) || raw[pos] != source[j] {
+		run := matchWordRange(source, j, end)
+		pos, ok := offsets[run]
+		length := run.end - run.start
+		if !ok || pos < 0 || pos > len(raw)-length || raw[pos:pos+length] != source[run.start:run.end] {
 			return 0, false
 		}
 		if previous >= 0 {
@@ -281,22 +291,40 @@ func mappedMatchOffset(raw, source string, match matchRange, offsets map[int]int
 		if first < 0 {
 			first = pos
 		}
-		previous, spaced = pos, false
+		previous, spaced = pos+length-1, false
+		j = run.end - 1
 	}
 	return first, first >= 0
 }
 
-// requestedDocumentOffsets collects only valid emitted match bytes, deduplicated
-// across spans. Invalid metadata must not cause unbounded offset collection.
-func requestedDocumentOffsets(spans []excerptSpan) map[int]int {
-	offsets := make(map[int]int)
+// matchWordRange excludes interior ASCII spaces, whose normalized raw gaps are
+// checked separately. Boundary spaces retain their original byte identity.
+func matchWordRange(source string, start, end int) matchRange {
+	stop := end
+	if start+1 < end {
+		if next := strings.IndexByte(source[start+1:end-1], ' '); next >= 0 {
+			stop = start + 1 + next
+		}
+	}
+	return matchRange{start: start, end: stop}
+}
+
+// requestedDocumentOffsets collects intact word ranges, deduplicated across
+// spans. Even an unbounded prefix token needs only one entry, not one per byte.
+func requestedDocumentOffsets(spans []excerptSpan) sourceOffsets {
+	offsets := make(sourceOffsets)
 	for _, span := range spans {
 		for _, match := range span.matches {
-			if match.source.start < 0 || match.source.end > len(span.sourceText) {
+			if match.source.start < 0 || match.source.end <= match.source.start || match.source.end > len(span.sourceText) {
 				continue
 			}
 			for j := match.source.start; j < match.source.end; j++ {
-				offsets[j] = -1
+				if span.sourceText[j] == ' ' && j > match.source.start && j+1 < match.source.end {
+					continue
+				}
+				run := matchWordRange(span.sourceText, j, match.source.end)
+				offsets[run] = -1
+				j = run.end - 1
 			}
 		}
 	}
@@ -394,8 +422,8 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 
 	var normalizedRaw string
 	normalizedReady := false
-	var codeOffsets map[int]int
-	var docOffsets map[int]int
+	var codeOffsets sourceOffsets
+	var docOffsets sourceOffsets
 	var documentSource string
 	documentMatches := false
 

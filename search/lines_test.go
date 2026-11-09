@@ -8,6 +8,93 @@ import (
 	"testing"
 )
 
+func byteRange(start int) matchRange { return matchRange{start: start, end: start + 1} }
+
+func TestExcerptLinesLargePrefixRange(t *testing.T) {
+	for _, size := range []int{1 << 16, 2 << 20} {
+		for _, mode := range []string{"code", "clean document", "raw document"} {
+			t.Run(fmt.Sprintf("%s/%d", mode, size), func(t *testing.T) {
+				raw := "header.\n" + "needle" + strings.Repeat("x", size) + " tail.\n"
+				code := mode == "code"
+				if !code {
+					raw = "<b>" + raw
+				}
+				content := raw
+				if code {
+					content = CleanContentCode(raw)
+				} else if mode == "clean document" {
+					content = CleanContent(raw)
+				}
+				query := compileQuery([]string{"needle"}, PartialModePrefix)
+				spans := extractRankedExcerptSpansQuery(content, query, 1, 1, 1, code, 200)
+				if len(spans) != 1 || len(spans[0].matches) != 1 {
+					t.Fatal("expected one emitted match")
+				}
+				match := spans[0].matches[0].source
+				if match.end-match.start != size+len("needle") || len(spans[0].text) >= size {
+					t.Fatal("fixture must retain full source token but emit only a fragment")
+				}
+				offsets := requestedDocumentOffsets(append(spans, spans...))
+				if len(offsets) != 1 {
+					t.Fatalf("large token requested %d ranges", len(offsets))
+				}
+				if code {
+					codeCorrespondence(raw, offsets)
+				} else {
+					documentCorrespondence(raw, mode == "clean document", offsets)
+				}
+				if got, ok := mappedMatchOffset(raw, spans[0].sourceText, match, offsets); !ok || got != strings.Index(raw, "needle") {
+					t.Fatalf("range offset=%d valid=%t", got, ok)
+				}
+				if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{2}) {
+					t.Fatalf("anchors=%v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestDocumentRangeInteriorIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, replacement string
+		valid                bool
+	}{
+		{"(b)", "$1", true},
+		{"(b)(c)", "$1$2", true},
+		{"b", "x", false},
+		{"(b)(c)", "$2$1", false},
+		{"b", "", false},
+		{"(b)", "$1$1", false},
+	} {
+		text, step := documentReplace("abcd", regexp.MustCompile(tc.pattern), tc.replacement)
+		whole := matchRange{start: 0, end: len(text)}
+		offsets := sourceOffsets{whole: 0, byteRange(0): 0, byteRange(len(text) - 1): 0}
+		resolveDocumentOffsets(text, []docStep{step}, offsets)
+		if offsets[byteRange(0)] != 0 || offsets[byteRange(len(text)-1)] != 3 {
+			t.Fatal("endpoints must remain intact")
+		}
+		if (offsets[whole] == 0) != tc.valid {
+			t.Fatalf("%s -> %s: range identity=%d", tc.pattern, tc.replacement, offsets[whole])
+		}
+	}
+}
+
+func BenchmarkRequestedLargePrefixRange(b *testing.B) {
+	for _, size := range []int{1 << 16, 2 << 20} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			source := "needle" + strings.Repeat("x", size)
+			spans := []excerptSpan{{sourceText: source, matches: []excerptMatch{{source: matchRange{start: 0, end: len(source)}}}}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if offsets := requestedDocumentOffsets(spans); len(offsets) != 1 {
+					b.Fatal(len(offsets))
+				}
+			}
+		})
+	}
+}
+
 func TestExcerptLinesNormalizedPhraseSeparators(t *testing.T) {
 	for _, code := range []bool{false, true} {
 		for _, sep := range []string{"  ", "\t", "\n", "\r\n", "\x00", "\u0085", " \t\n "} {
@@ -48,7 +135,7 @@ func TestCodeSparseOffsetsManyOccurrences(t *testing.T) {
 		match := excerptMatch{term: 0, source: matchRange{start: start, end: start + 6}, occurrence: count}
 		spans := []excerptSpan{{sourceText: source, matches: []excerptMatch{match}}}
 		offsets := requestedDocumentOffsets(append(spans, spans...))
-		if got := codeCorrespondence(raw, offsets); got != source || len(offsets) != 6 {
+		if got := codeCorrespondence(raw, offsets); got != source || len(offsets) != 1 {
 			t.Fatalf("correspondence mismatch or non-sparse map: %d entries", len(offsets))
 		}
 		if offset, ok := mappedMatchOffset(raw, source, match.source, offsets); !ok || offset != strings.LastIndex(raw, "needle") {
@@ -114,9 +201,9 @@ func TestDocumentWhitespaceIdentity(t *testing.T) {
 			if start < 0 || text != CleanContent(raw) {
 				t.Fatalf("unexpected cleaned text %q", text)
 			}
-			offsets := make(map[int]int)
+			offsets := make(sourceOffsets)
 			for j := range len(phrase) {
-				offsets[start+j] = -1
+				offsets[byteRange(start+j)] = -1
 			}
 			documentCorrespondence(raw, true, offsets)
 			for j := range len(phrase) {
@@ -127,7 +214,7 @@ func TestDocumentWhitespaceIdentity(t *testing.T) {
 				case j >= len("alpha")+len(tc.normalized):
 					want = strings.Index(raw, "beta") + j - len("alpha") - len(tc.normalized)
 				}
-				if got := offsets[start+j]; got != want {
+				if got := offsets[byteRange(start+j)]; got != want {
 					t.Errorf("byte %d maps to %d, want %d", j, got, want)
 				}
 			}
@@ -143,23 +230,21 @@ func TestDocumentSparseOffsetsLarge(t *testing.T) {
 		if len(spans) != 1 {
 			t.Fatalf("expected one span, got %d", len(spans))
 		}
-		// Duplicating a span must not increase the requested byte set.
+		// Duplicating a span must not increase the requested range set.
 		offsets := requestedDocumentOffsets(append(spans, spans...))
-		if len(offsets) != len("ALPHAneedle") {
+		if len(offsets) != 2 {
 			t.Fatalf("requested %d offsets for %d raw bytes", len(offsets), len(raw))
 		}
 		if got := documentCorrespondence(raw, true, offsets); got != spans[0].sourceText {
 			t.Fatal("cleaner mismatch")
 		}
-		if len(offsets) != len("ALPHAneedle") {
+		if len(offsets) != 2 {
 			t.Fatalf("resolution grew map to %d entries", len(offsets))
 		}
 		for _, match := range spans[0].matches {
 			start := strings.Index(raw, spans[0].sourceText[match.source.start:match.source.end])
-			for k := match.source.start; k < match.source.end; k++ {
-				if offsets[k] != start+k-match.source.start {
-					t.Fatalf("offset[%d] = %d", k, offsets[k])
-				}
+			if offsets[match.source] != start {
+				t.Fatalf("offset[%v] = %d", match.source, offsets[match.source])
 			}
 		}
 		if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{3}) {
@@ -177,15 +262,15 @@ func TestDocumentReverseSteps(t *testing.T) {
 		t.Fatalf("text = %q", text)
 	}
 	for _, keys := range [][]int{{0}, {1}, {4}, {0, 1, 2, 3, 4}, {-1, 5}} {
-		offsets := make(map[int]int)
+		offsets := make(sourceOffsets)
 		for _, k := range keys {
-			offsets[k] = 99
+			offsets[byteRange(k)] = 99
 		}
 		resolveDocumentOffsets(text, []docStep{first, second}, offsets)
 		want := map[int]int{-1: -1, 0: 2, 1: -1, 2: 1, 3: 2, 4: 3, 5: -1}
 		for _, k := range keys {
-			if offsets[k] != want[k] {
-				t.Fatalf("key %d = %d, want %d", k, offsets[k], want[k])
+			if offsets[byteRange(k)] != want[k] {
+				t.Fatalf("key %d = %d, want %d", k, offsets[byteRange(k)], want[k])
 			}
 		}
 	}
@@ -210,17 +295,17 @@ func TestDocumentReplaceByteIdentity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, step := documentReplace("abc", regexp.MustCompile(tc.pattern), tc.replacement)
-			offsets := map[int]int{-1: 0, len(got): 0}
+			offsets := sourceOffsets{byteRange(-1): 0, byteRange(len(got)): 0}
 			for k := range tc.offsets {
-				offsets[k] = 0
+				offsets[byteRange(k)] = 0
 			}
 			resolveDocumentOffsets(got, []docStep{step}, offsets)
-			if got != tc.want || offsets[-1] != -1 || offsets[len(got)] != -1 {
+			if got != tc.want || offsets[byteRange(-1)] != -1 || offsets[byteRange(len(got))] != -1 {
 				t.Fatalf("replace = %q, offsets %v, want %q", got, offsets, tc.want)
 			}
 			for k, want := range tc.offsets {
-				if offsets[k] != want {
-					t.Fatalf("offset[%d] = %d, want %d", k, offsets[k], want)
+				if offsets[byteRange(k)] != want {
+					t.Fatalf("offset[%d] = %d, want %d", k, offsets[byteRange(k)], want)
 				}
 			}
 		})
@@ -229,28 +314,40 @@ func TestDocumentReplaceByteIdentity(t *testing.T) {
 
 func TestExcerptLinesScratchAllocations(t *testing.T) {
 	query := compileQuery([]string{"needle"}, PartialModeOff)
-	spans := make([]excerptSpan, 200)
-	for i := range spans {
-		spans[i] = lineSpans([]int{0})[0]
-	}
-	measure := func(spans []excerptSpan) float64 {
-		return testing.AllocsPerRun(10, func() {
-			got := computeExcerptSpanLinesQuery("needle", spans, query, 1)
-			for _, line := range got {
-				if line != 1 {
-					t.Fatalf("anchor = %d, want 1", line)
-				}
+	for _, mode := range []string{"fallback", "code", "document"} {
+		t.Run(mode, func(t *testing.T) {
+			raw := "needle"
+			span := lineSpans([]int{0})[0]
+			if mode != "fallback" {
+				span.sourceText = "needle"
+				span.matches[0].source = matchRange{start: 0, end: 6}
 			}
+			if mode == "document" {
+				raw = "<b></b>needle"
+			}
+			spans := make([]excerptSpan, 200)
+			for i := range spans {
+				spans[i] = span
+			}
+			measure := func(spans []excerptSpan) float64 {
+				return testing.AllocsPerRun(10, func() {
+					got := computeExcerptSpanLinesQuery(raw, spans, query, 1)
+					for _, line := range got {
+						if line != 1 {
+							t.Fatalf("anchor = %d, want 1", line)
+						}
+					}
+				})
+			}
+			// Both output slices exceed the compiler's small-slice stack optimization.
+			fewer, many := measure(spans[:100]), measure(spans)
+			// Allow incidental process-wide noise, not per-span allocations.
+			if many-fewer > 2 {
+				t.Fatalf("allocations grew with spans: hundred=%g, two hundred=%g", fewer, many)
+			}
+			t.Logf("allocations: hundred spans=%g, two hundred spans=%g", fewer, many)
 		})
 	}
-	// Both output slices exceed the compiler's small-slice stack optimization.
-	fewer, many := measure(spans[:100]), measure(spans)
-	// Allow incidental process-wide allocation noise, but not even one extra
-	// allocation per span (which would add 100 allocations here).
-	if many-fewer > 2 {
-		t.Fatalf("allocations grew with spans: hundred=%g, two hundred=%g", fewer, many)
-	}
-	t.Logf("allocations: hundred spans=%g, two hundred spans=%g", fewer, many)
 }
 
 func TestExcerptLinesScratchResetAndLazyIdentity(t *testing.T) {
@@ -397,7 +494,7 @@ func TestExcerptLinesDocumentCorrespondence(t *testing.T) {
 			}
 			for _, match := range spans[0].sourceMatches {
 				locs := query.matchers[match.term].findAll(raw)
-				if got := offsets[match.source.start]; got != locs[match.occurrence-1].start {
+				if got := offsets[match.source]; got != locs[match.occurrence-1].start {
 					t.Fatalf("mapped offset = %d, want %d", got, locs[match.occurrence-1].start)
 				}
 			}
@@ -444,9 +541,9 @@ func TestExcerptLinesDocumentInvalidMatchStart(t *testing.T) {
 	query := compileQuery([]string{"alpha"}, PartialModeOff)
 	mapped := documentCorrespondence(raw, true, nil)
 	start := strings.Index(mapped, "ALPHA")
-	offsets := map[int]int{start + 5: 0}
+	offsets := sourceOffsets{byteRange(start + 5): 0}
 	documentCorrespondence(raw, true, offsets)
-	if offsets[start+5] != -1 {
+	if offsets[byteRange(start+5)] != -1 {
 		t.Fatal("fixture must insert a synthetic space after ALPHA")
 	}
 	for _, tc := range []struct {
@@ -514,9 +611,9 @@ func TestExcerptLinesDocumentNoncontiguousMatch(t *testing.T) {
 	query := compileQuery([]string{"alpha"}, PartialModeOff)
 	mapped := documentCorrespondence(raw, true, nil)
 	start := strings.Index(mapped, "alpha")
-	offsets := map[int]int{start: 0, start + 2: 0}
+	offsets := sourceOffsets{byteRange(start): 0, byteRange(start + 2): 0}
 	documentCorrespondence(raw, true, offsets)
-	if offsets[start+2] < 0 || offsets[start+2] == offsets[start]+2 {
+	if offsets[byteRange(start+2)] < 0 || offsets[byteRange(start+2)] == offsets[byteRange(start)]+2 {
 		t.Fatal("fixture must join noncontiguous retained bytes")
 	}
 	match := excerptMatch{term: 0, source: matchRange{start: start, end: start + 5}, occurrence: 1}
