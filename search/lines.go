@@ -66,12 +66,16 @@ func (p codePrefix) corresponds(normalized string, end int) bool {
 
 // mappedContent retains raw byte identities through cleaning. Inserted separator
 // bytes map to the nearest preceding captured byte (or the replacement start).
+// A nil offsets slice selects text-only cleaning for Stage 2 analysis.
 type mappedContent struct {
 	text    string
 	offsets []int
 }
 
 func (m mappedContent) replace(re *regexp.Regexp, replacement string) mappedContent {
+	if m.offsets == nil {
+		return mappedContent{text: re.ReplaceAllString(m.text, replacement)}
+	}
 	locs := re.FindAllStringSubmatchIndex(m.text, -1)
 	if len(locs) == 0 {
 		return m
@@ -120,16 +124,7 @@ func documentCorrespondence(raw string, clean bool) mappedContent {
 		m = m.replace(emailQuotingRegex, "").replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")
 	}
 	if clean {
-		strip(" ")
-		m = m.replace(whitespaceRegex, " ")
-		m = m.replace(letterDigitRegex, "$1 $2").replace(digitLetterRegex, "$1 $2")
-		m = m.replace(commaMissingSpace, ", $1")
-		left := len(m.text) - len(strings.TrimLeftFunc(m.text, unicode.IsSpace))
-		right := len(strings.TrimRightFunc(m.text, unicode.IsSpace))
-		if right < left {
-			right = left
-		}
-		m = mappedContent{m.text[left:right], m.offsets[left:right]}
+		m = cleanSearchContent(m, false)
 	}
 	strip("")
 	return m

@@ -1371,10 +1371,7 @@ func checkFileContainsAllWordsQuery(filePath string, query compiledQuery, distan
 	// Clean the content so matching aligns with excerpt generation. Code files use the
 	// minimal code-safe cleaner so markup/operator stripping can't drop a real match
 	// (e.g. a term adjacent to "<?php", "->", or inside a "TList<T>" generic).
-	cleaned := CleanContent(content)
-	if config.IsCodeFile(filePath) {
-		cleaned = CleanContentCode(content)
-	}
+	cleaned := cleanSearchContent(mappedContent{text: content}, config.IsCodeFile(filePath)).text
 	return CheckTextContainsAllWordsPartial(cleaned, query.terms, distance, partial), nil
 }
 
@@ -1412,10 +1409,7 @@ func checkFileRankedAnalysisQuery(filePath string, query compiledQuery, distance
 	if err != nil {
 		return rankedTextAnalysis{}, false, err
 	}
-	cleaned := CleanContent(content)
-	if config.IsCodeFile(filePath) {
-		cleaned = CleanContentCode(content)
-	}
+	cleaned := cleanSearchContent(mappedContent{text: content}, config.IsCodeFile(filePath)).text
 	analysis, ok := analyzeRankedText(cleaned, query, distance, strict)
 	if !ok {
 		return rankedTextAnalysis{}, false, nil

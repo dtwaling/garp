@@ -770,7 +770,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 						}
 						return false
 					}
-					cleanedBinaryText = CleanContent(extractedText)
+					cleanedBinaryText = cleanSearchContent(mappedContent{text: extractedText}, config.IsCodeFile(filePath)).text
 					analysis, ok := analyzeRankedText(cleanedBinaryText, query, se.Distance, se.Strict)
 					if ok {
 						match.setAnalysis(analysis)
@@ -827,7 +827,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 						}
 						return false
 					}
-					cleanedBinaryText = CleanContent(extractedText)
+					cleanedBinaryText = cleanSearchContent(mappedContent{text: extractedText}, config.IsCodeFile(filePath)).text
 					analysis, ok := analyzeRankedText(cleanedBinaryText, query, se.Distance, se.Strict)
 					if ok {
 						match.setAnalysis(analysis)

@@ -68,41 +68,7 @@ func SetExcerptContextLimit(n int) {
 
 // CleanContent removes markup, headers, and other noise from content
 func CleanContent(content string) string {
-	// Remove CSS and JavaScript blocks first
-	content = cssRegex.ReplaceAllString(content, "")
-	content = jsRegex.ReplaceAllString(content, "")
-
-	// Remove HTML tags
-	content = htmlTagRegex.ReplaceAllString(content, " ")
-
-	// Remove HTML entities
-	content = htmlEntityRegex.ReplaceAllString(content, " ")
-
-	// Remove control characters
-	content = controlCharRegex.ReplaceAllString(content, " ")
-
-	// Remove junk divider lines made of repeated =, #, -, or _
-	content = junkSymbolsRegex.ReplaceAllString(content, "")
-
-	// Remove email quoting lines
-	content = emailQuotingRegex.ReplaceAllString(content, "")
-	// Strip leading '>' quote markers at line starts
-	content = quoteLineStartRegex.ReplaceAllString(content, "")
-	// Collapse midline '>' quote markers (e.g., >>>> >>>>) into a single space
-	content = quoteMidRegex.ReplaceAllString(content, " ")
-
-	// Normalize whitespace
-	content = whitespaceRegex.ReplaceAllString(content, " ")
-
-	// Insert missing spaces to improve readability in extracted content
-	// Letter followed by digit (e.g., "Account10" -> "Account 10")
-	content = letterDigitRegex.ReplaceAllString(content, "$1 $2")
-	// Digit followed by letter (e.g., "7367NEXT" -> "7367 NEXT")
-	content = digitLetterRegex.ReplaceAllString(content, "$1 $2")
-	// Ensure a space after commas when missing (e.g., "21,5:43" -> "21, 5:43")
-	content = commaMissingSpace.ReplaceAllString(content, ", $1")
-
-	return strings.TrimSpace(content)
+	return cleanSearchContent(mappedContent{text: content}, false).text
 }
 
 // CleanContentCode is a minimal cleaner for source code. Unlike CleanContent it does NOT strip
@@ -113,9 +79,7 @@ func CleanContent(content string) string {
 // faithful to the source. The OCR-oriented digit/space fixups in CleanContent are also skipped
 // because they mangle identifiers (e.g. "Int32" -> "Int 32").
 func CleanContentCode(content string) string {
-	content = controlCharRegex.ReplaceAllString(content, " ")
-	content = whitespaceRegex.ReplaceAllString(content, " ")
-	return strings.TrimSpace(content)
+	return cleanSearchContent(mappedContent{text: content}, true).text
 }
 
 // cleanStage3Content applies the Stage 3 cleaning pipeline once while carrying
@@ -126,20 +90,67 @@ func cleanStage3Content(raw string, isCode bool) mappedContent {
 	for i := range m.offsets {
 		m.offsets[i] = i
 	}
+	return cleanSearchContent(m, isCode)
+}
+
+// cleanSearchContent is shared by Stage 2 analysis and Stage 3 extraction.
+// A nil offset slice avoids building correspondence that analysis never uses.
+func cleanSearchContent(m mappedContent, isCode bool) mappedContent {
 	if !isCode {
 		m = m.replace(cssRegex, "").replace(jsRegex, "")
 		m = m.replace(htmlTagRegex, " ").replace(htmlEntityRegex, " ")
 		m = m.replace(junkSymbolsRegex, "").replace(emailQuotingRegex, "")
 		m = m.replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")
 	}
-	m = m.replace(controlCharRegex, " ").replace(whitespaceRegex, " ")
+	m = normalizeMappedWhitespace(m)
 	if !isCode {
 		m = m.replace(letterDigitRegex, "$1 $2").replace(digitLetterRegex, "$1 $2")
 		m = m.replace(commaMissingSpace, ", $1")
 	}
 	left := len(m.text) - len(strings.TrimLeftFunc(m.text, unicode.IsSpace))
 	right := max(left, len(strings.TrimRightFunc(m.text, unicode.IsSpace)))
-	return mappedContent{m.text[left:right], m.offsets[left:right]}
+	if m.offsets != nil {
+		m.offsets = m.offsets[left:right]
+	}
+	m.text = m.text[left:right]
+	return m
+}
+
+// normalizeMappedWhitespace combines control replacement and ASCII whitespace
+// collapse in one scan. Unicode controls are decoded as runes; invalid UTF-8
+// bytes and non-ASCII whitespace remain unchanged (edge trimming happens later).
+// A collapsed run retains its first byte's raw offset, just like replace.
+func normalizeMappedWhitespace(m mappedContent) mappedContent {
+	var text strings.Builder
+	text.Grow(len(m.text))
+	var offsets []int
+	if m.offsets != nil {
+		offsets = make([]int, 0, len(m.text))
+	}
+	inSpace := false
+	for i := 0; i < len(m.text); {
+		r, size := rune(m.text[i]), 1
+		if r >= utf8.RuneSelf {
+			r, size = utf8.DecodeRuneInString(m.text[i:])
+		}
+		space := r <= 0x20 || (r >= 0x7f && r <= 0x9f)
+		if space {
+			if !inSpace {
+				text.WriteByte(' ')
+				if offsets != nil {
+					offsets = append(offsets, m.offsets[i])
+				}
+			}
+		} else {
+			text.WriteString(m.text[i : i+size])
+			if offsets != nil {
+				offsets = append(offsets, m.offsets[i:i+size]...)
+			}
+		}
+		inSpace = space
+		i += size
+	}
+	return mappedContent{text.String(), offsets}
 }
 
 // excerptSpan is one emitted chunk: its final text plus the [left, right)
