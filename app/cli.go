@@ -828,6 +828,7 @@ func walkOptions(args *Arguments) search.WalkOptions {
 		NoIgnore:                    args.NoIgnore,
 		MaxFileSize:                 args.MaxFileSize,
 		UserGlobs:                   args.UserGlobs,
+		ExcludeWords:                args.ExcludeWords,
 		PositiveGlobCodeEligibility: positiveGlobCodeEligibility(args.OnlyType, args.OnlyTypes),
 	}
 }

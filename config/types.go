@@ -93,6 +93,8 @@ var skipDirs = map[string]bool{
 	".gradle":       true,
 	".m2":           true,
 	".tox":          true,
+	".venv":         true,
+	"venv":          true,
 	".terraform":    true,
 	".terraform.d":  true,
 	".pytest_cache": true,

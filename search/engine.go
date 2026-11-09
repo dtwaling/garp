@@ -316,6 +316,7 @@ func (se *SearchEngine) walkOptions() WalkOptions {
 		NoIgnore:                    se.NoIgnore,
 		MaxFileSize:                 se.MaxFileSize,
 		UserGlobs:                   se.UserGlobs,
+		ExcludeWords:                se.ExcludeWords,
 		PositiveGlobCodeEligibility: se.PositiveGlobCodeEligibility,
 	}
 }
@@ -719,11 +720,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 			rootOrder:    candidate.rootOrder,
 		}
 		// Check for excluded extensions
-		ext := filepath.Ext(filePath)
-		for _, excluded := range extExcludes {
-			if strings.EqualFold(excluded, ext) {
-				return false
-			}
+		if extensionExcluded(filePath, extExcludes) {
+			return false
 		}
 
 		// Check if file contains all search words

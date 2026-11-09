@@ -719,6 +719,7 @@ func (m model) preflightFileCount() (int, error) {
 			NoIgnore:                    m.noIgnore,
 			MaxFileSize:                 m.maxFileSize,
 			UserGlobs:                   m.userGlobs,
+			ExcludeWords:                m.excludeWords,
 			PositiveGlobCodeEligibility: positiveGlobCodeEligibility(m.onlyType, m.onlyTypes),
 		},
 	)
