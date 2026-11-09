@@ -188,8 +188,8 @@ func TestBinaryPrefilterStrictnessAndRelaxedStrategyA(t *testing.T) {
 			}
 
 			found, decided := search.BinaryStreamingPrefilterRankedDecided(path, words, 0, tt.strict)
-			if decided != tt.found {
-				t.Fatalf("decided = %v, want %v (raw misses require extraction)", decided, tt.found)
+			if !decided {
+				t.Fatal("complete unencoded mail scan must be decisive")
 			}
 			if found != tt.found {
 				t.Errorf("found = %v, want %v", found, tt.found)
@@ -207,8 +207,67 @@ func TestBinaryPrefilterCompatibilityWrapperIsStrict(t *testing.T) {
 	found, decided := search.BinaryStreamingPrefilterDecided(
 		path, []string{"primary", "secondary", "missing"}, 0,
 	)
-	if found || decided {
-		t.Fatalf("compatibility wrapper result = (%v, %v), want (false, false)", found, decided)
+	if found || !decided {
+		t.Fatalf("compatibility wrapper result = (%v, %v), want (false, true)", found, decided)
+	}
+}
+
+func TestBinaryPrefilterEncodingGates(t *testing.T) {
+	for _, ext := range []string{".eml", ".mbox"} {
+		for _, marker := range []string{"BaSe64", "QUOTED-PRINTABLE", "=?", "UTF-16", "UcS-2", "\x00"} {
+			for _, offset := range []int{0, 64*1024 - 1} {
+				t.Run(fmt.Sprintf("%s/%q/offset=%d", ext, marker, offset), func(t *testing.T) {
+					content := strings.Repeat(" ", offset) + marker + " available"
+					path := filepath.Join(t.TempDir(), "candidate"+ext)
+					if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					for _, capBytes := range []int64{0, int64(len(content))} {
+						found, decided := search.BinaryStreamingPrefilterDecided(path, []string{"missing"}, capBytes)
+						if found || decided {
+							t.Fatalf("encoded miss = (%v, %v), want (false, false)", found, decided)
+						}
+						found, decided = search.BinaryStreamingPrefilterDecided(path, []string{"available"}, capBytes)
+						if !found || !decided {
+							t.Fatalf("encoded raw hit = (%v, %v), want (true, true)", found, decided)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, word string
+		found, decided      bool
+	}{
+		{"plain.eml", "available", "missing", false, true},
+		{"plain.mbox", "available", "missing", false, true},
+		{"plain.rtf", `{\rtf1\ansi available}`, "missing", false, true},
+		{"controls.rtf", `{\rtf1\ansi su{\b}bject bo{\i}dy}`, "subject", true, true},
+		{"hex.rtf", `{\rtf1 \'61}`, "missing", false, false},
+		{"unicode.rtf", `{\rtf1 \u97}`, "missing", false, false},
+		{"binary.rtf", `{\rtf1 \bin3 abc}`, "missing", false, false},
+		{"raw.msg", "available", "available", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tc.name)
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, capBytes := range []int64{0, int64(len(tc.content)), int64(len(tc.content) + 1)} {
+				found, decided := search.BinaryStreamingPrefilterDecided(path, []string{tc.word}, capBytes)
+				if found != tc.found || decided != tc.decided {
+					t.Fatalf("cap=%d: got (%v, %v), want (%v, %v)", capBytes, found, decided, tc.found, tc.decided)
+				}
+			}
+			found, decided := search.BinaryStreamingPrefilterDecided(path, []string{"missing"}, 1)
+			if found || decided {
+				t.Fatalf("capped miss = (%v, %v), want (false, false)", found, decided)
+			}
+		})
 	}
 }
 

@@ -1171,17 +1171,84 @@ func BinaryStreamingPrefilterRankedDecidedPartial(filePath string, words []strin
 	return binaryStreamingPrefilterDecidedQuery(filePath, compileQuery(words, partial), capBytes, strict)
 }
 
+// mailEncodingReader observes the same bytes used by the streaming matcher.
+// Keep enough overlap to detect even the longest marker across read boundaries.
+type mailEncodingReader struct {
+	io.Reader
+	tail    string
+	encoded bool
+}
+
+func (r *mailEncodingReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 && !r.encoded {
+		text := r.tail + strings.ToLower(string(p[:n]))
+		for _, marker := range []string{"base64", "quoted-printable", "=?", "utf-16", "ucs-2", "\x00"} {
+			if strings.Contains(text, marker) {
+				r.encoded = true
+				break
+			}
+		}
+		const overlap = len("quoted-printable") - 1
+		if len(text) > overlap {
+			text = text[len(text)-overlap:]
+		}
+		r.tail = text
+	}
+	return n, err
+}
+
+func encodingAwarePrefilter(filePath string, query compiledQuery, strict bool, capBytes int64, rtf bool) (bool, bool) {
+	if len(query.matchers) == 0 {
+		return true, true
+	}
+	f, _, err := openRegularSearchFile(filePath)
+	if err != nil {
+		return false, false
+	}
+	_ = adviseSequential(f)
+	defer f.Close()
+	defer adviseDontNeed(f)
+	maxBytes := int64(maxFileSizeBytes)
+	if capBytes > 0 && capBytes < maxBytes {
+		maxBytes = capBytes
+	}
+
+	if rtf {
+		// Transform the entire bounded prefix so control words and groups split
+		// across read boundaries behave exactly as in RTFExtractor.
+		data, readErr := io.ReadAll(io.LimitReader(f, maxBytes))
+		raw := strings.ToLower(string(data))
+		escaped := strings.Contains(raw, `\'`) || strings.Contains(raw, `\u`) || strings.Contains(raw, `\bin`)
+		text, _ := (&RTFExtractor{}).ExtractText(data)
+		state := streamQueryMatches{found: make([]bool, len(query.matchers))}
+		state.observe(text, query, 0)
+		if state.satisfied(strict) {
+			return true, true
+		}
+		return false, readErr == nil && !escaped && readerValidatedEOF(f)
+	}
+
+	r := &mailEncodingReader{Reader: f}
+	found, complete, readErr := streamMatchesQuery(r, query, strict, maxBytes)
+	if found {
+		return true, true
+	}
+	if readErr != nil || r.encoded {
+		return false, false
+	}
+	// Validate EOF at the exact cap rather than trusting a stale file size.
+	return false, complete || readerValidatedEOF(f)
+}
+
 func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, capBytes int64, strict bool) (bool, bool) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
-	case ".eml", ".msg", ".mbox", ".rtf":
-		found, decided := streamContainsQueryDecidedWithCap(filePath, query, strict, capBytes)
-		if !found {
-			// Raw bytes do not expose all decoded text in these formats.
-			// Even a complete scan cannot prove absence; defer to extraction.
-			return false, false
-		}
-		return found, decided
+	case ".msg":
+		// OLE2 streams require extraction; raw hits and misses cannot skip it.
+		return false, false
+	case ".eml", ".mbox", ".rtf":
+		return encodingAwarePrefilter(filePath, query, strict, capBytes, ext == ".rtf")
 
 	case ".docx", ".odt":
 		// Conservative ZIP sniff + capped XML stream:
