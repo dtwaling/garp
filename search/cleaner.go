@@ -136,8 +136,9 @@ type excerptSpan struct {
 
 type excerptMatch struct {
 	matchRange
-	source matchRange
-	term   int
+	source     matchRange
+	term       int
+	occurrence int // 1-based per-term occurrence in sourceText; 0 means unknown
 }
 
 func excerptSpanTexts(spans []excerptSpan) []string {
@@ -297,6 +298,7 @@ func formatExcerptTextBoundaryMatches(source string, left, right, budget int, ma
 			matchRange: matchRange{start: matchStart - visibleLeft, end: matchEnd - visibleLeft},
 			source:     match.source,
 			term:       match.term,
+			occurrence: match.occurrence,
 		})
 	}
 
@@ -589,9 +591,9 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 	allExactMatches := make([]excerptMatch, 0, 128)
 	for i, matcher := range query.matchers {
 		rangesByMatcher[i] = matcher.findAll(cleaned)
-		for _, loc := range rangesByMatcher[i] {
+		for ordinal, loc := range rangesByMatcher[i] {
 			all = append(all, tmatch{start: loc.start, end: loc.end, idx: i})
-			allExactMatches = append(allExactMatches, excerptMatch{matchRange: loc, source: loc, term: i})
+			allExactMatches = append(allExactMatches, excerptMatch{matchRange: loc, source: loc, term: i, occurrence: ordinal + 1})
 		}
 	}
 	if len(all) > 0 {

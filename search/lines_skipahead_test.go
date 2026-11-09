@@ -1,9 +1,23 @@
 package search
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestMultipartExcerptLinesKeepWideClusterIdentity(t *testing.T) {
+	raw := "header\nalpha " + strings.Repeat("loose ", 300) + "beta.\n" +
+		strings.Repeat("padding line.\n", 100) + "alpha " + strings.Repeat("tight ", 180) + "beta.\n"
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	spans := extractRankedExcerptSpansQuery(CleanContentCode(raw), query, 2, 2, 2, true, 5000)
+	if len(spans) != 2 || !strings.Contains(spans[0].text, " ... ") || !strings.Contains(spans[0].text, "tight") {
+		t.Fatalf("expected later multipart cluster first: %#v", spans)
+	}
+	if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, []int{103, 2}) {
+		t.Fatalf("multipart anchors = %v, want [103 2]", got)
+	}
+}
 
 func TestExcerptLineAnchorsFollowDistinctRawClusters(t *testing.T) {
 	raw := strings.Join([]string{

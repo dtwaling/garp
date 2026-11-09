@@ -18,6 +18,20 @@ func TestLinesPartialAnchorsDerivativeOnSourceLine(t *testing.T) {
 	}
 }
 
+func TestPartialEmittedLinesKeepOccurrenceThroughExpansion(t *testing.T) {
+	raw := "header\nrun_deployment " + strings.Repeat("loose ", 30) + "ms-first-api.\n" +
+		strings.Repeat("padding line.\n", 100) + "run_deployment ms-last-api tight.\n"
+	query := compileQuery([]string{"deploy", "ms-*-api"}, PartialModePrefix)
+	spans := extractRankedExcerptSpansQuery(CleanContentCode(raw), query, 1, 2, 2, true, 5000)
+	if len(spans) != 1 || !strings.Contains(spans[0].text, "ms-last-api") {
+		t.Fatalf("expected later partial-match cluster: %#v", spans)
+	}
+	spans[0] = expandShortExcerptSpan(spans[0], 600)
+	if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, []int{103}) {
+		t.Fatalf("expanded partial anchors = %v, want [103]", got)
+	}
+}
+
 func TestInlineWildcardLineAnchorsUseExactRanges(t *testing.T) {
 	raw := "header\ncall ms-option-api\nuse MyOptionApiClient\ncall ms-x-api\n"
 	tests := []struct {
