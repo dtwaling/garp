@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -532,20 +533,14 @@ func (m model) View() string {
 							}
 							loc := search.FindTermIndex(cleanContent, term, m.partial, options)
 							if loc != nil {
-								start := loc[0] - 120
-								if start < 0 {
-									start = 0
-								}
-								end := loc[1] + 120
-								if end > len(cleanContent) {
-									end = len(cleanContent)
-								}
+								start, end := alignUTF8SliceBounds(cleanContent, loc[0]-120, loc[1]+120)
 								frag := cleanContent[start:end]
 								if len(extraParts) > 0 {
 									rawExtraLen += len(" ... ")
 								}
 								rawExtraLen += len(frag)
-								extraParts = append(extraParts, search.HighlightRanges(frag, sliceMatchRanges(cleanRanges, start, end)))
+								fragRanges := sliceMatchRanges(cleanRanges, start, end)
+								extraParts = append(extraParts, sanitizeAndHighlightExcerpt(frag, fragRanges, true, m.searchWords, m.partial, options))
 							}
 						}
 						if len(extraParts) > 0 {
@@ -850,10 +845,23 @@ func sliceMatchRanges(ranges []search.MatchRange, start, end int) []search.Match
 			local = append(local, search.MatchRange{
 				Start: r.Start - start,
 				End:   r.End - start,
+				Term:  r.Term,
 			})
 		}
 	}
 	return local
+}
+
+func alignUTF8SliceBounds(s string, start, end int) (int, int) {
+	start = max(0, min(start, len(s)))
+	end = max(start, min(end, len(s)))
+	for start < end && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	for end > start && end < len(s) && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return start, end
 }
 
 func excerptContainsTerm(rawExcerpt string, matches []search.MatchRange, hasValidatedMatches bool, result search.SearchResult, term string, partial search.PartialMode, options search.QueryOptions) bool {
@@ -861,13 +869,17 @@ func excerptContainsTerm(rawExcerpt string, matches []search.MatchRange, hasVali
 		sanitized := terminaltext.Sanitize(rawExcerpt)
 		return search.FindTermIndex(sanitized, term, partial, options) != nil
 	}
-	if len(result.ChunkTermCounts) > 0 && result.ChunkTermCounts[0] > 0 && result.ChunkTermCounts[0] >= len(result.MatchedTerms) {
-		return true
-	}
+	_, offsets := terminaltext.SanitizeWithOffsets(rawExcerpt)
 	for _, m := range matches {
 		start := max(0, min(m.Start, len(rawExcerpt)))
 		end := max(start, min(m.End, len(rawExcerpt)))
-		if end <= start {
+		if end <= start || offsets[end] <= offsets[start] {
+			continue
+		}
+		if m.Term != "" {
+			if m.Term == term || (!options.CaseSensitive && strings.EqualFold(m.Term, term)) {
+				return true
+			}
 			continue
 		}
 		sub := rawExcerpt[start:end]

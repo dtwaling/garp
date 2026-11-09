@@ -1168,7 +1168,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		excerptMatches := make([][]MatchRange, len(spans))
 		for i := range spans {
 			highlightedExcerpts[i] = highlightExcerptSpan(spans[i])
-			excerptMatches[i] = excerptSpanMatchRanges(spans[i])
+			excerptMatches[i] = excerptSpanMatchRanges(spans[i], query)
 		}
 
 		// Resolve 1-based start line per excerpt by anchoring it back to the raw content.

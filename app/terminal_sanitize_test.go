@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+	"unicode/utf8"
 
 	"garp/internal/terminaltext"
 	"garp/search"
@@ -244,6 +245,124 @@ func TestTUIViewPreservesValidatedMatchRangesAcrossSanitization(t *testing.T) {
 		}
 		if !strings.Contains(view, "\x1b[1;31momega\x1b[0m") {
 			t.Fatalf("expected omega highlighted in TUI View:\n%s", view)
+		}
+	})
+
+	t.Run("fragment slicing aligns UTF-8 rune boundaries without exposing C1 continuation bytes", func(t *testing.T) {
+		lastContentHeight, lastExcerptInnerWidth = 0, 0
+		// 'ě' is 0xc4 0x9b; placing "needle" at byte 121 makes loc[0]-120 == 1
+		// (the 0x9b C1 CSI continuation byte), and placing 'ě' at loc[1]+119
+		// makes loc[1]+120 land mid-rune at the end boundary as well.
+		clean := "ě2J" + strings.Repeat("x", 116) + " needle " + strings.Repeat("y", 118) + "ě99"
+		result := search.SearchResult{
+			FilePath:       "utf8slice.txt",
+			FileSize:       int64(len(clean)),
+			Score:          11,
+			TermCount:      2,
+			MatchedTerms:   []string{"alpha", "needle"},
+			RawExcerpts:    []string{"alpha"},
+			ExcerptMatches: [][]search.MatchRange{{{Start: 0, End: len("alpha"), Term: "alpha"}}},
+			CleanContent:   clean,
+		}
+		m := model{
+			results:     []search.SearchResult{result},
+			searchWords: []string{"alpha", "needle"},
+			width:       200,
+			height:      80,
+		}
+		view := m.View()
+		if !utf8.ValidString(view) {
+			t.Fatalf("TUI view is not valid UTF-8: %q", view)
+		}
+		if strings.Contains(view, "\x9b2J") {
+			t.Fatalf("fragment slice exposed raw C1 CSI sequence \\x9b2J in view: %q", view)
+		}
+		assertSafeTerminalView(t, view)
+		if !strings.Contains(view, "\x1b[1;31mneedle\x1b[0m") {
+			t.Fatalf("expected augmented needle highlight in view:\n%s", view)
+		}
+	})
+
+	t.Run("term completely removed by excerpt truncation is augmented from CleanContent", func(t *testing.T) {
+		lastContentHeight, lastExcerptInnerWidth = 0, 0
+		// ChunkTermCounts[0] is 2 (from the pre-truncation source window), but
+		// truncation removed "omega" from RawExcerpts[0] and ExcerptMatches[0],
+		// while the surviving clipped wildcard match retains Term: "ms-*-api".
+		rawExcerpt := "ms-" + strings.Repeat("a", 40)
+		clean := "ms-" + strings.Repeat("a", 40) + "-api " + strings.Repeat("z ", 80) + "omega tail context"
+		result := search.SearchResult{
+			FilePath:        "truncated_term.go",
+			FileSize:        int64(len(clean)),
+			Score:           12,
+			TermCount:       2,
+			MatchedTerms:    []string{"ms-*-api", "omega"},
+			RawExcerpts:     []string{rawExcerpt},
+			ChunkTermCounts: []int{2},
+			ExcerptMatches: [][]search.MatchRange{{
+				{Start: 0, End: len(rawExcerpt), Term: "ms-*-api"},
+			}},
+			CleanContent: clean,
+		}
+		m := model{
+			results:     []search.SearchResult{result},
+			searchWords: []string{"ms-*-api", "omega"},
+			width:       200,
+			height:      80,
+		}
+		view := m.View()
+		assertSafeTerminalView(t, view)
+		if !strings.Contains(view, "\x1b[1;31mms-"+strings.Repeat("a", 40)+"\x1b[0m") {
+			t.Fatalf("missing clipped wildcard highlight in view:\n%s", view)
+		}
+		if !strings.Contains(view, "\x1b[1;31momega\x1b[0m tail context") {
+			t.Fatalf("expected truncated term 'omega' to be augmented from CleanContent, got view:\n%s", view)
+		}
+		if strings.Count(view, "ms-"+strings.Repeat("a", 40)) != 1 {
+			t.Fatalf("clipped wildcard term already present in Excerpt 1 should not be re-augmented:\n%s", view)
+		}
+
+		// End-to-end SearchEngine verification: 5-term multipart excerpt where
+		// perTerm=60 produces >240 bytes and truncateExcerpt drops the 5th term
+		// ("omega") while ChunkTermCounts[0] remains 5.
+		priorBudget := search.ExcerptCharBudget
+		search.ExcerptCharBudget = func() int { return 240 }
+		t.Cleanup(func() { search.ExcerptCharBudget = priorBudget })
+
+		dir := t.TempDir()
+		pad := strings.Repeat("x", 30)
+		sep := strings.Repeat(" z", 90) + " "
+		fileContent := fmt.Sprintf("%s alpha %s%s%s bravo %s%s%s charlie %s%s%s delta %s%s%s omega %s",
+			pad, pad, sep, pad, pad, sep, pad, pad, sep, pad, pad, sep, pad, pad)
+		file := filepath.Join(dir, "five_terms.go")
+		if err := os.WriteFile(file, []byte(fileContent), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		terms := []string{"alpha", "bravo", "charlie", "delta", "omega"}
+		se := search.NewSearchEngine(terms, nil, []string{".go"}, false, 1, 2000)
+		se.StartDir = dir
+		se.IncludeCode = true
+		se.Silent = true
+		results, err := se.Execute()
+		if err != nil || len(results) != 1 {
+			t.Fatalf("Execute() = %v, len=%d", err, len(results))
+		}
+		if results[0].ChunkTermCounts[0] != 5 {
+			t.Fatalf("ChunkTermCounts[0] = %d, want 5", results[0].ChunkTermCounts[0])
+		}
+		if strings.Contains(results[0].RawExcerpts[0], "omega") {
+			t.Fatalf("expected RawExcerpts[0] to have 'omega' truncated away: %q", results[0].RawExcerpts[0])
+		}
+		lastContentHeight, lastExcerptInnerWidth = 0, 0
+		mE2E := model{
+			results:     results,
+			searchWords: terms,
+			width:       200,
+			height:      80,
+		}
+		e2eView := mE2E.View()
+		assertSafeTerminalView(t, e2eView)
+		if !strings.Contains(e2eView, "\x1b[1;31momega\x1b[0m") {
+			t.Fatalf("expected truncated 5th term 'omega' to be augmented and highlighted in TUI View:\n%s", e2eView)
 		}
 	})
 }
