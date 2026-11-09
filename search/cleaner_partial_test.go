@@ -60,7 +60,7 @@ func TestInlineWildcardExcerptUsesExactRanges(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			query := compileQuery([]string{tt.term}, PartialModeOff)
-			spans := extractRankedExcerptSpansQuery(tt.text, query, 1, 1, 0, true)
+			spans := extractRankedExcerptSpansQuery(tt.text, query, 1, 1, 0, true, unconstrainedDistance)
 			if len(spans) != 1 {
 				t.Fatalf("excerpt spans = %#v, want one", spans)
 			}
@@ -83,8 +83,8 @@ func TestExcerptMatcherRangeRegressions(t *testing.T) {
 
 	invalid := string([]byte{0xff})
 	text := invalid + "\uFFFD"
-	invalidSpans := extractRankedExcerptSpansQuery(text, compileQuery([]string{invalid}, PartialModeOff), 1, 1, 0, true)
-	replacementSpans := extractRankedExcerptSpansQuery(text, compileQuery([]string{"\uFFFD"}, PartialModeOff), 1, 1, 0, true)
+	invalidSpans := extractRankedExcerptSpansQuery(text, compileQuery([]string{invalid}, PartialModeOff), 1, 1, 0, true, unconstrainedDistance)
+	replacementSpans := extractRankedExcerptSpansQuery(text, compileQuery([]string{"\uFFFD"}, PartialModeOff), 1, 1, 0, true, unconstrainedDistance)
 	if len(invalidSpans) != 1 || len(replacementSpans) != 1 {
 		t.Fatalf("byte-exact excerpts missing: invalid=%#v replacement=%#v", invalidSpans, replacementSpans)
 	}
@@ -107,7 +107,7 @@ func TestMultipartExcerptUsesFullTextRangesAtCandidateEdge(t *testing.T) {
 
 	content := "xfoo" + strings.Repeat(" z", 160) + " omega"
 	query := compileQuery([]string{"*foo*", "foo", "omega"}, PartialModeOff)
-	spans := extractRankedExcerptSpansQuery(content, query, 1, 2, 0, true)
+	spans := extractRankedExcerptSpansQuery(content, query, 1, 2, 0, true, unconstrainedDistance)
 	if len(spans) != 1 {
 		t.Fatalf("multipart excerpts = %#v, want one", spans)
 	}
@@ -124,7 +124,7 @@ func TestMultipartExcerptClampsVisibleWildcardMatch(t *testing.T) {
 	token := "ms-" + strings.Repeat("a", 120) + "-api"
 	content := token + strings.Repeat(" z", 120) + " omega"
 	query := compileQuery([]string{"ms-*-api", "omega"}, PartialModeOff)
-	spans := extractRankedExcerptSpansQuery(content, query, 1, 2, 0, true)
+	spans := extractRankedExcerptSpansQuery(content, query, 1, 2, 0, true, unconstrainedDistance)
 	if len(spans) != 1 {
 		t.Fatalf("multipart excerpts = %#v, want one", spans)
 	}
@@ -377,7 +377,7 @@ func TestExcerptInitialBudgetPreservesUTF8(t *testing.T) {
 
 	content := "api " + strings.Repeat("a", 195) + "érest"
 	query := compileQuery([]string{"api"}, PartialModeOff)
-	spans := extractRankedExcerptSpansQuery(content, query, 1, 1, 0, true)
+	spans := extractRankedExcerptSpansQuery(content, query, 1, 1, 0, true, unconstrainedDistance)
 	if len(spans) != 1 {
 		t.Fatalf("excerpt spans = %#v, want one", spans)
 	}

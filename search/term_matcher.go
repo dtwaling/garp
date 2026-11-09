@@ -36,6 +36,9 @@ type matchRange struct {
 }
 
 // compiledQuery is the immutable matching form of one normalized query.
+// For a nonempty query, terms[0] and matchers[0] represent the primary query term
+// used for ranked seeding in Stages 2 and 3. Compilation preserves normalized
+// input order and keeps terms and matchers aligned by index.
 type compiledQuery struct {
 	terms             []string
 	matchers          []termMatcher
