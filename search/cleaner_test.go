@@ -71,6 +71,54 @@ func TestMultipartExcerptTruncationPreservesRawAnchor(t *testing.T) {
 	}
 }
 
+func TestIssue32MultipartQueryPermutations(t *testing.T) {
+	priorBudget := ExcerptCharBudget
+	ExcerptCharBudget = func() int { return 400 }
+	t.Cleanup(func() { ExcerptCharBudget = priorBudget })
+	raw := "> alpha beta gamma hidden\nheader\nalpha " + strings.Repeat("filler ", 100) +
+		"beta " + strings.Repeat("filler ", 100) + "gamma end."
+	var reference string
+	for _, terms := range [][]string{
+		{"alpha", "beta", "gamma"}, {"alpha", "gamma", "beta"},
+		{"beta", "alpha", "gamma"}, {"beta", "gamma", "alpha"},
+		{"gamma", "alpha", "beta"}, {"gamma", "beta", "alpha"},
+	} {
+		t.Run(strings.Join(terms, "/"), func(t *testing.T) {
+			query := compileQuery(terms, PartialModeOff)
+			spans := extractRankedExcerptSpansQuery(raw, query, 1, 3, 0, false, unconstrainedDistance)
+			if len(spans) != 1 || !strings.Contains(spans[0].text, " ... ") {
+				t.Fatalf("expected one multipart excerpt: %#v", spans)
+			}
+			span := spans[0]
+			if reference == "" {
+				reference = span.text
+			}
+			if span.text != reference {
+				t.Fatalf("query order changed excerpt: %q, want %q", span.text, reference)
+			}
+			previous := -1
+			for _, term := range []string{"alpha", "beta", "gamma"} {
+				pos := strings.Index(span.text, term)
+				if pos <= previous || strings.Count(span.text, term) != 1 {
+					t.Fatalf("term %q missing, duplicated, or out of order: %q", term, span.text)
+				}
+				previous = pos
+			}
+			if len(span.matches) != 3 {
+				t.Fatalf("expected three displayed matches: %+v", span.matches)
+			}
+			for _, match := range span.matches {
+				if span.text[match.start:match.end] != terms[match.term] {
+					t.Fatalf("query term identity lost: %+v", match)
+				}
+			}
+			if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); len(got) != 1 || got[0] != 3 {
+				t.Fatalf("anchors = %v, want [3]", got)
+			}
+		})
+	}
+}
+
 func TestExtractMeaningfulExcerpts_ReturnsMultipleNonOverlappingMatches(t *testing.T) {
 	content := strings.Join([]string{
 		"alpha provider access_token one.",
