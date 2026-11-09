@@ -1,6 +1,59 @@
 package search
 
-import "testing"
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+)
+
+func TestEmittedExcerptLinesKeepClusterIdentity(t *testing.T) {
+	for _, isCode := range []bool{false, true} {
+		for _, limit := range []int{1, 2} {
+			t.Run(fmt.Sprintf("code=%t/limit=%d", isCode, limit), func(t *testing.T) {
+				raw := "header\nalpha " + strings.Repeat("loose ", 30) + "beta.\n" +
+					strings.Repeat("padding line.\n", 100) + "alpha beta tight cluster.\n"
+				query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+				content := CleanContent(raw)
+				if isCode {
+					content = CleanContentCode(raw)
+				}
+				spans := extractRankedExcerptSpansQuery(content, query, limit, 2, 2, isCode, 5000)
+				if len(spans) != limit || !strings.Contains(spans[0].text, "tight cluster") {
+					t.Fatalf("expected tighter cluster ranked first in %d spans: %#v", limit, spans)
+				}
+				want := []int{103}
+				if limit == 2 {
+					want = append(want, 2)
+				}
+				if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, want) {
+					t.Fatalf("ranked anchors = %v, want %v", got, want)
+				}
+				slices.SortFunc(spans, func(a, b excerptSpan) int { return a.left - b.left })
+				slices.Sort(want)
+				if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, want) {
+					t.Fatalf("document-order anchors = %v, want %v", got, want)
+				}
+			})
+		}
+	}
+}
+
+func TestExcerptLineWindowHonorsCallerDistance(t *testing.T) {
+	raw := "alpha\n" + strings.Repeat("filler ", 200) + "\nbeta\nalpha\n"
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	// The two-term cluster starts on line 1, not the rare beta on line 3.
+	// A second alpha prevents choosing alpha simply because it is rarest.
+	raw = strings.Replace(raw, "\nbeta\nalpha\n", "\nbeta\n"+strings.Repeat("filler ", 800)+"\nalpha\n", 1)
+	for _, window := range []int{5000, 6000} {
+		if got := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0, 1}), query, window); !slices.Equal(got, []int{1}) {
+			t.Fatalf("window %d: anchors = %v, want [1]", window, got)
+		}
+	}
+	if got := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0, 1}), query, 800); !slices.Equal(got, []int{3}) {
+		t.Fatalf("window 800: anchors = %v, want [3]", got)
+	}
+}
 
 func lineSpans(termSets ...[]int) []excerptSpan {
 	spans := make([]excerptSpan, len(termSets))

@@ -44,12 +44,9 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		return out
 	}
 
-	// Clamp the clustering window: tight enough to stay local, wide enough to span a match.
-	if window <= 0 || window > 4000 {
+	// Use the caller's proximity bound; only unspecified windows need a fallback.
+	if window <= 0 {
 		window = 800
-	}
-	if window < 200 {
-		window = 200
 	}
 
 	li := newLineIndexer(raw)
@@ -93,6 +90,32 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 	// at or after the previous excerpt's anchor.
 	cursor := 0
 	for i, span := range spans {
+		// Cleaning changes byte offsets but normally preserves per-term occurrence
+		// order. Resolve the emitted matches by identity before using the legacy
+		// coverage heuristic. Only trust ordinals when occurrence counts agree;
+		// markup removal can otherwise shift them relative to the raw source.
+		sourceCounts := make([]int, len(query.matchers))
+		for _, match := range span.sourceMatches {
+			sourceCounts[match.term]++
+		}
+		lo, exact := len(raw), len(span.matches) > 0
+		for _, match := range span.matches {
+			found := false
+			for _, info := range infos {
+				if info.index == match.term && match.occurrence > 0 &&
+					match.occurrence <= len(info.offsets) && sourceCounts[match.term] == len(info.offsets) {
+					lo = min(lo, info.offsets[match.occurrence-1])
+					found = true
+					break
+				}
+			}
+			exact = exact && found
+		}
+		if exact {
+			out[i] = li.lineOf(lo)
+			cursor = lo + 1
+			continue
+		}
 		// Determine which terms appear in this excerpt, and pick the rarest (fewest raw
 		// occurrences) as the anchor -- rarer terms disambiguate position more reliably.
 		var anchor *termInfo
@@ -146,7 +169,7 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		}
 
 		// Start line = the earliest present-term occurrence in the chosen cluster.
-		lo := bestPos
+		lo = bestPos
 		for _, p := range present {
 			if o, ok := nearest(p.offsets, bestPos); ok && o < lo {
 				lo = o
