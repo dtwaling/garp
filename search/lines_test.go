@@ -2,10 +2,85 @@ package search
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 )
+
+func TestMappedContentReplaceCaptureGroups(t *testing.T) {
+	for _, tc := range []struct {
+		name, pattern, replacement, want string
+		offsets                          []int
+	}{
+		{"missing", "b", "[$1]", "a[]c", []int{0, -1, -1, 2}},
+		{"out of range", "(b)", "$9$1", "abc", []int{0, 1, 2}},
+		{"optional unmatched", "(x)?b", "[$1]", "a[]c", []int{0, -1, -1, 2}},
+		{"optional matched", "(b)?", "$1", "abc", []int{0, 1, 2}},
+		{"empty capture", "()b", "$1", "ac", []int{0, 2}},
+		{"whole match", "b", "$0", "abc", []int{0, 1, 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := mappedContent{"abc", []int{0, 1, 2}}
+			got := m.replace(regexp.MustCompile(tc.pattern), tc.replacement)
+			if got.text != tc.want || !slices.Equal(got.offsets, tc.offsets) {
+				t.Fatalf("replace = %#v, want text %q offsets %v", got, tc.want, tc.offsets)
+			}
+		})
+	}
+}
+
+func TestExcerptLinesScratchAllocations(t *testing.T) {
+	query := compileQuery([]string{"needle"}, PartialModeOff)
+	spans := make([]excerptSpan, 200)
+	for i := range spans {
+		spans[i] = lineSpans([]int{0})[0]
+	}
+	measure := func(spans []excerptSpan) float64 {
+		return testing.AllocsPerRun(10, func() {
+			got := computeExcerptSpanLinesQuery("needle", spans, query, 1)
+			for _, line := range got {
+				if line != 1 {
+					t.Fatalf("anchor = %d, want 1", line)
+				}
+			}
+		})
+	}
+	// Both output slices exceed the compiler's small-slice stack optimization.
+	fewer, many := measure(spans[:100]), measure(spans)
+	// Allow incidental process-wide allocation noise, but not even one extra
+	// allocation per span (which would add 100 allocations here).
+	if many-fewer > 2 {
+		t.Fatalf("allocations grew with spans: hundred=%g, two hundred=%g", fewer, many)
+	}
+	t.Logf("allocations: hundred spans=%g, two hundred spans=%g", fewer, many)
+}
+
+func TestExcerptLinesScratchResetAndLazyIdentity(t *testing.T) {
+	raw := "alpha\nbeta\nalpha\n"
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	spans := lineSpans([]int{0}, []int{1}, nil, []int{0})
+	// A synthetic span precedes an exact span, which must initialize lazily.
+	cleaned := CleanContentCode(raw)
+	identities := []excerptMatch{
+		{term: 0, source: matchRange{start: 0, end: 5}, occurrence: 1},
+		{term: 1, source: matchRange{start: 6, end: 10}, occurrence: 1},
+		{term: 0, source: matchRange{start: 11, end: 16}, occurrence: 2},
+	}
+	spans[1].sourceText = cleaned
+	spans[1].sourceMatches = identities
+	spans[1].matches = identities[1:2]
+	spans[3].sourceText = cleaned
+	spans[3].sourceMatches = identities
+	spans[3].matches = identities[2:]
+	if got := computeExcerptSpanLinesQuery(raw, spans, query, 1); !slices.Equal(got, []int{1, 2, 0, 3}) {
+		t.Fatalf("mixed anchors = %v, want [1 2 0 3]", got)
+	}
+	// Disjoint fallback terms and an empty span must not retain prior membership.
+	if got := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0}, []int{1}, nil, []int{0}), query, 1); !slices.Equal(got, []int{1, 2, 0, 3}) {
+		t.Fatalf("fallback anchors = %v, want [1 2 0 3]", got)
+	}
+}
 
 func TestEmittedExcerptLinesKeepClusterIdentity(t *testing.T) {
 	for _, isCode := range []bool{false, true} {

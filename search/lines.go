@@ -89,7 +89,9 @@ func (m mappedContent) replace(re *regexp.Regexp, replacement string) mappedCont
 			if replacement[j] == '$' && j+1 < len(replacement) {
 				j++
 				group := int(replacement[j]-'0') * 2
-				copyRange(loc[group], loc[group+1])
+				if group+1 < len(loc) && loc[group] >= 0 {
+					copyRange(loc[group], loc[group+1])
+				}
 			} else {
 				text.WriteByte(replacement[j])
 				offsets = append(offsets, -1)
@@ -186,13 +188,12 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		offsets []int
 	}
 	infos := make([]termInfo, 0, len(query.matchers))
-	prefixes := make(map[int]codePrefix)
+
 	for index, matcher := range query.matchers {
 		locs := matcher.findAll(raw)
 		offs := make([]int, len(locs))
 		for k, l := range locs {
 			offs[k] = l.start
-			prefixes[l.start] = codePrefix{}
 		}
 		// A term with no raw occurrences can never be an anchor; skip it here so the
 		// per-excerpt loop below doesn't have to filter empty-offset entries.
@@ -220,16 +221,33 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		return best, found
 	}
 
-	normalizedRaw := strings.TrimSpace(codePrefixCorrespondence(raw, prefixes))
+	var normalizedRaw string
+	normalizedReady := false
+	var prefixes map[int]codePrefix
 	var documents []mappedContent
 	documentsReady := false
+	sourceCounts := make([]int, len(query.matchers))
+	first := make([]int, len(query.matchers))
+	present := make([]*termInfo, 0, len(infos))
 	// The fallback prefers anchors beyond every match in the previous cluster.
 	// Exact identities may still resolve excerpts emitted in ranking order.
 	cursor := 0
 	for i, span := range spans {
 		// Equal counts alone do not prove correspondence. Check raw byte identity
 		// for document transformations, and normalized prefixes for code.
-		code := span.sourceText == normalizedRaw
+		if span.sourceText != "" && !normalizedReady {
+			// Synthetic spans need no normalization. Exact-identity candidates
+			// share one scan that also records the requested code prefixes.
+			prefixes = make(map[int]codePrefix)
+			for _, info := range infos {
+				for _, offset := range info.offsets {
+					prefixes[offset] = codePrefix{}
+				}
+			}
+			normalizedRaw = strings.TrimSpace(codePrefixCorrespondence(raw, prefixes))
+			normalizedReady = true
+		}
+		code := span.sourceText != "" && span.sourceText == normalizedRaw
 		var document *mappedContent
 		if !code && span.sourceText != "" {
 			if !documentsReady {
@@ -243,7 +261,7 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 				}
 			}
 		}
-		sourceCounts := make([]int, len(query.matchers))
+		clear(sourceCounts)
 		for _, match := range span.sourceMatches {
 			sourceCounts[match.term]++
 		}
@@ -284,13 +302,17 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		// Determine which terms appear in this excerpt, and pick the rarest (fewest raw
 		// occurrences) as the anchor -- rarer terms disambiguate position more reliably.
 		var anchor *termInfo
-		present := make([]*termInfo, 0, len(infos))
-		presentTerms := make(map[int]struct{}, len(span.matches))
+		present = present[:0]
+		for j := range first {
+			first[j] = -1
+		}
 		for _, match := range span.matches {
-			presentTerms[match.term] = struct{}{}
+			if first[match.term] == -1 || match.source.start < first[match.term] {
+				first[match.term] = match.source.start
+			}
 		}
 		for j := range infos {
-			if _, ok := presentTerms[infos[j].index]; ok {
+			if first[infos[j].index] != -1 {
 				present = append(present, &infos[j])
 				if anchor == nil || len(infos[j].offsets) < len(anchor.offsets) {
 					anchor = &infos[j]
@@ -303,12 +325,6 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 
 		// Preserve known source ordering so a preceding term cannot be borrowed
 		// from the following cluster simply because it is closer to the anchor.
-		first := make(map[int]int)
-		for _, match := range span.matches {
-			if old, ok := first[match.term]; !ok || match.source.start < old {
-				first[match.term] = match.source.start
-			}
-		}
 		cluster := func(idx int) (score, lo, hi int) {
 			pos := anchor.offsets[idx]
 			lo, hi = pos, pos
