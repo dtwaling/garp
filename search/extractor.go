@@ -82,7 +82,7 @@ type HTMLExtractor struct{}
 // ExtractText implements the Extractor interface for HTML files
 func (e *HTMLExtractor) ExtractText(data []byte) (string, error) {
 	html := string(data)
-	text := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(html, " ")
+	text := htmlTagRegex.ReplaceAllString(html, " ")
 	// Simple entity decoding
 	text = strings.ReplaceAll(text, "&amp;", "&")
 	text = strings.ReplaceAll(text, "&lt;", "<")
@@ -98,7 +98,7 @@ type XMLExtractor struct{}
 // ExtractText implements the Extractor interface for XML files
 func (e *XMLExtractor) ExtractText(data []byte) (string, error) {
 	xml := string(data)
-	text := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(xml, " ")
+	text := htmlTagRegex.ReplaceAllString(xml, " ")
 	return strings.TrimSpace(text), nil
 }
 
@@ -166,7 +166,7 @@ func (e *EMLExtractor) ExtractText(data []byte) (string, error) {
 
 	// Clean up excessive whitespace
 	text = strings.TrimSpace(text)
-	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
+	text = whitespaceRegex.ReplaceAllString(text, " ")
 
 	return text, nil
 }
@@ -174,12 +174,10 @@ func (e *EMLExtractor) ExtractText(data []byte) (string, error) {
 // stripHTMLTags removes HTML tags from text (simple implementation)
 func stripHTMLTags(html string) string {
 	// Remove HTML tags
-	tagRegex := regexp.MustCompile(`<[^>]*>`)
-	text := tagRegex.ReplaceAllString(html, " ")
+	text := htmlTagRegex.ReplaceAllString(html, " ")
 
 	// Decode HTML entities
-	entityRegex := regexp.MustCompile(`&[a-zA-Z0-9#]*;`)
-	text = entityRegex.ReplaceAllStringFunc(text, func(entity string) string {
+	text = htmlEntityRegex.ReplaceAllStringFunc(text, func(entity string) string {
 		switch entity {
 		case "&amp;":
 			return "&"
@@ -269,7 +267,7 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				buf = append(buf, ' ')
 			}
 		}
-		txt := strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(string(buf), " "))
+		txt := strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(buf), " "))
 		return txt, nil
 	}
 
@@ -317,7 +315,7 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		}
 
 		// Normalize and append
-		text = strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(text, " "))
+		text = strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
 		if text != "" {
 			if out.Len() > 0 {
 				out.WriteString("\n")
@@ -341,7 +339,7 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				buf = append(buf, ' ')
 			}
 		}
-		result = strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(string(buf), " "))
+		result = strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(buf), " "))
 	}
 	return result, nil
 }
@@ -386,6 +384,10 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 	// Extract positioned text page-by-page. GetPlainText can collapse adjacent
 	// PDF text runs together, which breaks whole-word matching.
 	for i := 1; i <= pages; i++ {
+		// Probe even when the PDF library can serve this page from its cache.
+		if _, err := r.ReadAt(nil, 0); err != nil && err != io.EOF {
+			return "", err
+		}
 		var pageErr error
 		func() {
 			defer func() { _ = recover() }()
@@ -423,6 +425,10 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 	fonts := make(map[string]*pdf.Font)
 	var plainBuf strings.Builder
 	for i := 1; i <= pages; i++ {
+		// Probe even when the PDF library can serve this page from its cache.
+		if _, err := r.ReadAt(nil, 0); err != nil && err != io.EOF {
+			return "", err
+		}
 		var pagePlain string
 		var pageErr error
 		func() {
@@ -580,7 +586,7 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			if s, ok := tryDecodeUTF16BestEffort(b); ok {
 				return strings.TrimSpace(s)
 			}
-			s := regexp.MustCompile(`\s+`).ReplaceAllString(string(b), " ")
+			s := whitespaceRegex.ReplaceAllString(string(b), " ")
 			return strings.TrimSpace(s)
 		}
 
@@ -607,7 +613,7 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 
 		if subject != "" || body != "" {
 			out := strings.TrimSpace(strings.TrimSpace(subject) + "\n\n" + strings.TrimSpace(body))
-			out = regexp.MustCompile(`\s+`).ReplaceAllString(out, " ")
+			out = whitespaceRegex.ReplaceAllString(out, " ")
 			return out, nil
 		}
 	}
@@ -629,7 +635,7 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			buf = append(buf, ' ')
 		}
 	}
-	out := regexp.MustCompile(`\s+`).ReplaceAllString(string(buf), " ")
+	out := whitespaceRegex.ReplaceAllString(string(buf), " ")
 	return strings.TrimSpace(out), nil
 }
 
@@ -734,7 +740,7 @@ func (e *DOCXExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedB
 			if err != nil {
 				return "", err
 			}
-			text := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(string(content), " ")
+			text := htmlTagRegex.ReplaceAllString(string(content), " ")
 			return strings.TrimSpace(text), nil
 		}
 	}
@@ -772,7 +778,7 @@ func (e *ODTExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			if err != nil {
 				return "", err
 			}
-			text := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(string(content), " ")
+			text := htmlTagRegex.ReplaceAllString(string(content), " ")
 			return strings.TrimSpace(text), nil
 		}
 	}
@@ -783,12 +789,13 @@ func (e *ODTExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 // RTFExtractor extracts text from .rtf files (Rich Text Format)
 type RTFExtractor struct{}
 
+var rtfControlRegex = regexp.MustCompile(`\\[a-z]+\d*`)
+
 // ExtractText implements the Extractor interface for RTF files
 func (e *RTFExtractor) ExtractText(data []byte) (string, error) {
 	text := string(data)
 
 	// Remove RTF control words (simple regex approach)
-	rtfControlRegex := regexp.MustCompile(`\\[a-z]+\d*`)
 	text = rtfControlRegex.ReplaceAllString(text, "")
 
 	// Remove braces
@@ -796,7 +803,7 @@ func (e *RTFExtractor) ExtractText(data []byte) (string, error) {
 	text = strings.ReplaceAll(text, "}", "")
 
 	// Clean up excessive whitespace
-	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
+	text = whitespaceRegex.ReplaceAllString(text, " ")
 
 	return strings.TrimSpace(text), nil
 }
