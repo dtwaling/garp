@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -120,13 +121,15 @@ func TestEncodedBinaryCLIOutputParity(t *testing.T) {
 								t.Fatalf("JSON path: %s", out)
 							}
 						case "--plain":
-							if strings.Count(string(out), "MATCH 1/1 ") != want || strings.Contains(string(out), path) != (want == 1) {
+							quotedPath := strconv.Quote(path)
+							if strings.Count(string(out), "MATCH 1/1 ") != want || strings.Contains(string(out), quotedPath[1:len(quotedPath)-1]) != (want == 1) {
 								t.Fatalf("plain: %s, want %d", out, want)
 							}
 						case "--pathonly":
 							wantOutput := ""
 							if want == 1 {
-								wantOutput = path + "\n"
+								quotedPath := strconv.Quote(path)
+								wantOutput = quotedPath[1:len(quotedPath)-1] + "\n"
 							}
 							if string(out) != wantOutput {
 								t.Fatalf("pathonly: %q, want %q", out, wantOutput)
