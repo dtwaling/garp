@@ -648,8 +648,8 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 		}
 
 		// Best-first emission with the bounded-overlap guarantee. A candidate
-		// seeds a chunk only when its left edge (a match start) lies outside
-		// every prior emitted window, and its padded window must be >= 90% new
+		// seeds a chunk only when its matched core [left, right) is disjoint
+		// from every prior emitted window, and its padded window must be >= 90% new
 		// content against the emitted union (exact union arithmetic -- emission
 		// order is ranked, not document order). Rejected candidates are simply
 		// skipped; later (lower-ranked) ones stay eligible.
@@ -675,11 +675,12 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 				}
 			}
 
-			// The candidate's left edge is a match start. It seeds a novel chunk
-			// only when it is outside every prior emitted window.
+			// Only context padding may overlap. Check the full half-open matched
+			// core, including the right endpoint and any enclosed prior window,
+			// so a wide multipart candidate cannot reuse a match under the 10% cap.
 			seedIsNew := true
 			for _, e := range emitted {
-				if c.left >= e.left && c.left < e.right {
+				if c.left < e.right && e.left < c.right {
 					seedIsNew = false
 					break
 				}

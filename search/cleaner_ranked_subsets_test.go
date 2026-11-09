@@ -135,6 +135,59 @@ func TestRankedExcerptSpansDistanceBoundary(t *testing.T) {
 	}
 }
 
+// A wide three-term candidate from either early cluster to the sole gamma
+// overlaps less than 10% of its length with the final cluster. It must not
+// reuse that endpoint and reserve the intervening two-term clusters.
+func endpointNoveltyCorpus() string {
+	return "alpha beta first cluster\n" + strings.Repeat("padding ", 500) +
+		"\nalpha beta middle cluster\n" + strings.Repeat("padding ", 500) +
+		"\nalpha beta gamma final cluster"
+}
+
+func TestRankedExcerptSpansRejectReusedRightEndpoint(t *testing.T) {
+	SetExcerptContextLimit(100)
+	t.Cleanup(func() { SetExcerptContextLimit(0) })
+	content := endpointNoveltyCorpus()
+	query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
+	for _, isCode := range []bool{false, true} {
+		spans := extractRankedExcerptSpansQuery(content, query, 3, 3, 2, isCode, len(content))
+		if len(spans) != 3 {
+			t.Fatalf("code=%v: got %d spans, want all three clusters", isCode, len(spans))
+		}
+		for i, marker := range []string{"final cluster", "first cluster", "middle cluster"} {
+			wantTerms := 2
+			if i == 0 {
+				wantTerms = 3
+			}
+			if spans[i].termCount != wantTerms || !strings.Contains(spans[i].text, marker) {
+				t.Fatalf("code=%v span %d = %#v, want %s with %d terms", isCode, i, spans[i], marker, wantTerms)
+			}
+			if i > 0 && strings.Contains(spans[i].text, "gamma") {
+				t.Fatalf("code=%v span %d reuses sole gamma: %q", isCode, i, spans[i].text)
+			}
+		}
+		requireBoundedNovelSpans(t, content, spans, "alpha")
+	}
+}
+
+func TestRankedExcerptSpansAllowContextOnlyOverlap(t *testing.T) {
+	SetExcerptContextLimit(100)
+	t.Cleanup(func() { SetExcerptContextLimit(0) })
+	priorBudget := ExcerptCharBudget
+	ExcerptCharBudget = func() int { return 400 }
+	t.Cleanup(func() { ExcerptCharBudget = priorBudget })
+	content := strings.Repeat("x ", 200) + "alpha beta first" + strings.Repeat(" x", 182) + " alpha beta other" + strings.Repeat(" x", 200)
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	spans := extractRankedExcerptSpansQuery(content, query, 3, 2, 2, true, 20)
+	if len(spans) != 2 {
+		t.Fatalf("got %d spans, want two distinct clusters", len(spans))
+	}
+	if overlap := spanOverlap(spans[0], spans[1]); overlap <= 0 {
+		t.Fatal("fixture must exercise positive context overlap")
+	}
+	requireBoundedNovelSpans(t, content, spans, "alpha")
+}
+
 func TestRankedExcerptSpansRespectMaxExcerpts(t *testing.T) {
 	SetExcerptContextLimit(100)
 	t.Cleanup(func() { SetExcerptContextLimit(0) })

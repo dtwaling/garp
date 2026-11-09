@@ -123,6 +123,74 @@ func TestEnginePerFileSubsetsExcerptLimitDoesNotChangeFileRank(t *testing.T) {
 	}
 }
 
+func TestEnginePerFileSubsetsStage3Regressions(t *testing.T) {
+	SetExcerptContextLimit(100)
+	t.Cleanup(func() { SetExcerptContextLimit(0) })
+	for _, tc := range []struct {
+		name     string
+		content  string
+		distance int
+		markers  []string
+		terms    []int
+	}{
+		{
+			name:     "distant extra term cannot inflate excerpt quality",
+			content:  "alpha beta near cluster\n" + strings.Repeat("padding ", 500) + "\ngamma",
+			distance: 20,
+			markers:  []string{"near cluster"},
+			terms:    []int{2},
+		},
+		{
+			name:     "sole endpoint is not reused or allowed to suppress middle cluster",
+			content:  endpointNoveltyCorpus(),
+			distance: len(endpointNoveltyCorpus()),
+			markers:  []string{"final cluster", "first cluster", "middle cluster"},
+			terms:    []int{3, 2, 2},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "clusters.txt"), []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			engine := NewSearchEngineWithWorkers([]string{"alpha", "beta", "gamma"}, nil, []string{"-g", "*.txt"}, false, 1, 1000, 1)
+			engine.StartDir = root
+			engine.Distance = tc.distance
+			engine.MaxExcerpts = 3
+			engine.Silent = true
+			results, err := engine.Execute()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("got %d files, want 1", len(results))
+			}
+			result := results[0]
+			wantScore := len("alpha") + len("beta")
+			if tc.terms[0] == 3 {
+				wantScore += len("gamma")
+			}
+			if result.Score != wantScore || result.TermCount != tc.terms[0] {
+				t.Fatalf("file quality = (%d, %d), want (%d, %d)", result.Score, result.TermCount, wantScore, tc.terms[0])
+			}
+			if len(result.RawExcerpts) != len(tc.markers) || len(result.ChunkScores) != len(tc.markers) || len(result.ChunkTermCounts) != len(tc.markers) {
+				t.Fatalf("excerpt/score/term counts = (%d, %d, %d), want %d each", len(result.RawExcerpts), len(result.ChunkScores), len(result.ChunkTermCounts), len(tc.markers))
+			}
+			for i, marker := range tc.markers {
+				if result.ChunkScores[i] > result.Score || result.ChunkTermCounts[i] > result.TermCount {
+					t.Fatalf("excerpt %d quality exceeds parent file", i)
+				}
+				if result.ChunkTermCounts[i] != tc.terms[i] || !strings.Contains(result.RawExcerpts[i], marker) {
+					t.Fatalf("excerpt %d = %q (%d terms), want %s (%d terms)", i, result.RawExcerpts[i], result.ChunkTermCounts[i], marker, tc.terms[i])
+				}
+				if tc.terms[i] == 2 && strings.Contains(result.RawExcerpts[i], "gamma") {
+					t.Fatalf("excerpt %d includes distant or reused gamma: %q", i, result.RawExcerpts[i])
+				}
+			}
+		})
+	}
+}
+
 func TestEnginePerFileSubsetsChunkOrderingWithinFile(t *testing.T) {
 	SetExcerptContextLimit(100)
 	t.Cleanup(func() { SetExcerptContextLimit(0) })
