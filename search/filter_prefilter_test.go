@@ -1,13 +1,143 @@
 package search_test
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"garp/search"
 )
+
+// These fixtures contain encoded terms invisible to raw-byte matching. Reuse the real
+// compound-file fixture so MSG exercises its UTF-16LE subject and body streams.
+func encodedBinaryFixtures() map[string][]byte {
+	encoded := base64.StdEncoding.EncodeToString([]byte("<html><body>subject body</body></html>"))
+	eml := "MIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + encoded + "\r\n"
+	return map[string][]byte{
+		"base64.eml":           []byte(eml),
+		"quoted-printable.eml": []byte("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nsu=\r\nbject bo=64y\r\n"),
+
+		"encoded.mbox":      []byte("From sender@example.com Mon Jan 1 00:00:00 2024\n" + eml),
+		"unicode.msg":       readerAtMSG(),
+		"control-words.rtf": []byte(`{\rtf1\ansi su{\b}bject bo{\i}dy}`),
+	}
+}
+
+func TestEncodedBinarySearchPipeline(t *testing.T) {
+	for name, data := range encodedBinaryFixtures() {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, name)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name           string
+				words, exclude []string
+				partial        search.PartialMode
+				want           int
+			}{
+				{name: "subject", words: []string{"subject"}, want: 1},
+				{name: "body", words: []string{"body"}, want: 1},
+				{name: "case insensitive", words: []string{"SUBJECT", "BODY"}, want: 1},
+				{name: "wildcards", words: []string{"subj*", "bo?y"}, want: 1},
+				{name: "partial", words: []string{"subj", "bod"}, partial: search.PartialModePrefix, want: 1},
+				{name: "absent primary", words: []string{"unfindableterm"}},
+				{name: "absent secondary", words: []string{"subject", "unfindableterm"}},
+				{name: "decoded exclusion", words: []string{"subject"}, exclude: []string{"body"}},
+			} {
+				for _, strict := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/strict=%t", tc.name, strict), func(t *testing.T) {
+						engine := search.NewSearchEngineWithWorkers(tc.words, tc.exclude, nil, false, 1, 5000, 1)
+						engine.StartDir, engine.Silent = root, true
+						engine.Strict, engine.Partial, engine.Distance = strict, tc.partial, 10000
+						// Explicit Stage 2 assertions prevent Stage 3 from masking a
+						// dropped candidate or a spurious prefilter acceptance.
+						matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+						if err != nil || len(matches) != tc.want {
+							t.Fatalf("Stage 2: matches=%v err=%v, want %d", matches, err, tc.want)
+						}
+						results, err := engine.Execute()
+						if err != nil || len(results) != tc.want {
+							t.Fatalf("Execute: results=%v err=%v, want %d", results, err, tc.want)
+						}
+						if tc.want == 1 && results[0].FilePath != path {
+							t.Fatalf("wrong result path: %s", results[0].FilePath)
+						}
+					})
+				}
+			}
+		})
+	}
+}
+
+func TestEncodedBinaryCLIOutputParity(t *testing.T) {
+	// Build once and invoke the actual CLI, including argument parsing and all
+	// three output paths, against the same encoded fixtures as the engine test.
+	binary := filepath.Join(t.TempDir(), "garp.exe")
+	if out, err := exec.Command("go", "build", "-o", binary, "..").CombinedOutput(); err != nil {
+		t.Fatalf("build CLI: %v\n%s", err, out)
+	}
+	for name, data := range encodedBinaryFixtures() {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, name)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, query := range []string{"SUBJECT", "BODY", "subj*", "bo?y", "unfindableterm"} {
+				t.Run(query, func(t *testing.T) {
+					want := 1
+					if query == "unfindableterm" {
+						want = 0
+					}
+					for _, mode := range []string{"--json", "--plain", "--pathonly"} {
+						out, err := exec.Command(binary, query, "--startdir", root, mode).Output()
+						if err != nil {
+							t.Fatalf("%s: %v", mode, err)
+						}
+						switch mode {
+						case "--json":
+							var result struct {
+								Matches int `json:"matches"`
+								Results []struct {
+									File string `json:"file"`
+								} `json:"results"`
+							}
+							if err := json.Unmarshal(out, &result); err != nil {
+								t.Fatal(err)
+							}
+							if result.Matches != want || len(result.Results) != want {
+								t.Fatalf("JSON: %s, want %d", out, want)
+							}
+							if want == 1 && result.Results[0].File != path {
+								t.Fatalf("JSON path: %s", out)
+							}
+						case "--plain":
+							if strings.Count(string(out), "MATCH 1/1 ") != want || strings.Contains(string(out), path) != (want == 1) {
+								t.Fatalf("plain: %s, want %d", out, want)
+							}
+						case "--pathonly":
+							wantOutput := ""
+							if want == 1 {
+								wantOutput = path + "\n"
+							}
+							if string(out) != wantOutput {
+								t.Fatalf("pathonly: %q, want %q", out, wantOutput)
+							}
+						}
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestBinaryPrefilterStrictnessAndRelaxedStrategyA(t *testing.T) {
 	words := []string{"the", "ms-*-api", "synchronization"}
@@ -55,8 +185,8 @@ func TestBinaryPrefilterStrictnessAndRelaxedStrategyA(t *testing.T) {
 			}
 
 			found, decided := search.BinaryStreamingPrefilterRankedDecided(path, words, 0, tt.strict)
-			if !decided {
-				t.Fatal("prefilter was inconclusive for a small candidate")
+			if decided != tt.found {
+				t.Fatalf("decided = %v, want %v (raw misses require extraction)", decided, tt.found)
 			}
 			if found != tt.found {
 				t.Errorf("found = %v, want %v", found, tt.found)
@@ -74,8 +204,8 @@ func TestBinaryPrefilterCompatibilityWrapperIsStrict(t *testing.T) {
 	found, decided := search.BinaryStreamingPrefilterDecided(
 		path, []string{"primary", "secondary", "missing"}, 0,
 	)
-	if found || !decided {
-		t.Fatalf("compatibility wrapper result = (%v, %v), want (false, true)", found, decided)
+	if found || decided {
+		t.Fatalf("compatibility wrapper result = (%v, %v), want (false, false)", found, decided)
 	}
 }
 

@@ -1175,7 +1175,13 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".eml", ".msg", ".mbox", ".rtf":
-		return streamContainsQueryDecidedWithCap(filePath, query, strict, capBytes)
+		found, decided := streamContainsQueryDecidedWithCap(filePath, query, strict, capBytes)
+		if !found {
+			// Raw bytes do not expose all decoded text in these formats.
+			// Even a complete scan cannot prove absence; defer to extraction.
+			return false, false
+		}
+		return found, decided
 
 	case ".docx", ".odt":
 		// Conservative ZIP sniff + capped XML stream:
