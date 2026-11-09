@@ -112,6 +112,11 @@ func TestEngineBinaryExtractorDispatch(t *testing.T) {
 }
 
 func TestLegacyBinaryExtractorRejectsOversizedFiles(t *testing.T) {
+	const (
+		limit        = 64 * 1024 * 1024
+		oversize     = limit + 4096
+		maxHeapDelta = 4 * 1024 * 1024
+	)
 	for _, terms := range [][]string{{"alpha"}, {"alpha", "beta"}} {
 		for _, stage := range []string{"filter", "extract"} {
 			t.Run(strings.Join(terms, "-")+"/"+stage, func(t *testing.T) {
@@ -119,11 +124,18 @@ func TestLegacyBinaryExtractorRejectsOversizedFiles(t *testing.T) {
 				if err := os.WriteFile(path, []byte("opaque binary fixture"), 0o600); err != nil {
 					t.Fatal(err)
 				}
+				if err := os.Truncate(path, oversize); err != nil {
+					t.Fatal(err)
+				}
 				legacy := &rankingCountingExtractor{text: "alpha beta"}
 				engine := NewSearchEngine(terms, nil, nil, false, 1, 1000)
 				engine.Silent = true
-				engine.MaxFileSize = 10
+				engine.MaxFileSize = limit
 				engine.Registry.extractors["eml"] = legacy
+
+				var before, after runtime.MemStats
+				runtime.GC()
+				runtime.ReadMemStats(&before)
 				if stage == "filter" {
 					matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
 					if err != nil || len(matches) != 0 {
@@ -134,6 +146,10 @@ func TestLegacyBinaryExtractorRejectsOversizedFiles(t *testing.T) {
 					if err != nil || len(results) != 0 {
 						t.Errorf("Stage 3 results = %d, err = %v; want 0, nil", len(results), err)
 					}
+				}
+				runtime.ReadMemStats(&after)
+				if delta := after.TotalAlloc - before.TotalAlloc; delta > maxHeapDelta {
+					t.Errorf("oversized legacy binary check allocated %d bytes (> %d); expected descriptor stat rejection before read", delta, maxHeapDelta)
 				}
 				if calls := legacy.calls.Load(); calls != 0 {
 					t.Errorf("legacy ExtractText calls = %d, want 0", calls)

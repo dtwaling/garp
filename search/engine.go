@@ -3,6 +3,7 @@ package search
 import (
 	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -476,20 +477,21 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 	cm.Acquire()
 	defer cm.Release()
 
+	file, stat, err := openRegularSearchFile(filePath)
+	if err != nil {
+		readErr = err
+		return
+	}
+	fileSize = stat.Size()
+	if se.MaxFileSize > 0 && fileSize > se.MaxFileSize {
+		file.Close()
+		readErr = fmt.Errorf("file size %d exceeds max-filesize %d", fileSize, se.MaxFileSize)
+		return
+	}
+
 	var extract func() (string, error)
 	var metadata string
 	if raExtractor, ok := extractor.(ReaderAtExtractor); ok {
-		file, stat, err := openRegularSearchFile(filePath)
-		if err != nil {
-			readErr = err
-			return
-		}
-		fileSize = stat.Size()
-		if se.MaxFileSize > 0 && fileSize > se.MaxFileSize {
-			file.Close()
-			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", fileSize, se.MaxFileSize)
-			return
-		}
 		if wantEmailMeta && strings.EqualFold(ext, ".msg") {
 			prefix, err := io.ReadAll(io.LimitReader(io.NewSectionReader(file, 0, fileSize), 256*1024))
 			if err != nil {
@@ -505,21 +507,34 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 			return raExtractor.ExtractReaderAt(file, stat.Size(), DefaultMaxExtractedBytes)
 		}
 	} else {
-		rawContent, size, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
+		_ = adviseSequential(file)
+		maxBytes := se.MaxFileSize
+		if maxBytes <= 0 {
+			maxBytes = int64(maxFileSizeBytes)
+		}
+		readLimit := maxBytes
+		if se.MaxFileSize > 0 && readLimit < math.MaxInt64 {
+			readLimit++
+		}
+		content, err := io.ReadAll(io.LimitReader(file, readLimit))
+		_ = adviseDontNeed(file)
+		_ = file.Close()
 		if err != nil {
 			readErr = err
 			return
 		}
-		fileSize = size
-		if se.MaxFileSize > 0 && size > se.MaxFileSize {
-			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", size, se.MaxFileSize)
+		if int64(len(content)) > fileSize {
+			fileSize = int64(len(content))
+		}
+		if se.MaxFileSize > 0 && fileSize > se.MaxFileSize {
+			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", fileSize, se.MaxFileSize)
 			return
 		}
 		if wantEmailMeta && (strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg")) {
-			metadata = rawContent
+			metadata = string(content)
 		}
 		extract = func() (string, error) {
-			return extractor.ExtractText([]byte(rawContent))
+			return extractor.ExtractText(content)
 		}
 	}
 	if m := emailDateRe.FindStringSubmatch(metadata); m != nil {
@@ -532,10 +547,10 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 	// Only read worker-owned values after successful completion. On timeout,
 	// the worker may still write them, but cannot mutate our return values.
 	var text string
-	var err error
+	var workerErr error
 	startXT := time.Now()
 	timedOut = cm.ExecuteWithTimeout(func() {
-		text, err = extract()
+		text, workerErr = extract()
 	}, se.FileTimeoutBinary) != nil
 	durXT := time.Since(startXT)
 	switch strings.ToLower(ext) {
@@ -547,7 +562,7 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 		atomic.AddInt64(&se.msgExtractDurNanos, durXT.Nanoseconds())
 	}
 	if !timedOut {
-		extractedText, extractErr = text, err
+		extractedText, extractErr = text, workerErr
 	}
 	return
 }
