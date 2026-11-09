@@ -2,6 +2,7 @@ package search
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -273,24 +274,36 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 			}
 			found := false
 			for _, info := range infos {
-				if info.index == match.term && match.occurrence > 0 &&
-					match.occurrence <= len(info.offsets) && sourceCounts[match.term] == len(info.offsets) {
-					offset := info.offsets[match.occurrence-1]
-					if match.source.start < 0 || match.source.start >= len(span.sourceText) {
-						break
-					}
-					if code {
-						if !prefixes[offset].corresponds(normalizedRaw, len(strings.TrimSpace(span.sourceText[:match.source.start]))) {
-							break
-						}
-					} else if document.offsets[match.source.start] != offset {
-						break
-					}
-					lo = min(lo, offset)
-					hi = max(hi, offset)
-					found = true
+				if info.index != match.term {
+					continue
+				}
+				if match.source.start < 0 || match.source.start >= len(span.sourceText) {
 					break
 				}
+				var offset int
+				if document != nil {
+					if match.source.start >= len(document.offsets) {
+						break
+					}
+					// Both mappings use raw byte offsets. Removed occurrences shift
+					// ordinals, but surviving bytes retain their exact identities.
+					offset = document.offsets[match.source.start]
+					if _, ok := slices.BinarySearch(info.offsets, offset); !ok {
+						break
+					}
+				} else {
+					if match.occurrence <= 0 || match.occurrence > len(info.offsets) || sourceCounts[match.term] != len(info.offsets) {
+						break
+					}
+					offset = info.offsets[match.occurrence-1]
+					if !prefixes[offset].corresponds(normalizedRaw, len(strings.TrimSpace(span.sourceText[:match.source.start]))) {
+						break
+					}
+				}
+				lo = min(lo, offset)
+				hi = max(hi, offset)
+				found = true
+				break
 			}
 			exact = exact && found
 		}

@@ -212,6 +212,56 @@ func TestExcerptLinesDocumentCorrespondence(t *testing.T) {
 	}
 }
 
+func TestExcerptLinesDocumentRemovedOccurrence(t *testing.T) {
+	for _, removed := range []string{"<script>alpha</script>"} {
+		for _, clean := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/clean=%t", removed, clean), func(t *testing.T) {
+				raw := removed + "\n" + strings.Repeat("padding.\n", 100) +
+					"alpha first.\n" + strings.Repeat("padding.\n", 100) + "alpha second.\n"
+				content := raw
+				if clean {
+					content = CleanContent(raw)
+				}
+				query := compileQuery([]string{"alpha"}, PartialModeOff)
+				spans := extractRankedExcerptSpansQuery(content, query, 2, 1, 1, false, 200)
+				if len(spans) != 2 {
+					t.Fatalf("expected two surviving excerpts: %#v", spans)
+				}
+				slices.SortFunc(spans, func(a, b excerptSpan) int { return a.left - b.left })
+				if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{102, 203}) {
+					t.Fatalf("surviving anchors = %v, want [102 203]", got)
+				}
+				// Exact identities must also work in reverse ranking order.
+				slices.Reverse(spans)
+				if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{203, 102}) {
+					t.Fatalf("reverse anchors = %v, want [203 102]", got)
+				}
+			})
+		}
+	}
+}
+
+func TestExcerptLinesDocumentInvalidMatchStart(t *testing.T) {
+	raw := "<b>noise</b>\nALPHA2\nalpha\n"
+	query := compileQuery([]string{"alpha"}, PartialModeOff)
+	mapped := documentCorrespondence(raw, true)
+	for _, start := range []int{strings.Index(mapped.text, "ALPHA"), -1, len(mapped.text)} {
+		t.Run(fmt.Sprintf("start=%d", start), func(t *testing.T) {
+			match := excerptMatch{term: 0, source: matchRange{start: start}, occurrence: 1}
+			span := excerptSpan{sourceText: mapped.text, sourceMatches: []excerptMatch{match}, matches: []excerptMatch{match}}
+			// ALPHA2 is split by cleaning, but its raw offset is not a whole-term
+			// match start. Invalid offsets must likewise fall back safely.
+			want := 3
+			if start == -1 {
+				want = 0 // The fallback treats -1 as absent source metadata.
+			}
+			if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{span}, query, 200); !slices.Equal(got, []int{want}) {
+				t.Fatalf("fallback anchors = %v, want [%d]", got, want)
+			}
+		})
+	}
+}
+
 func TestExcerptLinesFallbackWideToTight(t *testing.T) {
 	wide := "<b>beta</b> " + strings.Repeat("wide ", 24) + "alpha."
 	tight := "alpha beta tight cluster."
