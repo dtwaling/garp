@@ -866,8 +866,8 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 
 		// Heavy files: conservative prefilter for non-PDF; include unless decisively absent
 		if IsBinaryFormat(path) {
-			if ext == ".pdf" {
-				// PDFs are handled later under strict guardrails; include as candidate
+			if ext == ".pdf" || ext == ".msg" {
+				// These containers require extraction; raw scans cannot skip it.
 				mu.Lock()
 				matches = append(matches, path)
 				mu.Unlock()
@@ -875,13 +875,7 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 			}
 			// For non-PDF heavy types, run a small capped streaming prefilter for the first term.
 			// Only skip when conclusively absent; undecided or found => include.
-			var capBytes int64
-			switch ext {
-			case ".eml", ".msg", ".mbox":
-				capBytes = 256 * 1024
-			default:
-				capBytes = 2 * 1024 * 1024
-			}
+			capBytes := capForBinaryPrefilter(ext)
 			found, decided := binaryStreamingPrefilterDecidedQuery(path, primaryQuery, capBytes, true)
 			if decided && !found {
 				return nil // safe to skip
