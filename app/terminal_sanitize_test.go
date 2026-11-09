@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
@@ -108,4 +110,140 @@ func TestTUIViewSanitizesAndRetainsHighlighting(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSanitizeWithOffsetsTranslatesSpans(t *testing.T) {
+	raw := "prefix " + terminalAttack + "ms-" + "\x1b[31m" + "aaaa" + "\u009b2J" + " omega"
+	prefixEnd := len("prefix " + terminalAttack)
+	wildcardEnd := prefixEnd + len("ms-"+"\x1b[31m"+"aaaa"+"\u009b2J")
+	omegaStart := wildcardEnd + 1
+	omegaEnd := len(raw)
+
+	sanitized, offsets := terminaltext.SanitizeWithOffsets(raw)
+	if sanitized != "prefix ms-aaaa omega" {
+		t.Fatalf("sanitized = %q, want %q", sanitized, "prefix ms-aaaa omega")
+	}
+	if len(offsets) != len(raw)+1 {
+		t.Fatalf("len(offsets) = %d, want %d", len(offsets), len(raw)+1)
+	}
+	for i := 1; i < len(offsets); i++ {
+		if offsets[i] < offsets[i-1] {
+			t.Fatalf("offsets not monotonic at %d: %d < %d", i, offsets[i], offsets[i-1])
+		}
+	}
+	if got := sanitized[offsets[prefixEnd]:offsets[wildcardEnd]]; got != "ms-aaaa" {
+		t.Fatalf("translated wildcard span = %q, want %q", got, "ms-aaaa")
+	}
+	if got := sanitized[offsets[omegaStart]:offsets[omegaEnd]]; got != "omega" {
+		t.Fatalf("translated omega span = %q, want %q", got, "omega")
+	}
+}
+
+func TestTUIViewPreservesValidatedMatchRangesAcrossSanitization(t *testing.T) {
+	t.Run("slice boundary suffix is not falsely highlighted", func(t *testing.T) {
+		lastContentHeight, lastExcerptInnerWidth = 0, 0
+		rawExcerpt := "api " + terminalAttack + "then api"
+		trueStart := len("api " + terminalAttack + "then ")
+		trueEnd := len(rawExcerpt)
+		result := search.SearchResult{
+			FilePath:       "boundary.go",
+			FileSize:       64,
+			Score:          3,
+			TermCount:      1,
+			MatchedTerms:   []string{"api"},
+			RawExcerpts:    []string{rawExcerpt},
+			ExcerptMatches: [][]search.MatchRange{{{Start: trueStart, End: trueEnd}}},
+		}
+		m := model{
+			results:     []search.SearchResult{result},
+			searchWords: []string{"api"},
+			width:       200,
+			height:      80,
+		}
+		view := m.View()
+		assertSafeTerminalView(t, view)
+		want := "api then \x1b[1;31mapi\x1b[0m"
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected only source-validated match highlighted (%q), got view:\n%s", want, view)
+		}
+		if strings.Contains(view, "\x1b[1;31mapi\x1b[0m then") {
+			t.Fatalf("cropped suffix at slice start was falsely highlighted as whole word:\n%s", view)
+		}
+	})
+
+	t.Run("clipped wildcard match retains highlight after sanitization", func(t *testing.T) {
+		lastContentHeight, lastExcerptInnerWidth = 0, 0
+		rawExcerpt := terminalAttack + "ms-" + strings.Repeat("a", 40) + " ... omega"
+		wildcardStart := len(terminalAttack)
+		wildcardEnd := wildcardStart + len("ms-") + 40
+		omegaStart := strings.LastIndex(rawExcerpt, "omega")
+		omegaEnd := omegaStart + len("omega")
+
+		result := search.SearchResult{
+			FilePath:        "wildcard.go",
+			FileSize:        256,
+			Score:           12,
+			TermCount:       2,
+			MatchedTerms:    []string{"ms-*-api", "omega"},
+			RawExcerpts:     []string{rawExcerpt},
+			ChunkTermCounts: []int{2},
+			ExcerptMatches: [][]search.MatchRange{{
+				{Start: wildcardStart, End: wildcardEnd},
+				{Start: omegaStart, End: omegaEnd},
+			}},
+		}
+		m := model{
+			results:     []search.SearchResult{result},
+			searchWords: []string{"ms-*-api", "omega"},
+			width:       200,
+			height:      80,
+		}
+		view := m.View()
+		assertSafeTerminalView(t, view)
+		wantWildcard := "\x1b[1;31mms-" + strings.Repeat("a", 40) + "\x1b[0m"
+		wantOmega := "\x1b[1;31momega\x1b[0m"
+		if !strings.Contains(view, wantWildcard) {
+			t.Fatalf("clipped wildcard highlight %q missing from view:\n%s", wantWildcard, view)
+		}
+		if !strings.Contains(view, wantOmega) {
+			t.Fatalf("omega highlight %q missing from view:\n%s", wantOmega, view)
+		}
+	})
+
+	t.Run("end-to-end SearchEngine clipped wildcard excerpt highlights in TUI View", func(t *testing.T) {
+		lastContentHeight, lastExcerptInnerWidth = 0, 0
+		priorBudget := search.ExcerptCharBudget
+		search.ExcerptCharBudget = func() int { return 200 }
+		t.Cleanup(func() { search.ExcerptCharBudget = priorBudget })
+
+		dir := t.TempDir()
+		token := "ms-" + strings.Repeat("a", 120) + "-api"
+		content := token + strings.Repeat(" z", 120) + " omega"
+		file := filepath.Join(dir, "sample.go")
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		se := search.NewSearchEngine([]string{"ms-*-api", "omega"}, nil, []string{".go"}, false, 1, 1000)
+		se.StartDir = dir
+		se.IncludeCode = true
+		se.Silent = true
+		results, err := se.Execute()
+		if err != nil || len(results) != 1 {
+			t.Fatalf("Execute() = %v, len=%d", err, len(results))
+		}
+		m := model{
+			results:     results,
+			searchWords: []string{"ms-*-api", "omega"},
+			width:       200,
+			height:      80,
+		}
+		view := m.View()
+		assertSafeTerminalView(t, view)
+		if !strings.Contains(view, "\x1b[1;31mms-aaaa") {
+			t.Fatalf("expected clipped wildcard prefix highlighted in TUI View:\n%s", view)
+		}
+		if !strings.Contains(view, "\x1b[1;31momega\x1b[0m") {
+			t.Fatalf("expected omega highlighted in TUI View:\n%s", view)
+		}
+	})
 }

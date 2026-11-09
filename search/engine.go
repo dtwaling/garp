@@ -48,9 +48,10 @@ type SearchResult struct {
 	BoundaryQuality int      `json:"-"`
 	MatchedTerms    []string // Distinct query terms from the best window.
 	SpanLength      int      // Character span of the best window.
-	Excerpts        []string // ANSI-highlighted, for TUI display
-	RawExcerpts     []string // plain text before highlighting -- for machine-readable output (--json, --plain)
-	StartLines      []int    // 1-based start line per excerpt (parallel to RawExcerpts); 0 = unknown
+	Excerpts        []string       // ANSI-highlighted, for TUI display
+	RawExcerpts     []string       // plain text before highlighting -- for machine-readable output (--json, --plain)
+	ExcerptMatches  [][]MatchRange `json:"-"` // source-validated byte ranges per RawExcerpts entry
+	StartLines      []int          // 1-based start line per excerpt (parallel to RawExcerpts); 0 = unknown
 	// Per-chunk ranked quality (parallel to RawExcerpts), best-first within the
 	// file. Zero for chunks that did not frame a ranked window.
 	ChunkScores     []int
@@ -1164,8 +1165,10 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 
 		// Highlight search terms in excerpts
 		highlightedExcerpts := make([]string, len(excerpts))
+		excerptMatches := make([][]MatchRange, len(spans))
 		for i := range spans {
 			highlightedExcerpts[i] = highlightExcerptSpan(spans[i])
+			excerptMatches[i] = excerptSpanMatchRanges(spans[i])
 		}
 
 		// Resolve 1-based start line per excerpt by anchoring it back to the raw content.
@@ -1214,6 +1217,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 			SpanLength:       match.spanLen,
 			Excerpts:         highlightedExcerpts,
 			RawExcerpts:      excerpts,
+			ExcerptMatches:   excerptMatches,
 			StartLines:       startLines,
 			ChunkScores:      chunkScores,
 			ChunkTermCounts:  chunkTermCounts,

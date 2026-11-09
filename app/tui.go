@@ -486,8 +486,14 @@ func (m model) View() string {
 		if len(excerpts) == 0 {
 			excerpts = result.Excerpts
 		}
-		for i, excerpt := range excerpts {
-			excerpt = terminaltext.Sanitize(excerpt)
+		options := search.QueryOptions{CaseSensitive: m.caseSensitive, SmartForms: m.smartForms}
+		for i, rawExcerpt := range excerpts {
+			hasValidatedMatches := i < len(result.ExcerptMatches)
+			var validatedMatches []search.MatchRange
+			if hasValidatedMatches {
+				validatedMatches = result.ExcerptMatches[i]
+			}
+			excerpt := sanitizeAndHighlightExcerpt(rawExcerpt, validatedMatches, hasValidatedMatches, m.searchWords, m.partial, options)
 			labelText := fmt.Sprintf("Excerpt %d: ", i+1)
 			if start := excerptStartLineAt(result.StartLines, i); start > 0 {
 				labelText = fmt.Sprintf("Excerpt %d (%s): ", i+1, formatLine(start))
@@ -500,54 +506,55 @@ func (m model) View() string {
 
 			// Minimal augmentation for Excerpt 1: if excerpts are short and some terms are missing,
 			// append small windows from CleanContent to ensure all terms are visible without blowing up layout.
-			if i == 0 && len(result.Excerpts) > 0 && result.CleanContent != "" {
+			if i == 0 && len(excerpts) > 0 && result.CleanContent != "" {
 				totalLen := 0
-				for _, ex := range result.Excerpts {
+				for _, ex := range excerpts {
 					totalLen += len(ex)
 				}
 				if totalLen < 400 {
 					// Find missing terms with the engine's active matching semantics.
-					options := search.QueryOptions{CaseSensitive: m.caseSensitive, SmartForms: m.smartForms}
 					missing := make([]string, 0, len(result.MatchedTerms))
 					for _, term := range result.MatchedTerms {
-						if search.FindTermIndex(excerpt, term, m.partial, options) == nil {
+						if !excerptContainsTerm(rawExcerpt, validatedMatches, hasValidatedMatches, result, term, m.partial, options) {
 							missing = append(missing, term)
 						}
 					}
 					// Append small windows around missing terms from CleanContent
 					if len(missing) > 0 {
-						extra := ""
+						cleanContent := terminaltext.Sanitize(result.CleanContent)
+						cleanRanges := search.FindMatchRangesWithOptions(cleanContent, m.searchWords, m.partial, options)
+						var extraParts []string
+						rawExtraLen := 0
 						budget := 400
 						for _, term := range missing {
-							if len(extra) >= budget {
+							if rawExtraLen >= budget {
 								break
 							}
-							loc := search.FindTermIndex(result.CleanContent, term, m.partial, options)
+							loc := search.FindTermIndex(cleanContent, term, m.partial, options)
 							if loc != nil {
 								start := loc[0] - 120
 								if start < 0 {
 									start = 0
 								}
 								end := loc[1] + 120
-								if end > len(result.CleanContent) {
-									end = len(result.CleanContent)
+								if end > len(cleanContent) {
+									end = len(cleanContent)
 								}
-								frag := result.CleanContent[start:end]
-								if extra != "" {
-									extra += " ... "
+								frag := cleanContent[start:end]
+								if len(extraParts) > 0 {
+									rawExtraLen += len(" ... ")
 								}
-								extra += frag
+								rawExtraLen += len(frag)
+								extraParts = append(extraParts, search.HighlightRanges(frag, sliceMatchRanges(cleanRanges, start, end)))
 							}
 						}
-						if extra != "" {
-							extra = terminaltext.Sanitize(extra)
-							excerpt = excerpt + "\n" + extra
+						if len(extraParts) > 0 {
+							excerpt = excerpt + "\n" + strings.Join(extraParts, " ... ")
 						}
 					}
 				}
 			}
 
-			excerpt = search.HighlightTermsWithOptions(excerpt, m.searchWords, m.partial, search.QueryOptions{CaseSensitive: m.caseSensitive, SmartForms: m.smartForms})
 			boxContent += wrapTextWithIndent(label, excerpt, innerWidth) + "\n"
 		}
 
@@ -813,6 +820,69 @@ func wrapTextWithIndent(prefix, text string, width int) string {
 	indent := strings.Repeat(" ", prefixWidth)
 	wrapped := lipgloss.NewStyle().Width(width - prefixWidth).Render(text)
 	return prefix + strings.ReplaceAll(wrapped, "\n", "\n"+indent)
+}
+
+func sanitizeAndHighlightExcerpt(raw string, matches []search.MatchRange, hasValidatedMatches bool, searchWords []string, partial search.PartialMode, options search.QueryOptions) string {
+	if !hasValidatedMatches {
+		sanitized := terminaltext.Sanitize(raw)
+		ranges := search.FindMatchRangesWithOptions(sanitized, searchWords, partial, options)
+		return search.HighlightRanges(sanitized, ranges)
+	}
+	sanitized, offsets := terminaltext.SanitizeWithOffsets(raw)
+	translated := make([]search.MatchRange, 0, len(matches))
+	for _, m := range matches {
+		start := max(0, min(m.Start, len(raw)))
+		end := max(start, min(m.End, len(raw)))
+		if offsets[end] > offsets[start] {
+			translated = append(translated, search.MatchRange{
+				Start: offsets[start],
+				End:   offsets[end],
+			})
+		}
+	}
+	return search.HighlightRanges(sanitized, translated)
+}
+
+func sliceMatchRanges(ranges []search.MatchRange, start, end int) []search.MatchRange {
+	var local []search.MatchRange
+	for _, r := range ranges {
+		if r.Start >= start && r.End <= end && r.End > r.Start {
+			local = append(local, search.MatchRange{
+				Start: r.Start - start,
+				End:   r.End - start,
+			})
+		}
+	}
+	return local
+}
+
+func excerptContainsTerm(rawExcerpt string, matches []search.MatchRange, hasValidatedMatches bool, result search.SearchResult, term string, partial search.PartialMode, options search.QueryOptions) bool {
+	if !hasValidatedMatches {
+		sanitized := terminaltext.Sanitize(rawExcerpt)
+		return search.FindTermIndex(sanitized, term, partial, options) != nil
+	}
+	if len(result.ChunkTermCounts) > 0 && result.ChunkTermCounts[0] > 0 && result.ChunkTermCounts[0] >= len(result.MatchedTerms) {
+		return true
+	}
+	for _, m := range matches {
+		start := max(0, min(m.Start, len(rawExcerpt)))
+		end := max(start, min(m.End, len(rawExcerpt)))
+		if end <= start {
+			continue
+		}
+		sub := rawExcerpt[start:end]
+		if search.FindTermIndex(sub, term, partial, options) != nil {
+			return true
+		}
+		if strings.ContainsAny(term, "*?") && result.CleanContent != "" {
+			for _, full := range search.FindMatchRangesWithOptions(result.CleanContent, []string{term}, partial, options) {
+				if full.Start >= 0 && full.End <= len(result.CleanContent) && strings.HasPrefix(result.CleanContent[full.Start:full.End], sub) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (m model) memUsageTick() tea.Cmd {
