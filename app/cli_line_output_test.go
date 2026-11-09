@@ -76,3 +76,29 @@ func TestPathOnlyCannotForgeLines(t *testing.T) {
 		t.Fatalf("pathonly output = %q, want %q", out, want)
 	}
 }
+
+func TestPlainOutputBackslashPathsRoundTripInParityHelpers(t *testing.T) {
+	const winPath = `C:\Users\runner\project\neutral\zz-top.txt`
+	args := parseArguments([]string{"alpha"})
+	outcome := search.ExecutionResult{
+		Returned: 1,
+		Results: []search.SearchResult{{
+			FilePath:        winPath,
+			FileSize:        42,
+			RawExcerpts:     []string{"alpha beta", "alpha gamma"},
+			StartLines:      []int{1, 10},
+			ChunkScores:     []int{10, 8},
+			ChunkTermCounts: []int{2, 2},
+		}},
+	}
+	var out bytes.Buffer
+	writePlainOutput(&out, args, outcome)
+
+	gotPaths := outputPathsFromPlainOutput(t, out.String())
+	if !slicesEqual(gotPaths, []string{winPath}) {
+		t.Fatalf("outputPathsFromPlainOutput = %q, want [%q]", gotPaths, winPath)
+	}
+	if got := excerptCountForPlainFile(out.String(), winPath); got != 2 {
+		t.Fatalf("excerptCountForPlainFile(%q) = %d, want 2", winPath, got)
+	}
+}

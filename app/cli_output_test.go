@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -83,8 +84,8 @@ func TestCLIOutputFormats(t *testing.T) {
 		out := strings.TrimRight(string(captureCLIStdout(t, func() int { return runPathOnly(pathArgs) })), "\n")
 		got := strings.Split(out, "\n")
 		want := []string{
-			filepath.Join(root, "full.md"),
-			filepath.Join(root, "partial.md"),
+			escapeOutputLine(filepath.Join(root, "full.md")),
+			escapeOutputLine(filepath.Join(root, "partial.md")),
 		}
 		if !slicesEqual(got, want) {
 			t.Errorf("pathonly output = %v, want %v", got, want)
@@ -396,7 +397,7 @@ func TestOutputModeOrderingParity(t *testing.T) {
 
 	plainArgs := outputOrderingParityArgs(root, "--plain", "--max-results", "0")
 	plainOutput := string(captureCLIStdout(t, func() int { return runPlain(plainArgs) }))
-	plain := outputPathsFromPlainOutput(plainOutput)
+	plain := outputPathsFromPlainOutput(t, plainOutput)
 	if got := excerptCountForPlainFile(plainOutput, want[1]); got != 1 {
 		t.Fatalf("default plain excerpts for multi-chunk file = %d, want 1", got)
 	}
@@ -575,31 +576,46 @@ func outputPathsFromPathOnly(t *testing.T, args *Arguments) []string {
 	if out == "" {
 		return nil
 	}
-	return strings.Split(out, "\n")
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		lines[i] = unescapeOutputLine(t, line)
+	}
+	return lines
 }
 
 func outputPathsFromPlain(t *testing.T, args *Arguments) []string {
 	t.Helper()
 	out := string(captureCLIStdout(t, func() int { return runPlain(args) }))
-	return outputPathsFromPlainOutput(out)
+	return outputPathsFromPlainOutput(t, out)
 }
 
-func outputPathsFromPlainOutput(out string) []string {
+func outputPathsFromPlainOutput(t *testing.T, out string) []string {
+	t.Helper()
 	var paths []string
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(line, "FILE: ") {
-			paths = append(paths, strings.TrimPrefix(line, "FILE: "))
+			paths = append(paths, unescapeOutputLine(t, strings.TrimPrefix(line, "FILE: ")))
 		}
 	}
 	return paths
 }
 
+func unescapeOutputLine(t *testing.T, s string) string {
+	t.Helper()
+	unquoted, err := strconv.Unquote(`"` + s + `"`)
+	if err != nil {
+		t.Fatalf("unescape output line %q: %v", s, err)
+	}
+	return unquoted
+}
+
 func excerptCountForPlainFile(out, path string) int {
 	inFile := false
 	count := 0
+	wantHeader := "FILE: " + escapeOutputLine(path)
 	for _, line := range strings.Split(out, "\n") {
 		switch {
-		case line == "FILE: "+path:
+		case line == wantHeader:
 			inFile = true
 		case inFile && strings.HasPrefix(line, "EXCERPT "):
 			count++

@@ -137,7 +137,7 @@ func TestRunPlainPartialConfiguresSearchEngine(t *testing.T) {
 		"--plain",
 	})
 	out := string(captureCLIStdout(t, func() int { return runPlain(args) }))
-	if !strings.Contains(out, "FILE: "+fixture) {
+	if !strings.Contains(out, "FILE: "+escapeOutputLine(fixture)) {
 		t.Fatalf("partial search did not return derivative-form fixture:\n%s", out)
 	}
 }
