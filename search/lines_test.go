@@ -13,9 +13,9 @@ func TestMappedContentReplaceCaptureGroups(t *testing.T) {
 		name, pattern, replacement, want string
 		offsets                          []int
 	}{
-		{"missing", "b", "[$1]", "a[]c", []int{0, -1, -1, 2}},
+		{"missing", "b", "[$1]", "a[]c", []int{0, 1, 1, 2}},
 		{"out of range", "(b)", "$9$1", "abc", []int{0, 1, 2}},
-		{"optional unmatched", "(x)?b", "[$1]", "a[]c", []int{0, -1, -1, 2}},
+		{"optional unmatched", "(x)?b", "[$1]", "a[]c", []int{0, 1, 1, 2}},
 		{"optional matched", "(b)?", "$1", "abc", []int{0, 1, 2}},
 		{"empty capture", "()b", "$1", "ac", []int{0, 2}},
 		{"whole match", "b", "$0", "abc", []int{0, 1, 2}},
@@ -34,7 +34,7 @@ func TestExcerptLinesScratchAllocations(t *testing.T) {
 	query := compileQuery([]string{"needle"}, PartialModeOff)
 	spans := make([]excerptSpan, 200)
 	for i := range spans {
-		spans[i] = lineSpans([]int{0})[0]
+		spans[i] = excerptSpan{rawStart: 0, rawStartValid: true}
 	}
 	measure := func(spans []excerptSpan) float64 {
 		return testing.AllocsPerRun(10, func() {
@@ -89,11 +89,7 @@ func TestEmittedExcerptLinesKeepClusterIdentity(t *testing.T) {
 				raw := "header\nalpha " + strings.Repeat("loose ", 30) + "beta.\n" +
 					strings.Repeat("padding line.\n", 100) + "alpha beta tight cluster.\n"
 				query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
-				content := CleanContent(raw)
-				if isCode {
-					content = CleanContentCode(raw)
-				}
-				spans := extractRankedExcerptSpansQuery(content, query, limit, 2, 2, isCode, 5000)
+				spans := extractRankedExcerptSpansQuery(raw, query, limit, 2, 2, isCode, 5000)
 				if len(spans) != limit || !strings.Contains(spans[0].text, "tight cluster") {
 					t.Fatalf("expected tighter cluster ranked first in %d spans: %#v", limit, spans)
 				}
@@ -138,7 +134,7 @@ func TestExcerptLinesBalancedRemovedAndCreatedMatches(t *testing.T) {
 	if len(query.matchers[0].findAll(raw)) != 2 || len(query.matchers[0].findAll(cleaned)) != 2 {
 		t.Fatal("fixture must balance removed and created alpha occurrences")
 	}
-	spans := extractRankedExcerptSpansQuery(cleaned, query, 1, 2, 2, false, 200)
+	spans := extractRankedExcerptSpansQuery(raw, query, 1, 2, 2, false, 200)
 	if len(spans) != 1 || !strings.Contains(spans[0].text, "alpha beta") {
 		t.Fatalf("expected alpha beta cluster: %#v", spans)
 	}
@@ -157,16 +153,17 @@ func TestExcerptLinesCursorPassesEntireCluster(t *testing.T) {
 			raw := "alpha " + middle + " beta\n" + strings.Repeat("padding.\n", 100) +
 				"alpha gamma\n" + strings.Repeat("padding.\n", 100) + "alpha\n"
 			query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
-			cleaned := CleanContent(raw)
+
 			// Markup exercises the reported removed-gamma case. Plain text keeps
 			// the first cluster exact; clear the second cluster's identities below
 			// to independently exercise the exact-to-fallback cursor.
-			spans := extractRankedExcerptSpansQuery(cleaned, query, 2, 2, 2, false, 200)
+			spans := extractRankedExcerptSpansQuery(raw, query, 2, 2, 2, false, 200)
 			if len(spans) != 2 {
 				t.Fatalf("expected two clusters: %#v", spans)
 			}
 			slices.SortFunc(spans, func(a, b excerptSpan) int { return a.left - b.left })
 			if !markup {
+				spans[1].rawStartValid = false
 				for j := range spans[1].matches {
 					spans[1].matches[j].occurrence = 0
 				}
@@ -178,22 +175,18 @@ func TestExcerptLinesCursorPassesEntireCluster(t *testing.T) {
 	}
 }
 
-func TestExcerptLinesDocumentCorrespondence(t *testing.T) {
-	for _, clean := range []bool{false, true} {
-		t.Run(fmt.Sprintf("clean=%t", clean), func(t *testing.T) {
+func TestExcerptLinesStage3Correspondence(t *testing.T) {
+	for _, isCode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("code=%t", isCode), func(t *testing.T) {
 			raw := "<style>noise</style><script>noise</script>\nnoise > quote\n-----\n" +
 				"<b>alpha</b> " + strings.Repeat("loose ", 30) + "beta.\n" +
 				strings.Repeat("padding.\n", 100) + "alpha beta tight cluster. OB1,2NEXT &amp;\n"
-			content := raw
-			if clean {
-				content = CleanContent(raw)
-			}
 			query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
-			spans := extractRankedExcerptSpansQuery(content, query, 2, 2, 2, false, 5000)
+			spans := extractRankedExcerptSpansQuery(raw, query, 2, 2, 2, isCode, 5000)
 			if len(spans) != 2 || !strings.Contains(spans[0].text, "tight cluster") {
 				t.Fatalf("expected tight then loose excerpts: %#v", spans)
 			}
-			mapped := documentCorrespondence(raw, clean)
+			mapped := cleanStage3Content(raw, isCode)
 			if mapped.text != spans[0].sourceText {
 				t.Fatal("correspondence must reproduce the actual excerpt cleaner")
 			}
@@ -227,6 +220,7 @@ func TestExcerptLinesFallbackWideToTight(t *testing.T) {
 	// Remove ordinal metadata to exercise fallback independently of the new
 	// document exact path. Retain source match order from real emitted excerpts.
 	for i := range spans {
+		spans[i].rawStartValid = false
 		for j := range spans[i].matches {
 			spans[i].matches[j].occurrence = 0
 		}
@@ -415,6 +409,107 @@ func BenchmarkExcerptLinesManyLateMatches(b *testing.B) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// Issue #32: removed occurrences and OCR-created tokens must not redirect a
+// visible cluster to an unrelated raw occurrence or a stripped opening block.
+func TestIssue32TransformedLineAnchors(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		terms     []string
+		want      int
+	}{
+		{"blockquote", "# Header\n\n> alpha beta hidden\n\nalpha beta visible\n", []string{"alpha", "beta"}, 5},
+		{"style and script", "<style>\nalpha beta\n</style>\n<script>\nalpha beta\n</script>\nalpha beta visible\n", []string{"alpha", "beta"}, 7},
+		{"OCR split", "ITEM header\n" + strings.Repeat("padding.\n", 100) + "ITEM01 beta visible\n", []string{"ITEM", "beta"}, 102},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query := compileQuery(tc.terms, PartialModeOff)
+			spans := extractRankedExcerptSpansQuery(tc.raw, query, 1, 2, 2, false, 200)
+			if len(spans) != 1 || !strings.Contains(spans[0].text, "visible") || strings.Contains(spans[0].text, "hidden") {
+				t.Fatalf("expected visible cluster: %#v", spans)
+			}
+			if got := computeExcerptSpanLinesQuery(tc.raw, spans, query, 200); !slices.Equal(got, []int{tc.want}) {
+				t.Fatalf("anchors = %v, want [%d]", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIssue32FiveDistinctRankedAnchors(t *testing.T) {
+	raw := "> proximity search hidden\n"
+	wantByMarker := make(map[string]int)
+	for i := 0; i < 5; i++ {
+		marker := fmt.Sprintf("cluster-%c", 'a'+i)
+		wantByMarker[marker] = strings.Count(raw, "\n") + 1
+		// Later clusters are tighter, forcing ranking to run backwards through
+		// the document rather than accidentally passing via a forward cursor.
+		raw += "proximity " + strings.Repeat("loose ", (4-i)*5) + "search " + marker + ".\n"
+		raw += strings.Repeat("padding line.\n", 100)
+	}
+	query := compileQuery([]string{"proximity", "search"}, PartialModeOff)
+	for _, limit := range []int{1, 3, 5} {
+		spans := extractRankedExcerptSpansQuery(raw, query, limit, 2, 2, false, 200)
+		if len(spans) != limit {
+			t.Fatalf("limit %d: got %d spans", limit, len(spans))
+		}
+		lines := computeExcerptSpanLinesQuery(raw, spans, query, 200)
+		seen := make(map[int]bool)
+		for i, span := range spans {
+			want := 0
+			for marker, line := range wantByMarker {
+				if strings.Contains(span.text, marker) {
+					if want != 0 {
+						t.Fatalf("multiple clusters in excerpt: %q", span.text)
+					}
+					want = line
+				}
+			}
+			if want == 0 || lines[i] != want || seen[lines[i]] {
+				t.Fatalf("limit %d excerpt %q: line %d, want distinct %d (all %v)", limit, span.text, lines[i], want, lines)
+			}
+			seen[lines[i]] = true
+		}
+		if lines[0] != wantByMarker["cluster-e"] {
+			t.Fatalf("tightest final cluster must rank first: %v", lines)
+		}
+	}
+}
+
+// Benchmark only line resolution, not cleaning/excerpt extraction. The stripped
+// script makes raw and cleaned occurrence counts differ, triggering the former
+// quadratic fallback. Keep setup outside the timer and assert every result.
+func BenchmarkIssue32ExcerptLines5MB(b *testing.B) {
+	const size = 5_000_000
+	const prefix = "<script>alpha beta</script>\n"
+	const row = "alpha beta frequent terms padding.\n"
+	raw := prefix + strings.Repeat(row, (size-len(prefix))/len(row))
+	raw += strings.Repeat("x", size-len(raw))
+	if len(raw) != size || strings.Count(raw, "alpha") <= 100_000 {
+		b.Fatal("fixture requires 5 MB and over 100k occurrences per term")
+	}
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	// One real emitted span suffices to expose the former quadratic anchoring
+	// scan; repeated identical rows are intentionally not distinct excerpts.
+	spans := extractRankedExcerptSpansQuery(raw, query, 1, 2, 2, false, 200)
+	if len(spans) != 1 {
+		b.Fatalf("expected one emitted span, got %d", len(spans))
+	}
+	want := make([]int, len(spans))
+	for i, span := range spans {
+		if !span.rawStartValid || span.rawStart < len(prefix) {
+			b.Fatalf("invalid visible anchor: %d", span.rawStart)
+		}
+		want[i] = 2 + (span.rawStart-len(prefix))/len(row)
+	}
+	b.SetBytes(int64(len(raw)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, want) {
+			b.Fatalf("anchors = %v, want %v", got, want)
 		}
 	}
 }

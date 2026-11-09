@@ -68,41 +68,7 @@ func SetExcerptContextLimit(n int) {
 
 // CleanContent removes markup, headers, and other noise from content
 func CleanContent(content string) string {
-	// Remove CSS and JavaScript blocks first
-	content = cssRegex.ReplaceAllString(content, "")
-	content = jsRegex.ReplaceAllString(content, "")
-
-	// Remove HTML tags
-	content = htmlTagRegex.ReplaceAllString(content, " ")
-
-	// Remove HTML entities
-	content = htmlEntityRegex.ReplaceAllString(content, " ")
-
-	// Remove control characters
-	content = controlCharRegex.ReplaceAllString(content, " ")
-
-	// Remove junk divider lines made of repeated =, #, -, or _
-	content = junkSymbolsRegex.ReplaceAllString(content, "")
-
-	// Remove email quoting lines
-	content = emailQuotingRegex.ReplaceAllString(content, "")
-	// Strip leading '>' quote markers at line starts
-	content = quoteLineStartRegex.ReplaceAllString(content, "")
-	// Collapse midline '>' quote markers (e.g., >>>> >>>>) into a single space
-	content = quoteMidRegex.ReplaceAllString(content, " ")
-
-	// Normalize whitespace
-	content = whitespaceRegex.ReplaceAllString(content, " ")
-
-	// Insert missing spaces to improve readability in extracted content
-	// Letter followed by digit (e.g., "Account10" -> "Account 10")
-	content = letterDigitRegex.ReplaceAllString(content, "$1 $2")
-	// Digit followed by letter (e.g., "7367NEXT" -> "7367 NEXT")
-	content = digitLetterRegex.ReplaceAllString(content, "$1 $2")
-	// Ensure a space after commas when missing (e.g., "21,5:43" -> "21, 5:43")
-	content = commaMissingSpace.ReplaceAllString(content, ", $1")
-
-	return strings.TrimSpace(content)
+	return cleanSearchContent(mappedContent{text: content}, false).text
 }
 
 // CleanContentCode is a minimal cleaner for source code. Unlike CleanContent it does NOT strip
@@ -113,9 +79,78 @@ func CleanContent(content string) string {
 // faithful to the source. The OCR-oriented digit/space fixups in CleanContent are also skipped
 // because they mangle identifiers (e.g. "Int32" -> "Int 32").
 func CleanContentCode(content string) string {
-	content = controlCharRegex.ReplaceAllString(content, " ")
-	content = whitespaceRegex.ReplaceAllString(content, " ")
-	return strings.TrimSpace(content)
+	return cleanSearchContent(mappedContent{text: content}, true).text
+}
+
+// cleanStage3Content applies the Stage 3 cleaning pipeline once while carrying
+// raw byte offsets through every transformation. Strip line-oriented noise
+// before normalizing controls so quote/divider boundaries are still available.
+func cleanStage3Content(raw string, isCode bool) mappedContent {
+	m := mappedContent{text: raw, offsets: make([]int, len(raw))}
+	for i := range m.offsets {
+		m.offsets[i] = i
+	}
+	return cleanSearchContent(m, isCode)
+}
+
+// cleanSearchContent is shared by Stage 2 analysis and Stage 3 extraction.
+// A nil offset slice avoids building correspondence that analysis never uses.
+func cleanSearchContent(m mappedContent, isCode bool) mappedContent {
+	if !isCode {
+		m = m.replace(cssRegex, "").replace(jsRegex, "")
+		m = m.replace(htmlTagRegex, " ").replace(htmlEntityRegex, " ")
+		m = m.replace(junkSymbolsRegex, "").replace(emailQuotingRegex, "")
+		m = m.replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")
+	}
+	m = normalizeMappedWhitespace(m)
+	if !isCode {
+		m = m.replace(letterDigitRegex, "$1 $2").replace(digitLetterRegex, "$1 $2")
+		m = m.replace(commaMissingSpace, ", $1")
+	}
+	left := len(m.text) - len(strings.TrimLeftFunc(m.text, unicode.IsSpace))
+	right := max(left, len(strings.TrimRightFunc(m.text, unicode.IsSpace)))
+	if m.offsets != nil {
+		m.offsets = m.offsets[left:right]
+	}
+	m.text = m.text[left:right]
+	return m
+}
+
+// normalizeMappedWhitespace combines control replacement and ASCII whitespace
+// collapse in one scan. Unicode controls are decoded as runes; invalid UTF-8
+// bytes and non-ASCII whitespace remain unchanged (edge trimming happens later).
+// A collapsed run retains its first byte's raw offset, just like replace.
+func normalizeMappedWhitespace(m mappedContent) mappedContent {
+	var text strings.Builder
+	text.Grow(len(m.text))
+	var offsets []int
+	if m.offsets != nil {
+		offsets = make([]int, 0, len(m.text))
+	}
+	inSpace := false
+	for i := 0; i < len(m.text); {
+		r, size := rune(m.text[i]), 1
+		if r >= utf8.RuneSelf {
+			r, size = utf8.DecodeRuneInString(m.text[i:])
+		}
+		space := r <= 0x20 || (r >= 0x7f && r <= 0x9f)
+		if space {
+			if !inSpace {
+				text.WriteByte(' ')
+				if offsets != nil {
+					offsets = append(offsets, m.offsets[i])
+				}
+			}
+		} else {
+			text.WriteString(m.text[i : i+size])
+			if offsets != nil {
+				offsets = append(offsets, m.offsets[i:i+size]...)
+			}
+		}
+		inSpace = space
+		i += size
+	}
+	return mappedContent{text.String(), offsets}
 }
 
 // excerptSpan is one emitted chunk: its final text plus the [left, right)
@@ -124,6 +159,8 @@ func CleanContentCode(content string) string {
 // count) of the window that framed it. Quality fields are zero for
 // fallback-path excerpts that do not frame a ranked window.
 type excerptSpan struct {
+	rawStart      int  // earliest raw match in the seed, independent of displayed matches
+	rawStartValid bool // zero is a valid offset; false denotes legacy/synthetic spans
 	text          string
 	left          int
 	right         int
@@ -522,24 +559,13 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 // zero; NewSearchEngine defaults Distance to 5000. unconstrainedDistance disables
 // the bound for legacy helpers (all negative distances retain that behavior).
 func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetTerms int, minTerms int, isCode bool, distance int) []excerptSpan {
-	var cleaned string
-	if isCode {
-		// Minimal cleaning: preserve every code token; only normalize control chars/whitespace.
-		cleaned = CleanContentCode(content)
-	} else {
-		// Line-preserving clean for boundary finding: remove heavy markup/noise but keep newlines
-		prep := cssRegex.ReplaceAllString(content, "")
-		prep = jsRegex.ReplaceAllString(prep, "")
-		prep = htmlTagRegex.ReplaceAllString(prep, " ")
-		prep = htmlEntityRegex.ReplaceAllString(prep, " ")
-		prep = controlCharRegex.ReplaceAllString(prep, "")
-		prep = junkSymbolsRegex.ReplaceAllString(prep, "")
-		prep = emailQuotingRegex.ReplaceAllString(prep, "")
-		// Strip leading '>' markers and collapse midline quote markers
-		prep = quoteLineStartRegex.ReplaceAllString(prep, "")
-		prep = quoteMidRegex.ReplaceAllString(prep, " ")
-		cleaned = prep
-	}
+	return extractRankedMappedExcerptSpansQuery(cleanStage3Content(content, isCode), query, maxExcerpts, targetTerms, minTerms, distance)
+}
+
+// extractRankedMappedExcerptSpansQuery consumes the same single cleaning result
+// used for Stage 3's display content. Offsets always refer to the original input.
+func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQuery, maxExcerpts, targetTerms, minTerms, distance int) []excerptSpan {
+	cleaned := mapped.text
 
 	if maxExcerpts <= 0 {
 		maxExcerpts = 3
@@ -603,6 +629,7 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 		// Each candidate records the distinct-term set it covered so its own
 		// ranked quality (score, termCount) can ride with the chunk.
 		type candidate struct {
+			rawStart  int
 			left      int
 			right     int
 			score     int
@@ -639,7 +666,7 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 							termCount++
 						}
 					}
-					candidates = append(candidates, candidate{left: all[l].start, right: right, score: score, termCount: termCount})
+					candidates = append(candidates, candidate{rawStart: mapped.offsets[all[l].start], left: all[l].start, right: right, score: score, termCount: termCount})
 				}
 				leftm := all[l]
 				counts[leftm.idx]--
@@ -727,6 +754,7 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 					seen[ex] = struct{}{}
 					excerpts = append(excerpts, excerptSpan{
 						text: ex, left: formatLeft, right: formatRight,
+						rawStart: c.rawStart, rawStartValid: true,
 						score: c.score, termCount: c.termCount, matches: matches,
 						sourceText: cleaned, sourceMatches: allExactMatches,
 					})
@@ -739,16 +767,36 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 				}
 				parts := make([]string, 0, len(query.matchers))
 				partMatches := make([]excerptMatch, 0, len(query.matchers))
+				locations := make([]matchRange, 0, len(query.matchers))
 				for i := range query.matchers {
-					loc, ok := firstRangeWithin(rangesByMatcher[i], c.left, c.right)
-					if !ok {
-						continue
+					if loc, ok := firstRangeWithin(rangesByMatcher[i], c.left, c.right); ok {
+						locations = append(locations, loc)
 					}
+				}
+				sort.Slice(locations, func(i, j int) bool { return locations[i].start < locations[j].start })
+				windows := make([]matchRange, 0, len(locations))
+				for _, loc := range locations {
 					center := loc.start + (loc.end-loc.start)/2
 					partLeft := max(0, center-perTerm/2)
 					partRight := min(len(cleaned), center+perTerm/2)
 					partLeft, partRight = normalizeExcerptBounds(cleaned, partLeft, partRight)
-					frag, fragMatches := formatMultipartExcerptText(cleaned, partLeft, partRight, allExactMatches)
+					windows = append(windows, matchRange{start: partLeft, end: partRight})
+				}
+				// Nested matches can have centers in a different order than their
+				// starts. Merge context windows in source order before formatting
+				// so neither text nor match metadata is duplicated at overlaps.
+				sort.Slice(windows, func(i, j int) bool { return windows[i].start < windows[j].start })
+				merged := windows[:0]
+				for _, part := range windows {
+					if len(merged) > 0 && part.start <= merged[len(merged)-1].end {
+						last := &merged[len(merged)-1]
+						last.end = max(last.end, part.end)
+					} else {
+						merged = append(merged, part)
+					}
+				}
+				for _, part := range merged {
+					frag, fragMatches := formatMultipartExcerptText(cleaned, part.start, part.end, allExactMatches)
 					if frag != "" {
 						shift := 0
 						if len(parts) > 0 {
@@ -770,6 +818,7 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 					seen[ex] = struct{}{}
 					excerpts = append(excerpts, excerptSpan{
 						text: ex, left: c.left, right: c.right,
+						rawStart: c.rawStart, rawStartValid: true,
 						score: c.score, termCount: c.termCount, matches: partMatches,
 						sourceText: cleaned, sourceMatches: allExactMatches,
 					})
@@ -813,6 +862,7 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 			seen[ex] = struct{}{}
 			excerpts = append(excerpts, excerptSpan{
 				text: ex, left: left, right: right, matches: matches,
+				rawStart: mapped.offsets[loc.start], rawStartValid: true,
 				sourceText: cleaned, sourceMatches: allExactMatches,
 			})
 		}
@@ -871,6 +921,7 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 		if ex != "" {
 			return []excerptSpan{{
 				text: ex, left: left, right: right, matches: matches,
+				rawStart: mapped.offsets[loc.start], rawStartValid: true,
 				sourceText: cleaned, sourceMatches: allExactMatches,
 			}}
 		}

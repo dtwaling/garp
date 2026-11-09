@@ -22,7 +22,7 @@ func TestPartialEmittedLinesKeepOccurrenceThroughExpansion(t *testing.T) {
 	raw := "header\nrun_deployment " + strings.Repeat("loose ", 30) + "ms-first-api.\n" +
 		strings.Repeat("padding line.\n", 100) + "run_deployment ms-last-api tight.\n"
 	query := compileQuery([]string{"deploy", "ms-*-api"}, PartialModePrefix)
-	spans := extractRankedExcerptSpansQuery(CleanContentCode(raw), query, 1, 2, 2, true, 5000)
+	spans := extractRankedExcerptSpansQuery(raw, query, 1, 2, 2, true, 5000)
 	if len(spans) != 1 || !strings.Contains(spans[0].text, "ms-last-api") {
 		t.Fatalf("expected later partial-match cluster: %#v", spans)
 	}
