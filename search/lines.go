@@ -1,6 +1,66 @@
 package search
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
+// codePrefix records a cleaned prefix as a slice of the shared normalized text
+// plus, at most, an incomplete UTF-8 rune. Prefix trimming must happen before
+// considering later bytes: a prefix ending inside a whitespace run is different
+// from an offset into the fully normalized string.
+type codePrefix struct {
+	end  int
+	tail string
+}
+
+// codePrefixCorrespondence scans raw once and retains only requested offsets.
+// Control runes become spaces (they are not deleted), ASCII whitespace runs
+// collapse, and Unicode whitespace is trimmed only at the prefix boundaries,
+// exactly as in CleanContentCode. Invalid UTF-8 bytes remain unchanged.
+func codePrefixCorrespondence(raw string, offsets map[int]codePrefix) string {
+	var text strings.Builder
+	text.Grow(len(raw))
+	trimmedEnd := 0
+	inSpace := false
+	started := false
+	for i := 0; i < len(raw); {
+		r, size := utf8.DecodeRuneInString(raw[i:])
+		// A truncated rune is invalid UTF-8, not whitespace or a control rune.
+		for n := 1; n < size; n++ {
+			if _, ok := offsets[i+n]; ok {
+				offsets[i+n] = codePrefix{text.Len(), raw[i : i+n]}
+			}
+		}
+		space := r <= 0x20 || (r >= 0x7f && r <= 0x9f)
+		if space {
+			if started && !inSpace {
+				text.WriteByte(' ')
+			}
+		} else if started || !unicode.IsSpace(r) {
+			text.WriteString(raw[i : i+size])
+		}
+		inSpace = space
+		if !space && !unicode.IsSpace(r) {
+			started = true
+			trimmedEnd = text.Len()
+		}
+		i += size
+		if _, ok := offsets[i]; ok {
+			offsets[i] = codePrefix{end: trimmedEnd}
+		}
+	}
+	return text.String()
+}
+
+// corresponds compares offsets, not whole prefixes, avoiding another O(M*N)
+// scan in string equality. The shared text and normalized have identical prefix
+// bytes; only an incomplete rune's tail needs a byte comparison.
+func (p codePrefix) corresponds(normalized string, end int) bool {
+	return p.end+len(p.tail) == end && p.end <= len(normalized) &&
+		strings.HasPrefix(normalized[p.end:], p.tail)
+}
 
 // lineIndexer maps a byte offset in a string to its 1-based line number using a
 // precomputed table of line-start offsets and a binary search.
@@ -58,11 +118,13 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		offsets []int
 	}
 	infos := make([]termInfo, 0, len(query.matchers))
+	prefixes := make(map[int]codePrefix)
 	for index, matcher := range query.matchers {
 		locs := matcher.findAll(raw)
 		offs := make([]int, len(locs))
 		for k, l := range locs {
 			offs[k] = l.start
+			prefixes[l.start] = codePrefix{}
 		}
 		// A term with no raw occurrences can never be an anchor; skip it here so the
 		// per-excerpt loop below doesn't have to filter empty-offset entries.
@@ -88,7 +150,7 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 
 	// Only the minimal cleaner is eligible for ordinal resolution. General
 	// cleaning can remove and create matches while leaving their counts equal.
-	normalizedRaw := CleanContentCode(raw)
+	normalizedRaw := strings.TrimSpace(codePrefixCorrespondence(raw, prefixes))
 	// The fallback prefers anchors beyond every match in the previous cluster.
 	// Exact identities may still resolve excerpts emitted in ranking order.
 	cursor := 0
@@ -111,7 +173,7 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 					match.occurrence <= len(info.offsets) && sourceCounts[match.term] == len(info.offsets) {
 					offset := info.offsets[match.occurrence-1]
 					if match.source.start < 0 || match.source.start > len(span.sourceText) ||
-						CleanContentCode(raw[:offset]) != strings.TrimSpace(span.sourceText[:match.source.start]) {
+						!prefixes[offset].corresponds(normalizedRaw, len(strings.TrimSpace(span.sourceText[:match.source.start]))) {
 						break
 					}
 					lo = min(lo, offset)

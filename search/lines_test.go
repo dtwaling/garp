@@ -191,6 +191,85 @@ func TestComputeExcerptLinesNoTermLeavesUnknown(t *testing.T) {
 	}
 }
 
+// Check every byte offset, including prefixes ending inside UTF-8 runes.
+func checkCodePrefixCorrespondence(t *testing.T, raw string) {
+	t.Helper()
+	prefixes := make(map[int]codePrefix, len(raw)+1)
+	for off := 0; off <= len(raw); off++ {
+		prefixes[off] = codePrefix{}
+	}
+	text := codePrefixCorrespondence(raw, prefixes)
+	normalized := strings.TrimSpace(text)
+	if want := CleanContentCode(raw); normalized != want {
+		t.Fatalf("full normalization of %q = %q, want %q", raw, normalized, want)
+	}
+	for off := 0; off <= len(raw); off++ {
+		p := prefixes[off]
+		want := CleanContentCode(raw[:off])
+		if got := text[:p.end] + p.tail; got != want {
+			t.Fatalf("prefix %q at %d = %q, want %q", raw, off, got, want)
+		}
+		for end := 0; end <= len(normalized); end++ {
+			source := strings.TrimSpace(normalized[:end])
+			if got := p.corresponds(normalized, len(source)); got != (want == source) {
+				t.Fatalf("correspondence %q at raw=%d/source=%d = %t, want %t", raw, off, end, got, want == source)
+			}
+		}
+	}
+}
+
+func FuzzCodePrefixCorrespondence(f *testing.F) {
+	for _, raw := range []string{
+		"", "   \t\r\n", " \talpha\r\n  \t beta \n ",
+		"\x00a\x01\x7fb\u0080\u009fc", "a \t\x00  b",
+		"\u00a0\u2003alpha\u2003 \u00a0beta\u3000",
+		"\u0085\u00a0\u2003", "a\u0085\u00a0\u2003", "é界🙂",
+		"\xff\xc2 \xe2\x80x\xf0\x9f", "a\u2003\x00\tb",
+	} {
+		f.Add(raw)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		// The reference intentionally rescans every prefix; bound its test cost.
+		if len(raw) > 256 {
+			t.Skip()
+		}
+		checkCodePrefixCorrespondence(t, raw)
+	})
+}
+
+// Vary both bytes and match count to expose repeated prefix normalization or
+// whole-prefix comparisons. All matches sit near the end of the input.
+func BenchmarkExcerptLinesManyLateMatches(b *testing.B) {
+	for _, size := range []int{1 << 16, 1 << 20} {
+		for _, matches := range []int{1, 100} {
+			b.Run(fmt.Sprintf("bytes=%d/matches=%d", size, matches), func(b *testing.B) {
+				raw := strings.Repeat("x", size) + "\n" + strings.Repeat("needle ", matches)
+				query := compileQuery([]string{"needle"}, PartialModeOff)
+				// Construct a complete cluster without the excerpt renderer's text
+				// budget truncating away the late occurrences being benchmarked.
+				cleaned := CleanContentCode(raw)
+				var identities []excerptMatch
+				for ordinal, loc := range query.matchers[0].findAll(cleaned) {
+					identities = append(identities, excerptMatch{matchRange: loc, source: loc, term: 0, occurrence: ordinal + 1})
+				}
+				spans := []excerptSpan{{sourceText: cleaned, sourceMatches: identities, matches: identities}}
+				if len(identities) != matches {
+					b.Fatalf("fixture must contain %d matches in one span", matches)
+				}
+				b.SetBytes(int64(len(raw)))
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					got := computeExcerptSpanLinesQuery(raw, spans, query, 5000)
+					if len(got) != 1 || got[0] != 2 {
+						b.Fatalf("anchors = %v, want [2]", got)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestComputeExcerptLinesNormalizedWhitespace(t *testing.T) {
 	raw := "alpha\nbeta\n"
 	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
