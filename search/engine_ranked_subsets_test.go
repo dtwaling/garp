@@ -126,6 +126,7 @@ func TestEnginePerFileSubsetsExcerptLimitDoesNotChangeFileRank(t *testing.T) {
 func TestEnginePerFileSubsetsStage3Regressions(t *testing.T) {
 	SetExcerptContextLimit(100)
 	t.Cleanup(func() { SetExcerptContextLimit(0) })
+	noveltyCorpus := endpointNoveltyCorpus()
 	for _, tc := range []struct {
 		name     string
 		content  string
@@ -142,8 +143,8 @@ func TestEnginePerFileSubsetsStage3Regressions(t *testing.T) {
 		},
 		{
 			name:     "sole endpoint is not reused or allowed to suppress middle cluster",
-			content:  endpointNoveltyCorpus(),
-			distance: len(endpointNoveltyCorpus()),
+			content:  noveltyCorpus,
+			distance: len(noveltyCorpus),
 			markers:  []string{"final cluster", "first cluster", "middle cluster"},
 			terms:    []int{3, 2, 2},
 		},
