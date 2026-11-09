@@ -2,6 +2,7 @@ package search
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -63,73 +64,177 @@ func (p codePrefix) corresponds(normalized string, end int) bool {
 		strings.HasPrefix(normalized[p.end:], p.tail)
 }
 
-// mappedContent retains raw byte identities through the document cleaners.
-// Inserted bytes have no raw identity; captured and untouched bytes retain theirs.
-type mappedContent struct {
-	text    string
-	offsets []int
+// docStep retains regex match ranges, not one raw identity per document byte.
+type docStep struct {
+	locs        [][]int
+	replacement string
+	trimLeft    int
 }
 
-func (m mappedContent) replace(re *regexp.Regexp, replacement string) mappedContent {
-	locs := re.FindAllStringSubmatchIndex(m.text, -1)
+// replacementRanges visits copied captures and synthetic literal bytes in order.
+// Cleaner templates use only literals and single-digit capture groups.
+func replacementRanges(loc []int, replacement string, visit func(start, length int)) {
+	for j := 0; j < len(replacement); j++ {
+		if replacement[j] == '$' && j+1 < len(replacement) {
+			j++
+			group := int(replacement[j]-'0') * 2
+			if group+1 < len(loc) && loc[group] >= 0 {
+				visit(loc[group], loc[group+1]-loc[group])
+			}
+		} else {
+			visit(-1, 1)
+		}
+	}
+}
+
+func documentReplace(text string, re *regexp.Regexp, replacement string) (string, docStep) {
+	locs := re.FindAllStringSubmatchIndex(text, -1)
 	if len(locs) == 0 {
-		return m
+		return text, docStep{}
 	}
-	var text strings.Builder
-	offsets := make([]int, 0, len(m.offsets))
-	copyRange := func(start, end int) {
-		text.WriteString(m.text[start:end])
-		offsets = append(offsets, m.offsets[start:end]...)
-	}
+	var out strings.Builder
+	out.Grow(len(text))
 	last := 0
 	for _, loc := range locs {
-		copyRange(last, loc[0])
-		// Cleaner templates use only literals and single-digit capture groups.
-		for j := 0; j < len(replacement); j++ {
-			if replacement[j] == '$' && j+1 < len(replacement) {
-				j++
-				group := int(replacement[j]-'0') * 2
-				if group+1 < len(loc) && loc[group] >= 0 {
-					copyRange(loc[group], loc[group+1])
-				}
+		out.WriteString(text[last:loc[0]])
+		literal := 0
+		replacementRanges(loc, replacement, func(start, length int) {
+			if start >= 0 {
+				out.WriteString(text[start : start+length])
 			} else {
-				text.WriteByte(replacement[j])
-				offsets = append(offsets, -1)
+				// Locate the next literal, skipping capture references.
+				for literal+1 < len(replacement) && replacement[literal] == '$' {
+					literal += 2
+				}
+				out.WriteByte(replacement[literal])
+				literal++
 			}
-		}
+		})
 		last = loc[1]
 	}
-	copyRange(last, len(m.text))
-	return mappedContent{text.String(), offsets}
+	out.WriteString(text[last:])
+	return out.String(), docStep{locs: locs, replacement: replacement}
+}
+
+func resolveDocumentOffsets(text string, steps []docStep, offsets map[int]int) {
+	active := make([]int, 0, len(offsets))
+	for k := range offsets {
+		offsets[k] = -1
+		if k >= 0 && k < len(text) {
+			offsets[k] = k
+			active = append(active, k)
+		}
+	}
+	sort.Ints(active)
+	for i := len(steps) - 1; i >= 0 && len(active) > 0; i-- {
+		step := steps[i]
+		if len(step.locs) == 0 {
+			for _, k := range active {
+				offsets[k] += step.trimLeft
+			}
+			continue
+		}
+		cursor, kept, inLast, outLast := 0, 0, 0, 0
+		mapRange := func(start, length int) {
+			end := outLast + length
+			for cursor < len(active) && offsets[active[cursor]] < end {
+				k := active[cursor]
+				pos := offsets[k]
+				cursor++
+				offsets[k] = -1
+				if start >= 0 {
+					offsets[k] = start + pos - outLast
+					active[kept] = k
+					kept++
+				}
+			}
+			outLast = end
+		}
+		for _, loc := range step.locs {
+			mapRange(inLast, loc[0]-inLast)
+			if cursor == len(active) {
+				break
+			}
+			replacementRanges(loc, step.replacement, mapRange)
+			inLast = loc[1]
+			if cursor == len(active) {
+				break
+			}
+		}
+		for cursor < len(active) {
+			k := active[cursor]
+			cursor++
+			offsets[k] = inLast + offsets[k] - outLast
+			active[kept] = k
+			kept++
+		}
+		active = active[:kept]
+		// Captures can repeat or reorder input ranges. Restore position order
+		// before the next linear reverse pass (normally already sorted).
+		less := func(a, b int) bool { return offsets[active[a]] < offsets[active[b]] }
+		if !sort.SliceIsSorted(active, less) {
+			sort.Slice(active, less)
+		}
+	}
 }
 
 // documentCorrespondence mirrors CleanContent followed by excerpt prep, or
-// prep alone. Compute once per source variant, never once per emitted match.
-func documentCorrespondence(raw string, clean bool) mappedContent {
-	m := mappedContent{text: raw, offsets: make([]int, len(raw))}
-	for i := range m.offsets {
-		m.offsets[i] = i
+// prep alone, resolving only requested final-text byte offsets back to raw.
+func documentCorrespondence(raw string, clean bool, offsets map[int]int) string {
+	text := raw
+	var steps []docStep
+	replace := func(re *regexp.Regexp, replacement string) {
+		var step docStep
+		text, step = documentReplace(text, re, replacement)
+		if len(offsets) > 0 && len(step.locs) > 0 {
+			steps = append(steps, step)
+		}
 	}
 	strip := func(control string) {
-		m = m.replace(cssRegex, "").replace(jsRegex, "")
-		m = m.replace(htmlTagRegex, " ").replace(htmlEntityRegex, " ")
-		m = m.replace(controlCharRegex, control).replace(junkSymbolsRegex, "")
-		m = m.replace(emailQuotingRegex, "").replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")
+		replace(cssRegex, "")
+		replace(jsRegex, "")
+		replace(htmlTagRegex, " ")
+		replace(htmlEntityRegex, " ")
+		replace(controlCharRegex, control)
+		replace(junkSymbolsRegex, "")
+		replace(emailQuotingRegex, "")
+		replace(quoteLineStartRegex, "")
+		replace(quoteMidRegex, " ")
 	}
 	if clean {
 		strip(" ")
-		m = m.replace(whitespaceRegex, " ")
-		m = m.replace(letterDigitRegex, "$1 $2").replace(digitLetterRegex, "$1 $2")
-		m = m.replace(commaMissingSpace, ", $1")
-		left := len(m.text) - len(strings.TrimLeftFunc(m.text, unicode.IsSpace))
-		right := len(strings.TrimRightFunc(m.text, unicode.IsSpace))
-		if right < left {
-			right = left
+		replace(whitespaceRegex, " ")
+		replace(letterDigitRegex, "$1 $2")
+		replace(digitLetterRegex, "$1 $2")
+		replace(commaMissingSpace, ", $1")
+		left := len(text) - len(strings.TrimLeftFunc(text, unicode.IsSpace))
+		text = strings.TrimSpace(text)
+		if len(offsets) > 0 && left > 0 {
+			steps = append(steps, docStep{trimLeft: left})
 		}
-		m = mappedContent{m.text[left:right], m.offsets[left:right]}
 	}
 	strip("")
-	return m
+	if len(offsets) > 0 {
+		resolveDocumentOffsets(text, steps, offsets)
+	}
+	return text
+}
+
+// requestedDocumentOffsets collects only valid emitted match bytes, deduplicated
+// across spans. Invalid metadata must not cause unbounded offset collection.
+func requestedDocumentOffsets(spans []excerptSpan) map[int]int {
+	offsets := make(map[int]int)
+	for _, span := range spans {
+		for _, match := range span.matches {
+			if match.source.start < 0 || match.source.end > len(span.sourceText) {
+				continue
+			}
+			for j := match.source.start; j < match.source.end; j++ {
+				offsets[j] = -1
+			}
+		}
+	}
+	return offsets
 }
 
 // lineIndexer maps a byte offset in a string to its 1-based line number using a
@@ -224,8 +329,9 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 	var normalizedRaw string
 	normalizedReady := false
 	var prefixes map[int]codePrefix
-	var documents []mappedContent
-	documentsReady := false
+	var docOffsets map[int]int
+	var documentSource string
+	documentMatches := false
 	sourceCounts := make([]int, len(query.matchers))
 	first := make([]int, len(query.matchers))
 	present := make([]*termInfo, 0, len(infos))
@@ -248,25 +354,26 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 			normalizedReady = true
 		}
 		code := span.sourceText != "" && span.sourceText == normalizedRaw
-		var document *mappedContent
+		document := false
 		if !code && span.sourceText != "" {
-			if !documentsReady {
-				documents = []mappedContent{documentCorrespondence(raw, true), documentCorrespondence(raw, false)}
-				documentsReady = true
+			if docOffsets == nil {
+				docOffsets = requestedDocumentOffsets(spans)
 			}
-			for j := range documents {
-				if documents[j].text == span.sourceText {
-					document = &documents[j]
-					break
+			if documentSource != span.sourceText {
+				documentSource = span.sourceText
+				documentMatches = documentCorrespondence(raw, true, docOffsets) == documentSource
+				if !documentMatches {
+					documentMatches = documentCorrespondence(raw, false, docOffsets) == documentSource
 				}
 			}
+			document = documentMatches
 		}
 		clear(sourceCounts)
 		for _, match := range span.sourceMatches {
 			sourceCounts[match.term]++
 		}
 		lo, hi := len(raw), -1
-		exact := len(span.matches) > 0 && (code || document != nil)
+		exact := len(span.matches) > 0 && (code || document)
 		for _, match := range span.matches {
 			if !exact {
 				break
@@ -275,14 +382,14 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 				exact = false
 				break
 			}
-			if document != nil {
+			if document {
 				start, end := match.source.start, match.source.end
-				if end <= start || end > len(span.sourceText) || end > len(document.offsets) {
+				if end <= start || end > len(span.sourceText) {
 					exact = false
 					break
 				}
-				offset := document.offsets[start]
-				if offset < 0 || offset >= len(raw) || end-start > len(raw)-offset {
+				offset, ok := docOffsets[start]
+				if !ok || offset < 0 || offset >= len(raw) || end-start > len(raw)-offset {
 					exact = false
 					break
 				}
@@ -290,7 +397,7 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 				// their identity, not raw matcher membership, but reject any match
 				// containing synthetic bytes or crossing a removed raw segment.
 				for j := start; j < end; j++ {
-					if document.offsets[j] != offset+j-start {
+					if mapped, ok := docOffsets[j]; !ok || mapped != offset+j-start {
 						exact = false
 						break
 					}
