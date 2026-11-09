@@ -234,6 +234,58 @@ func documentCorrespondence(raw string, clean bool, offsets map[int]int) string 
 	return text
 }
 
+// codeCorrespondence uses the same sparse reverse mapping as documents. This
+// avoids ordinal raw-match assumptions when normalization creates phrase matches.
+func codeCorrespondence(raw string, offsets map[int]int) string {
+	text, controls := documentReplace(raw, controlCharRegex, " ")
+	text, spaces := documentReplace(text, whitespaceRegex, " ")
+	left := len(text) - len(strings.TrimLeftFunc(text, unicode.IsSpace))
+	text = strings.TrimSpace(text)
+	resolveDocumentOffsets(text, []docStep{controls, spaces, {trimLeft: left}}, offsets)
+	return text
+}
+
+// mappedMatchOffset permits normalized whitespace between retained bytes, but
+// never accepts synthetic word bytes or gaps caused by removed markup. The raw
+// gap must consist solely of runes normalized to ASCII space by the code cleaner.
+func mappedMatchOffset(raw, source string, match matchRange, offsets map[int]int) (int, bool) {
+	start, end := match.start, match.end
+	if start < 0 || end <= start || end > len(source) {
+		return 0, false
+	}
+	first, previous, spaced := -1, -1, false
+	for j := start; j < end; j++ {
+		if source[j] == ' ' && j > start && j+1 < end {
+			spaced = true
+			continue
+		}
+		pos, ok := offsets[j]
+		if !ok || pos < 0 || pos >= len(raw) || raw[pos] != source[j] {
+			return 0, false
+		}
+		if previous >= 0 {
+			if !spaced && pos != previous+1 {
+				return 0, false
+			}
+			if spaced {
+				if pos <= previous+1 {
+					return 0, false
+				}
+				for _, r := range raw[previous+1 : pos] {
+					if !(r <= 0x20 || (r >= 0x7f && r <= 0x9f)) {
+						return 0, false
+					}
+				}
+			}
+		}
+		if first < 0 {
+			first = pos
+		}
+		previous, spaced = pos, false
+	}
+	return first, first >= 0
+}
+
 // requestedDocumentOffsets collects only valid emitted match bytes, deduplicated
 // across spans. Invalid metadata must not cause unbounded offset collection.
 func requestedDocumentOffsets(spans []excerptSpan) map[int]int {
@@ -314,8 +366,8 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		for k, l := range locs {
 			offs[k] = l.start
 		}
-		// Code and heuristic anchors need raw occurrences. Document byte mappings
-		// can anchor retained matches even when cleaning created their boundaries.
+		// Heuristic anchors need raw occurrences. Exact byte mappings can anchor
+		// retained matches even when cleaning created their boundaries.
 		if len(offs) > 0 {
 			infos = append(infos, termInfo{index: index, offsets: offs})
 		}
@@ -342,32 +394,30 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 
 	var normalizedRaw string
 	normalizedReady := false
-	var prefixes map[int]codePrefix
+	var codeOffsets map[int]int
 	var docOffsets map[int]int
 	var documentSource string
 	documentMatches := false
-	sourceCounts := make([]int, len(query.matchers))
+
 	first := make([]int, len(query.matchers))
 	present := make([]*termInfo, 0, len(infos))
 	// The fallback prefers anchors beyond every match in the previous cluster.
 	// Exact identities may still resolve excerpts emitted in ranking order.
 	cursor := 0
 	for i, span := range spans {
-		// Equal counts alone do not prove correspondence. Check raw byte identity
-		// for document transformations, and normalized prefixes for code.
+		// Equal counts alone do not prove correspondence. Both cleaner paths
+		// resolve only emitted match bytes and validate their raw identity.
 		if span.sourceText != "" && !normalizedReady {
 			// Synthetic spans need no normalization. Exact-identity candidates
-			// share one scan that also records the requested code prefixes.
-			prefixes = make(map[int]codePrefix)
-			for _, info := range infos {
-				for _, offset := range info.offsets {
-					prefixes[offset] = codePrefix{}
-				}
-			}
-			normalizedRaw = strings.TrimSpace(codePrefixCorrespondence(raw, prefixes))
+			// share one scan without storing every raw occurrence's prefix.
+			normalizedRaw = strings.TrimSpace(codePrefixCorrespondence(raw, nil))
 			normalizedReady = true
 		}
 		code := span.sourceText != "" && span.sourceText == normalizedRaw
+		if code && codeOffsets == nil {
+			codeOffsets = requestedDocumentOffsets(spans)
+			codeCorrespondence(raw, codeOffsets)
+		}
 		document := false
 		if !code && span.sourceText != "" {
 			if docOffsets == nil {
@@ -382,10 +432,7 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 			}
 			document = documentMatches
 		}
-		clear(sourceCounts)
-		for _, match := range span.sourceMatches {
-			sourceCounts[match.term]++
-		}
+
 		lo, hi := len(raw), -1
 		exact := len(span.matches) > 0 && (code || document)
 		for _, match := range span.matches {
@@ -396,51 +443,17 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 				exact = false
 				break
 			}
-			if document {
-				start, end := match.source.start, match.source.end
-				if end <= start || end > len(span.sourceText) {
-					exact = false
-					break
-				}
-				offset, ok := docOffsets[start]
-				if !ok || offset < 0 || offset >= len(raw) || end-start > len(raw)-offset {
-					exact = false
-					break
-				}
-				// Cleaning can create word boundaries around retained bytes. Trust
-				// their identity, not raw matcher membership, but reject any match
-				// containing synthetic bytes or crossing a removed raw segment.
-				for j := start; j < end; j++ {
-					if mapped, ok := docOffsets[j]; !ok || mapped != offset+j-start {
-						exact = false
-						break
-					}
-				}
-				if !exact {
-					break
-				}
-				lo = min(lo, offset)
-				hi = max(hi, offset)
-				continue
+			offsets := docOffsets
+			if code {
+				offsets = codeOffsets
 			}
-			found := false
-			for _, info := range infos {
-				if info.index != match.term {
-					continue
-				}
-				if match.occurrence <= 0 || match.occurrence > len(info.offsets) || sourceCounts[match.term] != len(info.offsets) {
-					break
-				}
-				offset := info.offsets[match.occurrence-1]
-				if !prefixes[offset].corresponds(normalizedRaw, len(strings.TrimSpace(span.sourceText[:match.source.start]))) {
-					break
-				}
-				lo = min(lo, offset)
-				hi = max(hi, offset)
-				found = true
+			offset, ok := mappedMatchOffset(raw, span.sourceText, match.source, offsets)
+			if !ok {
+				exact = false
 				break
 			}
-			exact = exact && found
+			lo = min(lo, offset)
+			hi = max(hi, offset)
 		}
 		if exact {
 			out[i] = li.lineOf(lo)

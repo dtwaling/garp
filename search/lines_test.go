@@ -8,6 +8,59 @@ import (
 	"testing"
 )
 
+func TestExcerptLinesNormalizedPhraseSeparators(t *testing.T) {
+	for _, code := range []bool{false, true} {
+		for _, sep := range []string{"  ", "\t", "\n", "\r\n", "\x00", "\u0085", " \t\n "} {
+			t.Run(fmt.Sprintf("code=%t/sep=%q", code, sep), func(t *testing.T) {
+				header := "header\n"
+				if !code {
+					header = "<b>header</b>\n"
+				}
+				raw := header + "alpha" + sep + "beta " + strings.Repeat("loose ", 30) + "gamma.\n" +
+					strings.Repeat("padding.\n", 100) + "alpha beta gamma tight cluster.\n"
+				content := CleanContent(raw)
+				if code {
+					content = CleanContentCode(raw)
+				}
+				query := compileQuery([]string{"alpha beta", "gamma"}, PartialModeOff)
+				spans := extractRankedExcerptSpansQuery(content, query, 2, 2, 2, code, 5000)
+				if len(spans) != 2 || !strings.Contains(spans[0].text, "tight cluster") {
+					t.Fatalf("expected two ranked clusters: %#v", spans)
+				}
+				want := []int{103 + strings.Count(sep, "\n"), 2}
+				for range 2 {
+					if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, want) {
+						t.Fatalf("anchors = %v, want %v", got, want)
+					}
+					slices.Reverse(spans)
+					slices.Reverse(want)
+				}
+			})
+		}
+	}
+}
+
+func TestCodeSparseOffsetsManyOccurrences(t *testing.T) {
+	for _, count := range []int{100, 10000} {
+		raw := strings.Repeat("needle\n", count)
+		source := CleanContentCode(raw)
+		start := strings.LastIndex(source, "needle")
+		match := excerptMatch{term: 0, source: matchRange{start: start, end: start + 6}, occurrence: count}
+		spans := []excerptSpan{{sourceText: source, matches: []excerptMatch{match}}}
+		offsets := requestedDocumentOffsets(append(spans, spans...))
+		if got := codeCorrespondence(raw, offsets); got != source || len(offsets) != 6 {
+			t.Fatalf("correspondence mismatch or non-sparse map: %d entries", len(offsets))
+		}
+		if offset, ok := mappedMatchOffset(raw, source, match.source, offsets); !ok || offset != strings.LastIndex(raw, "needle") {
+			t.Fatalf("mapped offset = %d, valid=%t", offset, ok)
+		}
+		query := compileQuery([]string{"needle"}, PartialModeOff)
+		if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{count}) {
+			t.Fatalf("anchors = %v, want [%d]", got, count)
+		}
+	}
+}
+
 func TestExcerptLinesDocumentPhraseSpaces(t *testing.T) {
 	for _, clean := range []bool{false, true} {
 		t.Run(fmt.Sprintf("clean=%t", clean), func(t *testing.T) {
