@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"garp/config"
 )
@@ -16,6 +17,7 @@ type WalkOptions struct {
 	NoIgnore                    bool
 	MaxFileSize                 int64
 	UserGlobs                   []UserGlob
+	ExcludeWords                []string // Dot-prefixed entries exclude extensions before file I/O.
 	PositiveGlobCodeEligibility bool
 }
 
@@ -95,6 +97,16 @@ func decideTraversalDirectory(
 		return ignoreChain{}, false
 	}
 	return childChain, true
+}
+
+func extensionExcluded(path string, excludes []string) bool {
+	ext := filepath.Ext(path)
+	for _, exclude := range excludes {
+		if strings.HasPrefix(exclude, ".") && strings.EqualFold(ext, exclude) {
+			return true
+		}
+	}
+	return false
 }
 
 func candidateSizeEligible(path string, size int64, options WalkOptions) bool {
@@ -195,7 +207,7 @@ func walkPreparedCandidates(
 				len(policy.globPositive) > 0 && config.IsCodeFile(logicalPath) {
 				typeEligible = policy.MatchesPositiveGlob(logicalPath)
 			}
-			if !typeEligible {
+			if !typeEligible || extensionExcluded(logicalPath, options.ExcludeWords) {
 				continue
 			}
 			if !policy.MatchesFile(logicalPath) {
