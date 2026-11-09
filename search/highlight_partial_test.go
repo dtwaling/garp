@@ -155,7 +155,7 @@ func TestExtractedExcerptHighlightsOnlyFullTextMatches(t *testing.T) {
 	const nc = "\033[0m"
 
 	query := compileQuery([]string{"api"}, PartialModeOff)
-	spans := extractRankedExcerptSpansQuery("myapi then api", query, 1, 1, 0, true, -1)
+	spans := extractRankedExcerptSpansQuery("myapi then api", query, 1, 1, 0, true, unconstrainedDistance)
 	if len(spans) != 1 {
 		t.Fatalf("excerpt spans = %#v, want one", spans)
 	}

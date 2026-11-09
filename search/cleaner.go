@@ -10,6 +10,9 @@ import (
 	"unicode/utf8"
 )
 
+// unconstrainedDistance disables the excerpt proximity bound for legacy helpers.
+const unconstrainedDistance = -1
+
 var (
 	// HTML/XML tags
 	htmlTagRegex = regexp.MustCompile(`<[^>]*>`)
@@ -439,27 +442,27 @@ func expandToBoundaries(cleaned string, left, right, maxContext int) (int, int) 
 // ExtractMeaningfulExcerpts returns targeted, per-match snippets around each term.
 // We extract tight, local windows around each match with email-aware boundaries,
 // paragraph fallbacks, and punctuation-aware sentence ends. We avoid global scans.
-func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, targetScore int) []string {
-	return ExtractMeaningfulExcerptsPartial(content, searchTerms, maxExcerpts, targetScore, PartialModeOff)
+func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, targetTerms int) []string {
+	return ExtractMeaningfulExcerptsPartial(content, searchTerms, maxExcerpts, targetTerms, PartialModeOff)
 }
 
 // ExtractMeaningfulExcerptsPartial returns targeted excerpts using the requested
 // term matching mode.
-func ExtractMeaningfulExcerptsPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, partial PartialMode) []string {
+func ExtractMeaningfulExcerptsPartial(content string, searchTerms []string, maxExcerpts int, targetTerms int, partial PartialMode) []string {
 	query := compileQuery(searchTerms, partial)
-	return excerptSpanTexts(extractExcerptSpansQuery(content, query, maxExcerpts, targetScore, false))
+	return excerptSpanTexts(extractExcerptSpansQuery(content, query, maxExcerpts, targetTerms, false))
 }
 
 // ExtractMeaningfulExcerptsCode is the code-aware variant of ExtractMeaningfulExcerpts. It uses
 // minimal, code-safe cleaning so source tokens (angle brackets, operators, PHP/markup) survive.
-func ExtractMeaningfulExcerptsCode(content string, searchTerms []string, maxExcerpts int, targetScore int) []string {
-	return ExtractMeaningfulExcerptsCodePartial(content, searchTerms, maxExcerpts, targetScore, PartialModeOff)
+func ExtractMeaningfulExcerptsCode(content string, searchTerms []string, maxExcerpts int, targetTerms int) []string {
+	return ExtractMeaningfulExcerptsCodePartial(content, searchTerms, maxExcerpts, targetTerms, PartialModeOff)
 }
 
 // ExtractMeaningfulExcerptsCodePartial is the code-aware partial-match variant.
-func ExtractMeaningfulExcerptsCodePartial(content string, searchTerms []string, maxExcerpts int, targetScore int, partial PartialMode) []string {
+func ExtractMeaningfulExcerptsCodePartial(content string, searchTerms []string, maxExcerpts int, targetTerms int, partial PartialMode) []string {
 	query := compileQuery(searchTerms, partial)
-	return excerptSpanTexts(extractExcerptSpansQuery(content, query, maxExcerpts, targetScore, true))
+	return excerptSpanTexts(extractExcerptSpansQuery(content, query, maxExcerpts, targetTerms, true))
 }
 
 // extractExcerptSpans extracts spans with default whole-word matching.
@@ -467,34 +470,37 @@ func extractExcerptSpans(content string, searchTerms []string, maxExcerpts int, 
 	return extractExcerptSpansPartial(content, searchTerms, maxExcerpts, len(searchTerms), isCode, PartialModeOff)
 }
 
-func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, isCode bool, partial PartialMode) []excerptSpan {
+func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetTerms int, isCode bool, partial PartialMode) []excerptSpan {
 	query := compileQuery(searchTerms, partial)
-	return extractExcerptSpansQuery(content, query, maxExcerpts, targetScore, isCode)
+	return extractExcerptSpansQuery(content, query, maxExcerpts, targetTerms, isCode)
 }
 
-func extractExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetScore int, isCode bool) []excerptSpan {
-	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetScore, 0, isCode, -1)
+func extractExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetTerms int, isCode bool) []excerptSpan {
+	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetTerms, 0, isCode, unconstrainedDistance)
 }
 
 // extractRankedExcerptSpans emits per-file chunks ranked best-first. Every
-// coverage level from minTerms up to targetScore can seed a
+// coverage level from minTerms up to targetTerms can seed a
 // chunk, so a file's best cluster no longer suppresses its other, separate
 // lower-quality clusters (the per-file result subset).
-func extractRankedExcerptSpans(content string, searchTerms []string, maxExcerpts int, targetScore int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
-	return extractRankedExcerptSpansPartial(content, searchTerms, maxExcerpts, targetScore, minTerms, isCode, partial)
+func extractRankedExcerptSpans(content string, searchTerms []string, maxExcerpts int, targetTerms int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
+	return extractRankedExcerptSpansPartial(content, searchTerms, maxExcerpts, targetTerms, minTerms, isCode, partial)
 }
 
 // extractRankedExcerptSpansPartial is the shared implementation. minTerms > 0
 // enables multi-level candidate generation (per-file ranked subsets); the
 // legacy single-level behavior runs otherwise.
-func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetScore int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
+func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetTerms int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
 	query := compileQuery(searchTerms, partial)
-	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetScore, minTerms, isCode, -1)
+	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetTerms, minTerms, isCode, unconstrainedDistance)
 }
 
 // extractRankedExcerptSpansQuery reuses the execution's exact matcher ranges.
-// A negative distance preserves unconstrained legacy helper behavior.
-func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetScore int, minTerms int, isCode bool, distance int) []excerptSpan {
+// targetTerms is distinct-term coverage, not the weighted term-length score.
+// Nonnegative distance matches Stage 2's inclusive start-to-start bound, including
+// zero; NewSearchEngine defaults Distance to 5000. unconstrainedDistance disables
+// the bound for legacy helpers (all negative distances retain that behavior).
+func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetTerms int, minTerms int, isCode bool, distance int) []excerptSpan {
 	var cleaned string
 	if isCode {
 		// Minimal cleaning: preserve every code token; only normalize control chars/whitespace.
@@ -521,13 +527,13 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 		return []excerptSpan{}
 	}
 
-	if targetScore <= 0 || targetScore > len(query.matchers) {
-		targetScore = len(query.matchers)
+	if targetTerms <= 0 || targetTerms > len(query.matchers) {
+		targetTerms = len(query.matchers)
 	}
 	// Coverage levels that can seed a chunk. Ranked mode (minTerms > 0) spans
 	// minTerms up to the Stage 2 term count so every allowed quality tier is
-	// eligible; the legacy single-level path pins the level to targetScore.
-	levelMin, levelMax := targetScore, targetScore
+	// eligible; the legacy single-level path pins the level to targetTerms.
+	levelMin, levelMax := targetTerms, targetTerms
 	if minTerms > 0 {
 		levelMin = max(1, minTerms)
 	}
@@ -552,7 +558,7 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 	excerpts := make([]excerptSpan, 0, maxExcerpts)
 	seen := make(map[string]struct{})
 
-	// Sliding-window strategy: collect candidate spans covering the target score.
+	// Sliding-window strategy: collect candidate spans covering the target term count.
 	// A single term is a one-term window, so every query shape uses this selector.
 	type tmatch struct {
 		start int
@@ -597,7 +603,7 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 				}
 				// Match Stage 2's inclusive start-to-start proximity window.
 				if covered == level && (minTerms <= 0 || counts[0] > 0) &&
-					(distance < 0 || all[r-1].start-all[l].start <= distance) {
+					(distance <= unconstrainedDistance || all[r-1].start-all[l].start <= distance) {
 					right := all[l].end
 					score, termCount := 0, 0
 					for i := l; i < r; i++ {
@@ -755,7 +761,7 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 	}
 
 	// Do not let the legacy sentence fallback bypass ranked constraints.
-	if distance >= 0 || minTerms > 0 {
+	if distance > unconstrainedDistance || minTerms > 0 {
 		return excerpts
 	}
 

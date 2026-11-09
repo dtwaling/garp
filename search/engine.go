@@ -44,12 +44,12 @@ type SearchResult struct {
 	rootOrder       int
 	canonicalPath   string
 	FileSize        int64
-	Score           int      // Sum of distinct matched term lengths in the best window.
-	TermCount       int      // Number of distinct query terms in the best window.
-	PathMatchCount  int      `json:"-"`
-	BoundaryQuality int      `json:"-"`
-	MatchedTerms    []string // Distinct query terms from the best window.
-	SpanLength      int      // Character span of the best window.
+	Score           int            // Sum of distinct matched term lengths in the best window.
+	TermCount       int            // Number of distinct query terms in the best window.
+	PathMatchCount  int            `json:"-"`
+	BoundaryQuality int            `json:"-"`
+	MatchedTerms    []string       // Distinct query terms from the best window.
+	SpanLength      int            // Character span of the best window.
 	Excerpts        []string       // ANSI-highlighted, for TUI display
 	RawExcerpts     []string       // plain text before highlighting -- for machine-readable output (--json, --plain)
 	ExcerptMatches  [][]MatchRange `json:"-"` // source-validated byte ranges per RawExcerpts entry
@@ -1229,6 +1229,9 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		if len(query.terms) >= 3 && !se.Strict {
 			minTerms = 2
 		}
+		// Pass Distance unchanged to preserve Stage 2 parity, including zero.
+		// NewSearchEngine supplies the default of 5000; legacy excerpt helpers
+		// use unconstrainedDistance to disable their proximity bound.
 		if isCode {
 			spans = extractRankedExcerptSpansQuery(cleanContent, query, maxExcerpts, match.termCount, minTerms, true, se.Distance)
 			excerpts = excerptSpanTexts(spans)
