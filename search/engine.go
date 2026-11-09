@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"math"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -590,25 +590,22 @@ func (se *SearchEngine) extractBinaryFileWorker(ctx context.Context, filePath, e
 		return
 	}
 
+	file, stat, err := openRegularSearchFile(filePath)
+	if err != nil {
+		readErr = err
+		return
+	}
+	fileSize = stat.Size()
+	if se.MaxFileSize > 0 && fileSize > se.MaxFileSize {
+		file.Close()
+		readErr = fmt.Errorf("file size %d exceeds max-filesize %d", fileSize, se.MaxFileSize)
+		return
+	}
+
 	var extract func() (string, error)
 	var metadata string
 	if raExtractor, ok := extractor.(ReaderAtExtractor); ok {
-		file, err := os.Open(filePath)
-		if err != nil {
-			readErr = err
-			return
-		}
 		defer file.Close()
-		stat, err := file.Stat()
-		if err != nil {
-			readErr = err
-			return
-		}
-		fileSize = stat.Size()
-		if se.MaxFileSize > 0 && fileSize > se.MaxFileSize {
-			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", fileSize, se.MaxFileSize)
-			return
-		}
 		if wantEmailMeta && strings.EqualFold(ext, ".msg") {
 			prefix, err := io.ReadAll(io.LimitReader(io.NewSectionReader(contextReaderAt{ctx, file}, 0, fileSize), 256*1024))
 			if err != nil {
@@ -621,31 +618,34 @@ func (se *SearchEngine) extractBinaryFileWorker(ctx context.Context, filePath, e
 			return raExtractor.ExtractReaderAt(contextReaderAt{ctx, file}, stat.Size(), DefaultMaxExtractedBytes)
 		}
 	} else {
-		stat, err := os.Stat(filePath)
+		_ = adviseSequential(file)
+		maxBytes := se.MaxFileSize
+		if maxBytes <= 0 {
+			maxBytes = int64(maxFileSizeBytes)
+		}
+		readLimit := maxBytes
+		if se.MaxFileSize > 0 && readLimit < math.MaxInt64 {
+			readLimit++
+		}
+		content, err := io.ReadAll(io.LimitReader(file, readLimit))
+		_ = adviseDontNeed(file)
+		_ = file.Close()
 		if err != nil {
 			readErr = err
 			return
 		}
-		fileSize = stat.Size()
+		if int64(len(content)) > fileSize {
+			fileSize = int64(len(content))
+		}
 		if se.MaxFileSize > 0 && fileSize > se.MaxFileSize {
 			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", fileSize, se.MaxFileSize)
 			return
 		}
-		rawContent, size, err := GetFileContentWithLimit(filePath, se.MaxFileSize)
-		if err != nil {
-			readErr = err
-			return
-		}
-		fileSize = size
-		if se.MaxFileSize > 0 && size > se.MaxFileSize {
-			readErr = fmt.Errorf("file size %d exceeds max-filesize %d", size, se.MaxFileSize)
-			return
-		}
 		if wantEmailMeta && (strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg")) {
-			metadata = rawContent
+			metadata = string(content)
 		}
 		extract = func() (string, error) {
-			return extractor.ExtractText([]byte(rawContent))
+			return extractor.ExtractText(content)
 		}
 	}
 	if m := emailDateRe.FindStringSubmatch(metadata); m != nil {
