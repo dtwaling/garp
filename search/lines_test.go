@@ -8,6 +8,80 @@ import (
 	"testing"
 )
 
+func TestExcerptLinesDocumentPhraseSpaces(t *testing.T) {
+	for _, clean := range []bool{false, true} {
+		t.Run(fmt.Sprintf("clean=%t", clean), func(t *testing.T) {
+			raw := "<b>header</b>\nalpha beta " + strings.Repeat("loose ", 30) + "gamma.\n" +
+				strings.Repeat("padding.\n", 100) + "alpha beta gamma tight cluster.\n"
+			content := raw
+			if clean {
+				content = CleanContent(raw)
+			}
+			query := compileQuery([]string{"alpha beta", "gamma"}, PartialModeOff)
+			spans := extractRankedExcerptSpansQuery(content, query, 2, 2, 2, false, 5000)
+			if len(spans) != 2 || !strings.Contains(spans[0].text, "tight cluster") {
+				t.Fatalf("expected tight then loose excerpts: %#v", spans)
+			}
+			if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, []int{103, 2}) {
+				t.Errorf("ranked phrase anchors = %v, want [103 2]", got)
+			}
+			slices.Reverse(spans)
+			if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, []int{2, 103}) {
+				t.Errorf("document-order phrase anchors = %v, want [2 103]", got)
+			}
+		})
+	}
+}
+
+func TestDocumentWhitespaceIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, separator, normalized string
+		retained                    bool
+	}{
+		{"space", " ", " ", true},
+		{"spaces", "  ", " ", false},
+		{"tab", "\t", " ", false},
+		{"newline", "\n", " ", false},
+		{"crlf", "\r\n", " ", false},
+		{"form feed", "\f", " ", false},
+		{"vertical tab", "\v", " ", false},
+		{"control", "\x00", " ", false},
+		{"c1 control", "\u0085", " ", false},
+		{"mixed", " \t\r\n ", " ", false},
+		{"nbsp", "\u00a0", "\u00a0", true},
+		{"unicode space", "\u2003", "\u2003", true},
+		{"tag", "<b>", " ", false},
+		{"entity", "&nbsp;", " ", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := "\u2003<b>header</b>\nalpha" + tc.separator + "beta\u00a0"
+			text := documentCorrespondence(raw, true, nil)
+			phrase := "alpha" + tc.normalized + "beta"
+			start := strings.Index(text, phrase)
+			if start < 0 || text != CleanContent(raw) {
+				t.Fatalf("unexpected cleaned text %q", text)
+			}
+			offsets := make(map[int]int)
+			for j := range len(phrase) {
+				offsets[start+j] = -1
+			}
+			documentCorrespondence(raw, true, offsets)
+			for j := range len(phrase) {
+				want := -1
+				switch {
+				case j < len("alpha") || tc.retained:
+					want = strings.Index(raw, "alpha") + j
+				case j >= len("alpha")+len(tc.normalized):
+					want = strings.Index(raw, "beta") + j - len("alpha") - len(tc.normalized)
+				}
+				if got := offsets[start+j]; got != want {
+					t.Errorf("byte %d maps to %d, want %d", j, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestDocumentSparseOffsetsLarge(t *testing.T) {
 	for _, size := range []int{1 << 16, 1 << 20} {
 		raw := "<b>header</b>\n" + strings.Repeat("x", size) + "\nALPHA2 needle\n"
@@ -64,7 +138,7 @@ func TestDocumentReverseSteps(t *testing.T) {
 	}
 }
 
-func TestMappedContentReplaceCaptureGroups(t *testing.T) {
+func TestDocumentReplaceByteIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		name, pattern, replacement, want string
 		offsets                          []int
@@ -75,6 +149,11 @@ func TestMappedContentReplaceCaptureGroups(t *testing.T) {
 		{"optional matched", "(b)?", "$1", "abc", []int{0, 1, 2}},
 		{"empty capture", "()b", "$1", "ac", []int{0, 2}},
 		{"whole match", "b", "$0", "abc", []int{0, 1, 2}},
+		{"literal no-op", "b", "b", "abc", []int{0, 1, 2}},
+		{"multibyte-range no-op", "ab", "ab", "abc", []int{0, 1, 2}},
+		{"empty no-op", "^", "", "abc", []int{0, 1, 2}},
+		{"mixed no-op and change", "[ab]", "b", "bbc", []int{-1, 1, 2}},
+		{"equal text reordered captures", "(b)()", "$2$1", "abc", []int{0, 1, 2}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, step := documentReplace("abc", regexp.MustCompile(tc.pattern), tc.replacement)

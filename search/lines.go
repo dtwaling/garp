@@ -64,7 +64,8 @@ func (p codePrefix) corresponds(normalized string, end int) bool {
 		strings.HasPrefix(normalized[p.end:], p.tail)
 }
 
-// docStep retains regex match ranges, not one raw identity per document byte.
+// docStep retains effective regex replacement ranges, not one raw identity per
+// document byte. Literal no-ops are excluded so their byte identity survives.
 type docStep struct {
 	locs        [][]int
 	replacement string
@@ -87,8 +88,21 @@ func replacementRanges(loc []int, replacement string, visit func(start, length i
 	}
 }
 
+// documentReplace preserves literal no-ops as untouched ranges in both the
+// forward text and the reverse mapping. Captures retain their explicit origins.
 func documentReplace(text string, re *regexp.Regexp, replacement string) (string, docStep) {
 	locs := re.FindAllStringSubmatchIndex(text, -1)
+	if !strings.Contains(replacement, "$") {
+		changed := locs[:0]
+		for _, loc := range locs {
+			if text[loc[0]:loc[1]] != replacement {
+				changed = append(changed, loc)
+			}
+		}
+		// Drop references to skipped matches from the retained backing array.
+		clear(locs[len(changed):])
+		locs = changed
+	}
 	if len(locs) == 0 {
 		return text, docStep{}
 	}
