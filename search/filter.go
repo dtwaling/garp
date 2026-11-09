@@ -288,14 +288,19 @@ func pathScopePartsMatch(patternParts, relParts []string) bool {
 		}
 
 		// Descend so the preceding pattern row is not overwritten before use.
+		anyReachable := false
 		for j := len(relParts); j > 0; j-- {
 			reachable[j] = false
 			if reachable[j-1] {
 				matched, err := path.Match(part, relParts[j-1])
 				reachable[j] = err == nil && matched
+				anyReachable = anyReachable || reachable[j]
 			}
 		}
 		reachable[0] = false
+		if !anyReachable {
+			return false
+		}
 	}
 	return reachable[len(relParts)]
 }
