@@ -103,6 +103,80 @@ func TestExcerptLinesCursorPassesEntireCluster(t *testing.T) {
 	}
 }
 
+func TestExcerptLinesDocumentCorrespondence(t *testing.T) {
+	for _, clean := range []bool{false, true} {
+		t.Run(fmt.Sprintf("clean=%t", clean), func(t *testing.T) {
+			raw := "<style>noise</style><script>noise</script>\nnoise > quote\n-----\n" +
+				"<b>alpha</b> " + strings.Repeat("loose ", 30) + "beta.\n" +
+				strings.Repeat("padding.\n", 100) + "alpha beta tight cluster. OB1,2NEXT &amp;\n"
+			content := raw
+			if clean {
+				content = CleanContent(raw)
+			}
+			query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+			spans := extractRankedExcerptSpansQuery(content, query, 2, 2, 2, false, 5000)
+			if len(spans) != 2 || !strings.Contains(spans[0].text, "tight cluster") {
+				t.Fatalf("expected tight then loose excerpts: %#v", spans)
+			}
+			mapped := documentCorrespondence(raw, clean)
+			if mapped.text != spans[0].sourceText {
+				t.Fatal("correspondence must reproduce the actual excerpt cleaner")
+			}
+			for _, match := range spans[0].sourceMatches {
+				locs := query.matchers[match.term].findAll(raw)
+				if got := mapped.offsets[match.source.start]; got != locs[match.occurrence-1].start {
+					t.Fatalf("mapped offset = %d, want %d", got, locs[match.occurrence-1].start)
+				}
+			}
+			// Ranked order deliberately goes backwards; a heuristic tightest-cluster
+			// fallback would reuse the tight cluster instead of resolving the loose one.
+			if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, []int{105, 4}) {
+				t.Fatalf("document anchors = %v, want [105 4]", got)
+			}
+		})
+	}
+}
+
+func TestExcerptLinesFallbackWideToTight(t *testing.T) {
+	wide := "<b>beta</b> " + strings.Repeat("wide ", 24) + "alpha."
+	tight := "alpha beta tight cluster."
+	raw := wide + "\n" + strings.Repeat("gap ", 10) + "\n" + tight + "\n"
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	// Supply two separately rendered clusters: the anchoring fallback must not
+	// depend on whether the renderer's context budget merges nearby excerpts.
+	spans := extractRankedExcerptSpansQuery(CleanContent(wide), query, 1, 2, 2, false, 200)
+	spans = append(spans, extractRankedExcerptSpansQuery(CleanContent(tight), query, 1, 2, 2, false, 200)...)
+	if len(spans) != 2 {
+		t.Fatalf("expected two emitted clusters: %#v", spans)
+	}
+	// Remove ordinal metadata to exercise fallback independently of the new
+	// document exact path. Retain source match order from real emitted excerpts.
+	for i := range spans {
+		for j := range spans[i].matches {
+			spans[i].matches[j].occurrence = 0
+		}
+	}
+	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{1, 3}) {
+		t.Fatalf("wide-to-tight fallback = %v, want [1 3]", got)
+	}
+	if got := computeExcerptSpanLinesQuery(raw, spans[1:], query, 200); !slices.Equal(got, []int{3}) {
+		t.Fatalf("single tight fallback = %v, want [3]", got)
+	}
+	// Without source ordering, equal coverage must still prefer tighter width.
+	if got := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0, 1}), query, 200); !slices.Equal(got, []int{3}) {
+		t.Fatalf("width tie-break = %v, want [3]", got)
+	}
+}
+
+func TestExcerptLinesFallbackPrefersUnusedMatches(t *testing.T) {
+	raw := "alpha beta\nalpha\n" + strings.Repeat("gap ", 10) + "beta\n"
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	spans := lineSpans([]int{0, 1}, []int{0, 1})
+	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{1, 2}) {
+		t.Fatalf("unused fallback = %v, want [1 2]", got)
+	}
+}
+
 func lineSpans(termSets ...[]int) []excerptSpan {
 	spans := make([]excerptSpan, len(termSets))
 	for i, terms := range termSets {
