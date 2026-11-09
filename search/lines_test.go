@@ -83,7 +83,7 @@ func BenchmarkRequestedLargePrefixRange(b *testing.B) {
 	for _, size := range []int{1 << 16, 2 << 20} {
 		b.Run(fmt.Sprint(size), func(b *testing.B) {
 			source := "needle" + strings.Repeat("x", size)
-			spans := []excerptSpan{{sourceText: source, matches: []excerptMatch{{source: matchRange{start: 0, end: len(source)}}}}}
+			spans := []excerptSpan{{sourceText: source, matches: []excerptMatch{{source: matchRange{start: 0, end: len(source)}, occurrence: 1}}}}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
@@ -321,6 +321,7 @@ func TestExcerptLinesScratchAllocations(t *testing.T) {
 			if mode != "fallback" {
 				span.sourceText = "needle"
 				span.matches[0].source = matchRange{start: 0, end: 6}
+				span.matches[0].occurrence = 1
 			}
 			if mode == "document" {
 				raw = "<b></b>needle"
@@ -330,7 +331,9 @@ func TestExcerptLinesScratchAllocations(t *testing.T) {
 				spans[i] = span
 			}
 			measure := func(spans []excerptSpan) float64 {
-				return testing.AllocsPerRun(10, func() {
+				// Race builds randomly discard regexp sync.Pool scratch. Use
+				// enough samples to average that noise, without widening the bound.
+				return testing.AllocsPerRun(1000, func() {
 					got := computeExcerptSpanLinesQuery(raw, spans, query, 1)
 					for _, line := range got {
 						if line != 1 {
@@ -452,19 +455,17 @@ func TestExcerptLinesCursorPassesEntireCluster(t *testing.T) {
 				"alpha gamma\n" + strings.Repeat("padding.\n", 100) + "alpha\n"
 			query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
 			cleaned := CleanContent(raw)
-			// Markup exercises the reported removed-gamma case. Plain text keeps
-			// the first cluster exact; clear the second cluster's identities below
-			// to independently exercise the exact-to-fallback cursor.
+			// Keep the first cluster exact and clear the second cluster's
+			// identities to exercise the exact-to-fallback cursor in both paths.
 			spans := extractRankedExcerptSpansQuery(cleaned, query, 2, 2, 2, false, 200)
 			if len(spans) != 2 {
 				t.Fatalf("expected two clusters: %#v", spans)
 			}
 			slices.SortFunc(spans, func(a, b excerptSpan) int { return a.left - b.left })
-			if !markup {
-				for j := range spans[1].matches {
-					spans[1].matches[j].occurrence = 0
-				}
+			for j := range spans[1].matches {
+				spans[1].matches[j].occurrence = 0
 			}
+			assertFallbackOnly(t, spans[1:])
 			if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{1, 102}) {
 				t.Fatalf("cluster cursor anchors = %v, want [1 102]", got)
 			}
@@ -642,6 +643,7 @@ func TestExcerptLinesFallbackWideToTight(t *testing.T) {
 			spans[i].matches[j].occurrence = 0
 		}
 	}
+	assertFallbackOnly(t, spans)
 	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{1, 3}) {
 		t.Fatalf("wide-to-tight fallback = %v, want [1 3]", got)
 	}
@@ -660,6 +662,18 @@ func TestExcerptLinesFallbackPrefersUnusedMatches(t *testing.T) {
 	spans := lineSpans([]int{0, 1}, []int{0, 1})
 	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{1, 2}) {
 		t.Fatalf("unused fallback = %v, want [1 2]", got)
+	}
+}
+
+func assertFallbackOnly(t *testing.T, spans []excerptSpan) {
+	t.Helper()
+	for _, span := range spans {
+		if hasExactIdentity(span) {
+			t.Fatal("span can enter the exact path instead of fallback")
+		}
+	}
+	if offsets := requestedDocumentOffsets(spans); len(offsets) != 0 {
+		t.Fatalf("fallback-only spans requested exact offsets: %v", offsets)
 	}
 }
 
@@ -849,6 +863,140 @@ func BenchmarkExcerptLinesLargeDocument(b *testing.B) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// Real spans share a source string. Alternate all three source variants to
+// ensure a cache miss does not rebuild any whole-file correspondence.
+func multiSpanFixture(size int) (string, compiledQuery, []excerptSpan) {
+	raw := "<b>header</b>\n" + strings.Repeat("padding ", size/8) + "\nALPHA2 needle\n"
+	query := compileQuery([]string{"needle"}, PartialModeOff)
+	sources := []string{CleanContentCode(raw), documentCorrespondence(raw, true, nil), documentCorrespondence(raw, false, nil)}
+	spans := make([]excerptSpan, len(sources))
+	for i, source := range sources {
+		start := strings.Index(source, "needle")
+		spans[i] = excerptSpan{sourceText: source, matches: []excerptMatch{{term: 0, source: matchRange{start: start, end: start + 6}, occurrence: 1}}}
+	}
+	return raw, query, spans
+}
+
+func TestExcerptLinesAlternatingSources(t *testing.T) {
+	raw, query, variants := multiSpanFixture(1024)
+	spans := make([]excerptSpan, 100)
+	for i := range spans {
+		spans[i] = variants[i%len(variants)]
+	}
+	for _, line := range computeExcerptSpanLinesQuery(raw, spans, query, 200) {
+		if line != 3 {
+			t.Fatalf("alternating source anchor = %d, want 3", line)
+		}
+	}
+}
+
+func BenchmarkExcerptLinesMultiSpan(b *testing.B) {
+	raw, query, variants := multiSpanFixture(1 << 20)
+	for mode, name := range []string{"code", "clean-document", "raw-document", "alternating"} {
+		counts := []int{1, 100}
+		if mode == 3 {
+			counts[0] = 3 // Both measurements initialize all three variants.
+		}
+		for _, count := range counts {
+			b.Run(fmt.Sprintf("%s/spans=%d", name, count), func(b *testing.B) {
+				spans := make([]excerptSpan, count)
+				for i := range spans {
+					variant := mode
+					if mode == 3 {
+						variant = i % len(variants)
+					}
+					spans[i] = variants[variant]
+				}
+				b.ReportAllocs()
+				b.SetBytes(int64(len(raw)))
+				b.ResetTimer()
+				for range b.N {
+					got := computeExcerptSpanLinesQuery(raw, spans, query, 200)
+					if len(got) != count {
+						b.Fatal("missing spans")
+					}
+					for _, line := range got {
+						if line != 3 {
+							b.Fatalf("anchor = %d, want 3", line)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestDocumentReplaceWhitespaceNoopAllocations(t *testing.T) {
+	for _, raw := range []string{" ", "  ", "\t", "\r\n", " \t \f", "a\vb", "a\u0085b", "a b  c\td"} {
+		got, _ := documentReplace(raw, whitespaceRegex, " ")
+		if want := whitespaceRegex.ReplaceAllString(raw, " "); got != want {
+			t.Fatalf("whitespace replacement %q = %q, want %q", raw, got, want)
+		}
+	}
+	measure := func(words int) float64 {
+		raw := strings.Repeat("word ", words)
+		return testing.AllocsPerRun(100, func() {
+			got, step := documentReplace(raw, whitespaceRegex, " ")
+			if got != raw || len(step.locs) != 0 {
+				t.Fatal("literal spaces must remain untouched")
+			}
+		})
+	}
+	// Keep both inputs beyond regexp's small-input backtracking threshold;
+	// otherwise the comparison measures different engines, not word growth.
+	few, many := measure(10000), measure(20000)
+	if many-few > 2 {
+		t.Fatalf("no-op regex allocations scale with words: %g -> %g", few, many)
+	}
+}
+
+func TestExcerptLinesUnknownIdentityIsLazy(t *testing.T) {
+	for mode := range 3 {
+		raw, query, variants := multiSpanFixture(1024)
+		span := variants[mode]
+		// A known match alongside an unknown one must not initialize mapping.
+		span.matches = append(slices.Clone(span.matches), span.matches[0])
+		span.matches[1].occurrence = 0
+		assertFallbackOnly(t, []excerptSpan{span})
+		measure := func(span excerptSpan) float64 {
+			return testing.AllocsPerRun(1000, func() {
+				if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{span}, query, 200); !slices.Equal(got, []int{3}) {
+					t.Fatalf("fallback anchors = %v", got)
+				}
+			})
+		}
+		withSource := measure(span)
+		span.sourceText = ""
+		withoutSource := measure(span)
+		if withSource-withoutSource > 2 {
+			t.Fatalf("mode %d: unknown identity initialized correspondence: %g vs %g allocations", mode, withSource, withoutSource)
+		}
+	}
+}
+
+func TestExcerptLinesUnknownIdentityChoosesFallback(t *testing.T) {
+	for _, markup := range []bool{false, true} {
+		raw := "alpha\n" + strings.Repeat("padding.\n", 100) + "alpha\n"
+		if markup {
+			raw = "<b></b>" + raw
+		}
+		source := CleanContent(raw)
+		start := strings.LastIndex(source, "alpha")
+		span := excerptSpan{sourceText: source, matches: []excerptMatch{{term: 0, source: matchRange{start: start, end: start + 5}, occurrence: 2}}}
+		query := compileQuery([]string{"alpha"}, PartialModeOff)
+		if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{span}, query, 200); !slices.Equal(got, []int{102}) {
+			t.Fatalf("exact anchor = %v, want [102]", got)
+		}
+		for _, unknown := range []int{0, -1} {
+			span.matches[0].occurrence = unknown
+			assertFallbackOnly(t, []excerptSpan{span})
+			if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{span}, query, 200); !slices.Equal(got, []int{1}) {
+				t.Fatalf("unknown occurrence %d used exact identity: %v", unknown, got)
+			}
 		}
 	}
 }

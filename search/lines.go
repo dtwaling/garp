@@ -64,6 +64,10 @@ func (p codePrefix) corresponds(normalized string, end int) bool {
 		strings.HasPrefix(normalized[p.end:], p.tail)
 }
 
+// Match precisely the whitespaceRegex ranges that change under replacement
+// with one space; single ASCII spaces already have the required byte identity.
+var changedWhitespaceRegex = regexp.MustCompile(`\s{2,}|[\t\n\f\r]`)
+
 // docStep retains effective regex replacement ranges, not one raw identity per
 // document byte. Literal no-ops are excluded so their byte identity survives.
 type docStep struct {
@@ -91,7 +95,18 @@ func replacementRanges(loc []int, replacement string, visit func(start, length i
 // documentReplace preserves literal no-ops as untouched ranges in both the
 // forward text and the reverse mapping. Captures retain their explicit origins.
 func documentReplace(text string, re *regexp.Regexp, replacement string) (string, docStep) {
-	locs := re.FindAllStringSubmatchIndex(text, -1)
+	// A single ASCII space is a literal no-op. Exclude it before asking the
+	// regexp engine for indices, rather than allocating and discarding one
+	// submatch slice for every ordinary word separator in the file.
+	if re == whitespaceRegex && replacement == " " {
+		re = changedWhitespaceRegex
+	}
+	var locs [][]int
+	if strings.Contains(replacement, "$") {
+		locs = re.FindAllStringSubmatchIndex(text, -1)
+	} else {
+		locs = re.FindAllStringIndex(text, -1)
+	}
 	if !strings.Contains(replacement, "$") {
 		changed := locs[:0]
 		for _, loc := range locs {
@@ -314,8 +329,11 @@ func matchWordRange(source string, start, end int) matchRange {
 func requestedDocumentOffsets(spans []excerptSpan) sourceOffsets {
 	offsets := make(sourceOffsets)
 	for _, span := range spans {
+		if !hasExactIdentity(span) {
+			continue
+		}
 		for _, match := range span.matches {
-			if match.source.start < 0 || match.source.end <= match.source.start || match.source.end > len(span.sourceText) {
+			if match.occurrence <= 0 || match.source.start < 0 || match.source.start >= len(span.sourceText) || match.source.end <= match.source.start || match.source.end > len(span.sourceText) {
 				continue
 			}
 			for j := match.source.start; j < match.source.end; j++ {
@@ -329,6 +347,19 @@ func requestedDocumentOffsets(spans []excerptSpan) sourceOffsets {
 		}
 	}
 	return offsets
+}
+
+// Unknown identity on any match makes the entire span heuristic-only.
+func hasExactIdentity(span excerptSpan) bool {
+	if span.sourceText == "" || len(span.matches) == 0 {
+		return false
+	}
+	for _, match := range span.matches {
+		if match.occurrence <= 0 || match.source.start < 0 || match.source.start >= len(span.sourceText) {
+			return false
+		}
+	}
+	return true
 }
 
 // lineIndexer maps a byte offset in a string to its 1-based line number using a
@@ -420,12 +451,14 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		return best, found
 	}
 
-	var normalizedRaw string
-	normalizedReady := false
-	var codeOffsets sourceOffsets
-	var docOffsets sourceOffsets
-	var documentSource string
-	documentMatches := false
+	// Each normalization/correspondence variant is built at most once per file,
+	// even when callers alternate code, cleaned document and prep-only spans.
+	var variants [3]struct {
+		ready   bool
+		text    string
+		offsets sourceOffsets
+	}
+	lastSource, lastVariant := "", -1
 
 	first := make([]int, len(query.matchers))
 	present := make([]*termInfo, 0, len(infos))
@@ -433,48 +466,45 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 	// Exact identities may still resolve excerpts emitted in ranking order.
 	cursor := 0
 	for i, span := range spans {
-		// Equal counts alone do not prove correspondence. Both cleaner paths
-		// resolve only emitted match bytes and validate their raw identity.
-		if span.sourceText != "" && !normalizedReady {
-			// Synthetic spans need no normalization. Exact-identity candidates
-			// share one scan without storing every raw occurrence's prefix.
-			normalizedRaw = strings.TrimSpace(codePrefixCorrespondence(raw, nil))
-			normalizedReady = true
-		}
-		code := span.sourceText != "" && span.sourceText == normalizedRaw
-		if code && codeOffsets == nil {
-			codeOffsets = requestedDocumentOffsets(spans)
-			codeCorrespondence(raw, codeOffsets)
-		}
-		document := false
-		if !code && span.sourceText != "" {
-			if docOffsets == nil {
-				docOffsets = requestedDocumentOffsets(spans)
-			}
-			if documentSource != span.sourceText {
-				documentSource = span.sourceText
-				documentMatches = documentCorrespondence(raw, true, docOffsets) == documentSource
-				if !documentMatches {
-					documentMatches = documentCorrespondence(raw, false, docOffsets) == documentSource
+		variant := -1
+		if hasExactIdentity(span) {
+			if span.sourceText == lastSource {
+				variant = lastVariant
+			} else {
+				for j := range variants {
+					v := &variants[j]
+					if !v.ready {
+						v.offsets = requestedDocumentOffsets(spans)
+						if j == 0 {
+							v.text = codeCorrespondence(raw, v.offsets)
+						} else {
+							v.text = documentCorrespondence(raw, j == 1, v.offsets)
+						}
+						v.ready = true
+					}
+					if span.sourceText == v.text {
+						// Retain the caller's shared source string so subsequent
+						// equality checks need not rescan the normalized file.
+						v.text = span.sourceText
+						variant = j
+						break
+					}
 				}
+				lastSource, lastVariant = span.sourceText, variant
 			}
-			document = documentMatches
 		}
 
 		lo, hi := len(raw), -1
-		exact := len(span.matches) > 0 && (code || document)
+		exact := variant >= 0
 		for _, match := range span.matches {
 			if !exact {
 				break
 			}
-			if match.source.start < 0 || match.source.start >= len(span.sourceText) {
+			if match.occurrence <= 0 || match.source.start < 0 || match.source.start >= len(span.sourceText) {
 				exact = false
 				break
 			}
-			offsets := docOffsets
-			if code {
-				offsets = codeOffsets
-			}
+			offsets := variants[variant].offsets
 			offset, ok := mappedMatchOffset(raw, span.sourceText, match.source, offsets)
 			if !ok {
 				exact = false
