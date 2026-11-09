@@ -1188,13 +1188,8 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		// Clean content and extract excerpts (make excerpt window reflect distance).
 		// Code files use the minimal code-safe cleaner so source tokens survive (see CleanContentCode).
 		isCode := config.IsCodeFile(filePath)
-		var cleanContent string
-		if isCode {
-			cleanContent = CleanContentCode(content)
-		} else {
-			cleanContent = CleanContent(content)
-		}
-		boundedClean := cleanContent
+		mapped := cleanStage3Content(content, isCode)
+		boundedClean := mapped.text
 		if len(boundedClean) > 64*1024 {
 			boundedClean = boundedClean[:64*1024]
 		}
@@ -1230,13 +1225,8 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		// Pass Distance unchanged to preserve Stage 2 parity, including zero.
 		// NewSearchEngine supplies the default of 5000; legacy excerpt helpers
 		// use unconstrainedDistance to disable their proximity bound.
-		if isCode {
-			spans = extractRankedExcerptSpansQuery(cleanContent, query, maxExcerpts, match.termCount, minTerms, true, se.Distance)
-			excerpts = excerptSpanTexts(spans)
-		} else {
-			spans = extractRankedExcerptSpansQuery(cleanContent, query, maxExcerpts, match.termCount, minTerms, false, se.Distance)
-			excerpts = excerptSpanTexts(spans)
-		}
+		spans = extractRankedMappedExcerptSpansQuery(mapped, query, maxExcerpts, match.termCount, minTerms, se.Distance)
+		excerpts = excerptSpanTexts(spans)
 
 		if len(excerpts) == 0 {
 			outcome.Matches--
@@ -1265,25 +1255,10 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		// Resolve 1-based start line per excerpt by anchoring it back to the raw content.
 		// Only text/code files have stable source lines; binary/extracted formats (PDF, DOCX,
 		// email) do not, so we leave their line numbers unknown (nil/0).
-		// Chunks are emitted best-first, but anchors are a positional fact: the
-		// anchoring cursor walks document order, so we anchor spans in document
-		// order (sorted by left edge) and map the results back to emission order.
+		// Raw seed anchors are independent of ranking and display transformations.
 		var startLines []int
 		if !IsBinaryFormat(filePath) {
-			docOrder := make([]int, len(excerpts))
-			for i := range docOrder {
-				docOrder[i] = i
-			}
-			sort.SliceStable(docOrder, func(a, b int) bool { return spans[docOrder[a]].left < spans[docOrder[b]].left })
-			docSpans := make([]excerptSpan, len(docOrder))
-			for i, idx := range docOrder {
-				docSpans[i] = spans[idx]
-			}
-			docLines := computeExcerptSpanLinesQuery(content, docSpans, query, se.Distance)
-			startLines = make([]int, len(excerpts))
-			for i, idx := range docOrder {
-				startLines[idx] = docLines[i]
-			}
+			startLines = computeExcerptSpanLinesQuery(content, spans, query, se.Distance)
 		}
 
 		// Per-chunk ranked quality, parallel to the emitted excerpts.

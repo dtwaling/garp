@@ -2,6 +2,7 @@ package search
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -63,8 +64,8 @@ func (p codePrefix) corresponds(normalized string, end int) bool {
 		strings.HasPrefix(normalized[p.end:], p.tail)
 }
 
-// mappedContent retains raw byte identities through the document cleaners.
-// Inserted bytes have no raw identity; captured and untouched bytes retain theirs.
+// mappedContent retains raw byte identities through cleaning. Inserted separator
+// bytes map to the nearest preceding captured byte (or the replacement start).
 type mappedContent struct {
 	text    string
 	offsets []int
@@ -84,6 +85,7 @@ func (m mappedContent) replace(re *regexp.Regexp, replacement string) mappedCont
 	last := 0
 	for _, loc := range locs {
 		copyRange(last, loc[0])
+		anchor := loc[0]
 		// Cleaner templates use only literals and single-digit capture groups.
 		for j := 0; j < len(replacement); j++ {
 			if replacement[j] == '$' && j+1 < len(replacement) {
@@ -91,10 +93,11 @@ func (m mappedContent) replace(re *regexp.Regexp, replacement string) mappedCont
 				group := int(replacement[j]-'0') * 2
 				if group+1 < len(loc) && loc[group] >= 0 {
 					copyRange(loc[group], loc[group+1])
+					anchor = max(loc[group], loc[group+1]-1)
 				}
 			} else {
 				text.WriteByte(replacement[j])
-				offsets = append(offsets, -1)
+				offsets = append(offsets, m.offsets[anchor])
 			}
 		}
 		last = loc[1]
@@ -180,6 +183,25 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 	}
 
 	li := newLineIndexer(raw)
+	needsFallback := false
+	for i, span := range spans {
+		if span.rawStartValid && span.rawStart >= 0 && span.rawStart < len(raw) {
+			out[i] = li.lineOf(span.rawStart)
+		} else {
+			needsFallback = true
+		}
+	}
+	if !needsFallback {
+		return out
+	}
+
+	// Legacy synthetic spans have no mode metadata. Exclude document noise
+	// before matching, but retain raw byte positions and token boundaries.
+	visible := cleanStage3Content(raw, false)
+	retained := make([]bool, len(raw))
+	for _, offset := range visible.offsets {
+		retained[offset] = true
+	}
 
 	// Precompute occurrence offsets using the same partial-aware matcher as the engine so
 	// anchors line up with matches.
@@ -191,9 +213,11 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 
 	for index, matcher := range query.matchers {
 		locs := matcher.findAll(raw)
-		offs := make([]int, len(locs))
-		for k, l := range locs {
-			offs[k] = l.start
+		offs := make([]int, 0, len(locs))
+		for _, l := range locs {
+			if retained[l.start] {
+				offs = append(offs, l.start)
+			}
 		}
 		// A term with no raw occurrences can never be an anchor; skip it here so the
 		// per-excerpt loop below doesn't have to filter empty-offset entries.
@@ -204,21 +228,16 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 
 	// nearest prefers unused occurrences, with an exclusive cluster boundary.
 	nearest := func(offs []int, pos, cursor, end int) (int, bool) {
-		best, found, bestDist := 0, false, window+1
-		for _, o := range offs {
-			if o >= end {
-				continue
-			}
-			d := o - pos
-			if d < 0 {
-				d = -d
-			}
-			if d <= window && (!found || (o >= cursor && best < cursor) ||
-				((o >= cursor) == (best >= cursor) && d < bestDist)) {
-				best, bestDist, found = o, d, true
-			}
+		lo := sort.SearchInts(offs, max(cursor, pos-window))
+		hi := sort.SearchInts(offs, min(end, pos+window+1))
+		if lo >= hi {
+			return 0, false
 		}
-		return best, found
+		idx := lo + sort.SearchInts(offs[lo:hi], pos)
+		if idx == hi || idx > lo && pos-offs[idx-1] <= offs[idx]-pos {
+			idx--
+		}
+		return offs[idx], true
 	}
 
 	var normalizedRaw string
@@ -233,6 +252,10 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 	// Exact identities may still resolve excerpts emitted in ranking order.
 	cursor := 0
 	for i, span := range spans {
+		if out[i] != 0 {
+			cursor = max(cursor, span.rawStart+1)
+			continue
+		}
 		// Equal counts alone do not prove correspondence. Check raw byte identity
 		// for document transformations, and normalized prefixes for code.
 		if span.sourceText != "" && !normalizedReady {
@@ -351,6 +374,7 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		bestIdx, bestScore, bestWidth := -1, -1, len(raw)+1
 		consider := func(idx int) {
 			sc, l, h := cluster(idx)
+
 			if sc > bestScore || (sc == bestScore && h-l < bestWidth) {
 				bestIdx, bestScore, bestWidth = idx, sc, h-l
 				lo, hi = l, h
@@ -362,20 +386,16 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 			}
 			consider(idx)
 		}
-		if bestIdx == -1 { // nothing at/after cursor; fall back to global best
-			for idx := range anchor.offsets {
-				consider(idx)
-			}
-		}
+
 		if bestIdx == -1 {
 			continue
 		}
 
-		// Use the earliest occurrence for the line and the latest for the cursor,
-		// just as in the exact path, so later fallbacks cannot reuse this cluster.
-
 		out[i] = li.lineOf(lo)
-		cursor = hi + 1
+		// Advance past the cluster start, not its widest borrowed match. The
+		// latter can skip remaining clusters. nearest excludes earlier starts,
+		// and exhaustion stays unknown rather than resetting to a duplicate.
+		cursor = lo + 1
 	}
 	return out
 }
