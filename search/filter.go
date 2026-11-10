@@ -1179,7 +1179,9 @@ func (r *mailEncodingReader) Read(p []byte) (int, error) {
 		text := r.tail + strings.ToLower(string(p[:n]))
 		// Any charset declaration requires MIME interpretation. Gate even UTF-8
 		// and ASCII declarations rather than partially parsing folded parameters.
-		for _, marker := range []string{"base64", "quoted-printable", "=?", "charset", "utf-16", "ucs-2", "\x00"} {
+		// HTML bodies also need extraction to decode entities, even without a
+		// charset or transfer-encoding declaration.
+		for _, marker := range []string{"base64", "quoted-printable", "=?", "charset", "text/html", "utf-16", "ucs-2", "\x00"} {
 			if strings.Contains(text, marker) {
 				r.encoded = true
 				break
@@ -1241,6 +1243,14 @@ func encodingAwarePrefilter(filePath string, query compiledQuery, strict bool, c
 	// the streaming early-hit path.
 	state := streamQueryMatches{found: make([]bool, len(query.matchers))}
 	state.observe(cleanSearchContent(mappedContent{text: raw.String()}, false).text, query, 0)
+	if state.satisfied(strict) {
+		return false, false
+	}
+	// EMLExtractor collapses whitespace before Stage 2 cleaning (including
+	// each message in MBOXExtractor). Preserve matches that line-oriented
+	// cleanup of the raw mail would otherwise remove, such as quoted lines.
+	collapsed := whitespaceRegex.ReplaceAllString(strings.TrimSpace(raw.String()), " ")
+	state.observe(cleanSearchContent(mappedContent{text: collapsed}, false).text, query, 0)
 	if state.satisfied(strict) {
 		return false, false
 	}

@@ -214,7 +214,7 @@ func TestBinaryPrefilterCompatibilityWrapperIsStrict(t *testing.T) {
 
 func TestBinaryPrefilterEncodingGates(t *testing.T) {
 	for _, ext := range []string{".eml", ".mbox"} {
-		for _, marker := range []string{"BaSe64", "QUOTED-PRINTABLE", "=?", "ChArSeT=iso-8859-1", "UTF-16", "UcS-2", "\x00"} {
+		for _, marker := range []string{"BaSe64", "QUOTED-PRINTABLE", "=?", "ChArSeT=iso-8859-1", "TeXt/HtMl", "UTF-16", "UcS-2", "\x00"} {
 			for _, offset := range []int{0, 64*1024 - 1} {
 				t.Run(fmt.Sprintf("%s/%q/offset=%d", ext, marker, offset), func(t *testing.T) {
 					content := strings.Repeat(" ", offset) + marker + " available"
@@ -247,6 +247,10 @@ func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
 		{"plain.mbox", "available", "missing", false, true},
 		{"plain.rtf", `{\rtf1\ansi available}`, "missing", false, true},
 		{"cleaned.rtf", `{\rtf1\ansi PDF32}`, "PDF", true, true},
+		{"html.eml", "Content-Type: text/html\r\n\r\n<p>R&amp;D</p>", "R&D", false, false},
+		{"html.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/html\r\n\r\n<p>R&amp;D</p>", "R&D", false, false},
+		{"collapsed.eml", "Content-Type: text/plain\r\n\r\nintro\r\n>PDF32\r\n", "PDF", false, false},
+		{"collapsed.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/plain\r\n\r\nintro\r\n>PDF32\r\n", "PDF", false, false},
 		{"cleaned.eml", "Content-Type: text/plain\r\n\r\nPDF32", "PDF", false, false},
 		{"cleaned.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/plain\n\nPDF32", "PDF", false, false},
 		{"latin1.eml", "Content-Type: text/plain; charset=iso-8859-1\r\n\r\ncaf\xe9", "café", false, false},
@@ -272,7 +276,7 @@ func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
 			if found || decided {
 				t.Fatalf("capped miss = (%v, %v), want (false, false)", found, decided)
 			}
-			if tc.word == "PDF" || tc.word == "café" {
+			if tc.word == "PDF" || tc.word == "café" || tc.word == "R&D" {
 				for _, strict := range []bool{false, true} {
 					engine := search.NewSearchEngineWithWorkers([]string{tc.word}, nil, nil, false, 1, 5000, 1)
 					engine.StartDir, engine.Silent, engine.Strict = filepath.Dir(path), true, strict
