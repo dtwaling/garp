@@ -100,7 +100,7 @@ func TestDiscoveryByteScanner(t *testing.T) {
 	}
 }
 
-func TestDiscoveryPlainASCIIFastPathAgreesWithMatcher(t *testing.T) {
+func TestDiscoveryAgreesWithMatcher(t *testing.T) {
 	tests := []struct {
 		name string
 		term string
@@ -120,6 +120,11 @@ func TestDiscoveryPlainASCIIFastPathAgreesWithMatcher(t *testing.T) {
 		{name: "nonword trailing boundary", term: "ms-", text: "ms-option"},
 		{name: "offset retains prior context", term: "service", text: "xservice service", from: 1},
 		{name: "ordinary UTF-8 chunk", term: "service", text: "café service"},
+		{name: "Unicode term", term: "CAFÉ", text: "café service"},
+		{name: "long s fold", term: "service", text: "ſervice"},
+		{name: "Kelvin fold", term: "kernel", text: "Kernel"},
+		{name: "wildcard", term: "ms-*-api", text: "ms-option-api"},
+		{name: "invalid wildcard", term: "a*", text: " a* "},
 	}
 
 	for _, tt := range tests {
@@ -131,7 +136,7 @@ func TestDiscoveryPlainASCIIFastPathAgreesWithMatcher(t *testing.T) {
 				want = found.start
 			}
 			if got := discoveryMatchIndex([]byte(tt.text), matcher, tt.from); got != want {
-				t.Fatalf("fast path index = %d, matcher index = %d", got, want)
+				t.Fatalf("discovery index = %d, matcher index = %d", got, want)
 			}
 		})
 	}
@@ -157,34 +162,6 @@ func TestDiscoveryPlainASCIIPathSelection(t *testing.T) {
 			matcher := compileTermMatcher(tt.term, PartialModeOff, true)
 			if got := canUseASCIIPlainTermFastPath([]byte(tt.text), matcher); got != tt.want {
 				t.Fatalf("fast-path eligibility = %t, want %t", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestDiscoveryMatcherFallbackAgreement(t *testing.T) {
-	tests := []struct {
-		name string
-		term string
-		text string
-	}{
-		{name: "Unicode term", term: "CAFÉ", text: "café service"},
-		{name: "long s fold", term: "service", text: "ſervice"},
-		{name: "Kelvin fold", term: "kernel", text: "Kernel"},
-		{name: "wildcard", term: "ms-*-api", text: "ms-option-api"},
-		{name: "invalid wildcard", term: "a*", text: " a* "},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			matcher := compileTermMatcher(tt.term, PartialModeOff, true)
-			found, ok := matcher.find(tt.text, 0)
-			want := -1
-			if ok {
-				want = found.start
-			}
-			if got := discoveryMatchIndex([]byte(tt.text), matcher, 0); got != want {
-				t.Fatalf("discovery index = %d, matcher index = %d", got, want)
 			}
 		})
 	}
@@ -273,12 +250,12 @@ func TestDiscoveryByteScannerFileWalk(t *testing.T) {
 	}
 }
 
-func TestFindFilesSerialInlineWildcard(t *testing.T) {
-	testInlineWildcardDiscovery(t, false)
-}
-
-func TestFindFilesProgressInlineWildcard(t *testing.T) {
-	testInlineWildcardDiscovery(t, true)
+func TestFindFilesInlineWildcard(t *testing.T) {
+	for _, progress := range []bool{false, true} {
+		t.Run(map[bool]string{false: "serial", true: "progress"}[progress], func(t *testing.T) {
+			testInlineWildcardDiscovery(t, progress)
+		})
+	}
 }
 
 func testInlineWildcardDiscovery(t *testing.T, progress bool) {
@@ -364,12 +341,12 @@ func testInlineWildcardDiscovery(t *testing.T, progress bool) {
 	}
 }
 
-func TestFindFilesSerialWildcardChunkBoundary(t *testing.T) {
-	testWildcardChunkBoundaryDiscovery(t, false)
-}
-
-func TestFindFilesProgressWildcardChunkBoundary(t *testing.T) {
-	testWildcardChunkBoundaryDiscovery(t, true)
+func TestFindFilesWildcardChunkBoundary(t *testing.T) {
+	for _, progress := range []bool{false, true} {
+		t.Run(map[bool]string{false: "serial", true: "progress"}[progress], func(t *testing.T) {
+			testWildcardChunkBoundaryDiscovery(t, progress)
+		})
+	}
 }
 
 func testWildcardChunkBoundaryDiscovery(t *testing.T, progress bool) {
@@ -422,12 +399,12 @@ func testWildcardChunkBoundaryDiscovery(t *testing.T, progress bool) {
 	}
 }
 
-func TestFindFilesSerialPlainChunkBoundary(t *testing.T) {
-	testPlainChunkBoundaryDiscovery(t, false)
-}
-
-func TestFindFilesProgressPlainChunkBoundary(t *testing.T) {
-	testPlainChunkBoundaryDiscovery(t, true)
+func TestFindFilesPlainChunkBoundary(t *testing.T) {
+	for _, progress := range []bool{false, true} {
+		t.Run(map[bool]string{false: "serial", true: "progress"}[progress], func(t *testing.T) {
+			testPlainChunkBoundaryDiscovery(t, progress)
+		})
+	}
 }
 
 func testPlainChunkBoundaryDiscovery(t *testing.T, progress bool) {
@@ -449,12 +426,12 @@ func testPlainChunkBoundaryDiscovery(t *testing.T, progress bool) {
 	}
 }
 
-func TestFindFilesSerialRejectsArtificialChunkBoundary(t *testing.T) {
-	testRejectsArtificialChunkBoundary(t, false)
-}
-
-func TestFindFilesProgressRejectsArtificialChunkBoundary(t *testing.T) {
-	testRejectsArtificialChunkBoundary(t, true)
+func TestFindFilesRejectsArtificialChunkBoundary(t *testing.T) {
+	for _, progress := range []bool{false, true} {
+		t.Run(map[bool]string{false: "serial", true: "progress"}[progress], func(t *testing.T) {
+			testRejectsArtificialChunkBoundary(t, progress)
+		})
+	}
 }
 
 func testRejectsArtificialChunkBoundary(t *testing.T, progress bool) {
@@ -1475,66 +1452,42 @@ func allFileTypes() []string {
 	}
 }
 
-func TestGetDocumentFileCount_WalkRoot_AllFiles(t *testing.T) {
+func TestDiscoveryWalkRoot(t *testing.T) {
 	root := buildTestTree(t)
-	count, err := GetDocumentFileCount(allFileTypes(), root, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// 11 files total in the tree
-	if count != 11 {
-		t.Errorf("expected 11 files, got %d", count)
-	}
-}
-
-func TestGetDocumentFileCount_WalkRoot_SubDir(t *testing.T) {
-	root := buildTestTree(t)
-	// Only count files under backend/
-	backendDir := filepath.Join(root, "backend")
-	count, err := GetDocumentFileCount(allFileTypes(), backendDir, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// backend/service/auth.go, auth.md, backend/Assembly/main.cs, main.md = 4 files
-	if count != 4 {
-		t.Errorf("expected 4 files in backend/, got %d", count)
-	}
-}
-
-func TestFindFilesWithFirstWord_WalkRoot_AllFiles(t *testing.T) {
-	root := buildTestTree(t)
-	// "auth" appears in backend/service/auth.go and auth.md
-	files, err := FindFilesWithFirstWord("auth", allFileTypes(), root, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(files) == 0 {
-		t.Fatal("expected at least one match for 'auth'")
-	}
-	for _, f := range files {
-		if !filepath.IsAbs(f) && !fileUnderRoot(f, root) {
-			t.Errorf("result path %q should be under root %q", f, root)
-		}
-	}
-}
-
-func TestFindFilesWithFirstWord_WalkRoot_SubDir(t *testing.T) {
-	root := buildTestTree(t)
-	// Search only in frontend/
-	frontendDir := filepath.Join(root, "frontend")
-	// "app" appears in frontend/app.ts and frontend/app.md
-	files, err := FindFilesWithFirstWord("app", allFileTypes(), frontendDir, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(files) == 0 {
-		t.Fatal("expected at least one match for 'app' in frontend/")
-	}
-	// All results must be under frontendDir
-	for _, f := range files {
-		if !fileUnderRoot(f, frontendDir) {
-			t.Errorf("result path %q leaks outside frontendDir %q", f, frontendDir)
-		}
+	for _, tt := range []struct {
+		name, subdir, term string
+		wantCount          int
+	}{
+		{name: "count all", wantCount: 11},
+		{name: "count backend", subdir: "backend", wantCount: 4},
+		{name: "find auth", term: "auth"},
+		{name: "find frontend app", subdir: "frontend", term: "app"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			walkRoot := filepath.Join(root, tt.subdir)
+			if tt.term == "" {
+				count, err := GetDocumentFileCount(allFileTypes(), walkRoot, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if count != tt.wantCount {
+					t.Errorf("count = %d, want %d", count, tt.wantCount)
+				}
+				return
+			}
+			files, err := FindFilesWithFirstWord(tt.term, allFileTypes(), walkRoot, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(files) == 0 {
+				t.Fatalf("expected matches for %q", tt.term)
+			}
+			for _, file := range files {
+				if !fileUnderRoot(file, walkRoot) {
+					t.Errorf("result path %q leaks outside root %q", file, walkRoot)
+				}
+			}
+		})
 	}
 }
 

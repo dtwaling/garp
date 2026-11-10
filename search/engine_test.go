@@ -2200,14 +2200,14 @@ func buildPerFileSubsetFixture(t *testing.T) string {
 	// two-term cluster (lower quality). Both must survive in one per-file subset.
 	mixed := strings.Join([]string{
 		"First cluster begins. alpha beta gamma mixed first. First cluster ends.",
-		perFileSubsetPadding("mixed-between", 90),
+		skipAheadPadding("mixed-between", 90),
 		"Second cluster begins. alpha beta mixed second. Second cluster ends.",
 	}, " ")
 
 	// all.txt: two separated three-term clusters (two top-quality chunks).
 	all := strings.Join([]string{
 		"First cluster begins. alpha beta gamma all first. First cluster ends.",
-		perFileSubsetPadding("all-between", 90),
+		skipAheadPadding("all-between", 90),
 		"Second cluster begins. alpha beta gamma all second. Second cluster ends.",
 	}, " ")
 
@@ -2844,8 +2844,8 @@ func TestSkipAheadEngineRegressionCorpus(t *testing.T) {
 	root := t.TempDir()
 	dense := skipAheadDenseCorpus("needle")
 	separated := skipAheadSeparatedCorpus("needle")
-	writeSkipAheadIntegrationFile(t, root, "dense.txt", dense)
-	writeSkipAheadIntegrationFile(t, root, "separated.txt", separated)
+	writeWalkFixture(t, root, "dense.txt", dense)
+	writeWalkFixture(t, root, "separated.txt", separated)
 
 	results := executeSkipAheadIntegrationSearch(t, root, []string{"needle"}, false, 3)
 	denseResult := skipAheadResultByFile(t, results, "dense.txt")
@@ -2882,7 +2882,7 @@ func TestSkipAheadEngineSingleChunkGolden(t *testing.T) {
 
 	root := t.TempDir()
 	content := skipAheadSeparatedCorpus("needle")
-	writeSkipAheadIntegrationFile(t, root, "single.txt", content)
+	writeWalkFixture(t, root, "single.txt", content)
 
 	result := skipAheadResultByFile(t, executeSkipAheadIntegrationSearch(t, root, []string{"needle"}, false, 1), "single.txt")
 	if len(result.RawExcerpts) != 1 {
@@ -2912,12 +2912,12 @@ func TestSkipAheadEngineCodeCorpus(t *testing.T) {
 	root := t.TempDir()
 	content := strings.Join([]string{
 		"package fixture", "", "func first() {", "\tneedle := \"first marker\"", "\t_ = needle", "}",
-		skipAheadCodePadding("between-first-second", 24),
+		numberedPadding("// between-first-second", 24, "\n"),
 		"func second() {", "\tneedle := \"second marker\"", "\t_ = needle", "}",
-		skipAheadCodePadding("between-second-third", 24),
+		numberedPadding("// between-second-third", 24, "\n"),
 		"func third() {", "\tneedle := \"third marker\"", "\t_ = needle", "}",
 	}, "\n")
-	writeSkipAheadIntegrationFile(t, root, "fixture.go", content)
+	writeWalkFixture(t, root, "fixture.go", content)
 
 	result := skipAheadResultByFile(t, executeSkipAheadIntegrationSearch(t, root, []string{"needle"}, true, 3), "fixture.go")
 	if len(result.RawExcerpts) != 3 {
@@ -3041,24 +3041,13 @@ func skipAheadSeparatedCorpus(term string) string {
 }
 
 func skipAheadPadding(prefix string, count int) string {
+	return numberedPadding(prefix, count, " ")
+}
+
+func numberedPadding(prefix string, count int, separator string) string {
 	parts := make([]string, count)
 	for i := range parts {
 		parts[i] = fmt.Sprintf("%s-%03d", prefix, i)
 	}
-	return strings.Join(parts, " ")
-}
-
-func skipAheadCodePadding(prefix string, count int) string {
-	lines := make([]string, count)
-	for i := range lines {
-		lines[i] = fmt.Sprintf("// %s-%03d", prefix, i)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func writeSkipAheadIntegrationFile(t *testing.T, root, name, content string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
-		t.Fatalf("write %s: %v", name, err)
-	}
+	return strings.Join(parts, separator)
 }

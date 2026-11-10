@@ -377,36 +377,31 @@ func TestParseArgumentsStrict_DefaultsFalse(t *testing.T) {
 }
 
 func TestParseArgumentsStrict_Enabled(t *testing.T) {
-	args := parseArguments([]string{"term1", "term2", "term3", "--strict"})
-	if !args.Strict {
-		t.Error("Strict = false with --strict, want true")
+	for _, tt := range []struct {
+		name  string
+		extra []string
+	}{
+		{name: "alone"},
+		{name: "with output and search flags", extra: []string{"--json", "--plain", "--code", "--distance", "321"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := parseArguments(append([]string{"term1", "term2", "term3", "--strict"}, tt.extra...))
+			if args.ParseErr != nil {
+				t.Fatal(args.ParseErr)
+			}
+			if !args.Strict {
+				t.Error("Strict = false with --strict, want true")
+			}
+			if len(tt.extra) > 0 {
+				if !args.JSONOutput || !args.PlainOutput || !args.IncludeCode || args.Distance != 321 {
+					t.Errorf("combined output/search flags not preserved: %+v", args)
+				}
+			}
+		})
 	}
 }
 
-func TestParseArgumentsStrict_CombinedWithOutputAndSearchFlags(t *testing.T) {
-	args := parseArguments([]string{
-		"term1", "term2", "term3",
-		"--strict", "--json", "--plain", "--code", "--distance", "321",
-	})
-
-	if !args.Strict {
-		t.Error("Strict = false with --strict, want true")
-	}
-	if !args.JSONOutput {
-		t.Error("JSONOutput = false with --json, want true")
-	}
-	if !args.PlainOutput {
-		t.Error("PlainOutput = false with --plain, want true")
-	}
-	if !args.IncludeCode {
-		t.Error("IncludeCode = false with --code, want true")
-	}
-	if args.Distance != 321 {
-		t.Errorf("Distance = %d, want 321", args.Distance)
-	}
-}
-
-func TestParseArgumentsStrict(t *testing.T) {
+func TestParseArgumentsFlagValueFormsAndErrors(t *testing.T) {
 	t.Run("space and equals value forms", func(t *testing.T) {
 		space := parseArguments([]string{
 			"needle", "--distance", "12", "--workers", "3", "--heavy-concurrency", "2",

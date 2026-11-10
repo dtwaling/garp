@@ -285,28 +285,6 @@ func TestMaxResultsDefaults(t *testing.T) {
 	}
 }
 
-func TestShowUsageDocumentsMaxResults(t *testing.T) {
-	out := string(captureCLIStdout(t, func() int {
-		showUsage()
-		return 0
-	}))
-	for _, want := range []string{
-		"[--max-excerpts N] [--max-results N]",
-		"0 = unlimited",
-		"--json 50",
-		"--plain 50",
-		"--pathonly 0",
-		"TUI 0",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("usage missing %q:\n%s", want, out)
-		}
-	}
-	if maxResults, excludes := strings.Index(out, "[--max-results N]"), strings.Index(out, "[--not <exclude1>"); maxResults < 0 || excludes < 0 || maxResults >= excludes {
-		t.Errorf("--max-results must precede the trailing --not list:\n%s", out)
-	}
-}
-
 func TestRunPlainPartialConfiguresSearchEngine(t *testing.T) {
 	root := t.TempDir()
 	fixture := filepath.Join(root, "deployment.md")
@@ -324,35 +302,6 @@ func TestRunPlainPartialConfiguresSearchEngine(t *testing.T) {
 	out := string(captureCLIStdout(t, func() int { return runPlain(args) }))
 	if !strings.Contains(out, "FILE: "+escapeOutputLine(fixture)) {
 		t.Fatalf("partial search did not return derivative-form fixture:\n%s", out)
-	}
-}
-
-func TestShowUsageDocumentsPartial(t *testing.T) {
-	out := string(captureCLIStdout(t, func() int {
-		showUsage()
-		return 0
-	}))
-	for _, want := range []string{
-		"--partial[=MODE]",
-		"prefix, contains",
-		"Tip: valid query terms support inline * and ?.",
-		"Invalid or over-limit wildcard terms match literally. See README for bounds.",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("usage missing %q:\n%s", want, out)
-		}
-	}
-}
-
-func TestShowUsageDocumentsBoundedOverlapExcerpts(t *testing.T) {
-	out := string(captureCLIStdout(t, func() int {
-		showUsage()
-		return 0
-	}))
-	for _, want := range []string{"up to 10% overlap", ">=90% new content"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("usage missing %q:\n%s", want, out)
-		}
 	}
 }
 
@@ -497,13 +446,25 @@ func TestLegacyOnlyTypeDisablesPositiveGlobCodeEligibility(t *testing.T) {
 	}
 }
 
-func TestShowUsageDocumentsFlagsAndCompatibilityLimits(t *testing.T) {
+func TestShowUsageDocumentsFlags(t *testing.T) {
 	out := string(captureCLIStdout(t, func() int {
 		showUsage()
 		return 0
 	}))
 	for _, want := range []string{
 		"[--startdir PATH]",
+		"[--max-excerpts N] [--max-results N]",
+		"0 = unlimited",
+		"--json 50",
+		"--plain 50",
+		"--pathonly 0",
+		"TUI 0",
+		"--partial[=MODE]",
+		"prefix, contains",
+		"Tip: valid query terms support inline * and ?.",
+		"Invalid or over-limit wildcard terms match literally. See README for bounds.",
+		"up to 10% overlap",
+		">=90% new content",
 		"[--no-ignore]",
 		"[--max-filesize SIZE]",
 		"--no-ignore            Do not apply repository ignore files",
@@ -535,9 +496,14 @@ func TestShowUsageDocumentsFlagsAndCompatibilityLimits(t *testing.T) {
 		"context flags are not supported",
 		"not a drop-in rg replacement",
 	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("usage missing %q:\n%s", want, out)
-		}
+		t.Run(want, func(t *testing.T) {
+			if !strings.Contains(out, want) {
+				t.Errorf("usage missing %q:\n%s", want, out)
+			}
+		})
+	}
+	if maxResults, excludes := strings.Index(out, "[--max-results N]"), strings.Index(out, "[--not <exclude1>"); maxResults < 0 || excludes < 0 || maxResults >= excludes {
+		t.Errorf("--max-results must precede the trailing --not list:\n%s", out)
 	}
 	defaultWorkers := parseArguments([]string{"needle"}).FilterWorkers
 	if defaultWorkers != 4 {

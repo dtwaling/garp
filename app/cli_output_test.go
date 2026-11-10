@@ -537,13 +537,7 @@ func buildOutputOrderingParityFixture(t *testing.T) (string, []string) {
 		"neutral/00-edge.txt":  "xalphay beta",
 	}
 	for name, content := range fixtures {
-		path := filepath.Join(root, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatalf("create fixture directory %q: %v", name, err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatalf("write fixture %q: %v", name, err)
-		}
+		writeCLISearchFixture(t, root, name, content)
 	}
 
 	relativeOrder := []string{
@@ -663,10 +657,7 @@ func buildOutputLimitFixture(t *testing.T, count int) string {
 	t.Helper()
 	root := t.TempDir()
 	for i := 0; i < count; i++ {
-		name := filepath.Join(root, fmt.Sprintf("match-%03d.txt", i))
-		if err := os.WriteFile(name, []byte("alpha"), 0o600); err != nil {
-			t.Fatalf("write fixture %q: %v", name, err)
-		}
+		writeCLISearchFixture(t, root, fmt.Sprintf("match-%03d.txt", i), "alpha")
 	}
 	return root
 }
@@ -864,33 +855,13 @@ func TestJSONOutputPartial(t *testing.T) {
 func buildRankedSubsetFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	pad := func(prefix string, n int) string {
-		parts := make([]string, n)
-		for i := range parts {
-			parts[i] = prefix + "-" + threeDigitCLI(i)
-		}
-		return strings.Join(parts, " ")
-	}
 	content := strings.Join([]string{
 		"First cluster begins. alpha beta gamma first cluster. First cluster ends.",
-		pad("between", 90),
+		skipAheadCLIPadding("between", 90),
 		"Second cluster begins. alpha beta second cluster. Second cluster ends.",
 	}, " ")
-	if err := os.WriteFile(filepath.Join(root, "fixture.txt"), []byte(content), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
+	writeCLISearchFixture(t, root, "fixture.txt", content)
 	return root
-}
-
-func threeDigitCLI(i int) string {
-	switch {
-	case i < 10:
-		return "00" + string(rune('0'+i))
-	case i < 100:
-		return "0" + string(rune('0'+i/10)) + string(rune('0'+i%10))
-	default:
-		return string(rune('0'+i/100)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
-	}
 }
 
 func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {

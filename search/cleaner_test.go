@@ -552,27 +552,9 @@ func TestExcerptInitialBudgetPreservesUTF8(t *testing.T) {
 func perFileSubsetCorpus() string {
 	return strings.Join([]string{
 		"First cluster begins. alpha beta gamma first cluster text. First cluster ends.",
-		perFileSubsetPadding("between-first-second", 90),
+		skipAheadPadding("between-first-second", 90),
 		"Second cluster begins. alpha beta second cluster text. Second cluster ends.",
 	}, " ")
-}
-
-func perFileSubsetPadding(prefix string, count int) string {
-	parts := make([]string, count)
-	for i := range parts {
-		parts[i] = prefix + "-" + threeDigit(i)
-	}
-	return strings.Join(parts, " ")
-}
-
-func threeDigit(i int) string {
-	if i < 10 {
-		return "00" + string(rune('0'+i))
-	}
-	if i < 100 {
-		return "0" + string(rune('0'+i/10)) + string(rune('0'+i%10))
-	}
-	return string(rune('0'+i/100)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
 }
 
 func TestRankedExcerptSpansEmitBothQualityLevelsBestFirst(t *testing.T) {
