@@ -1119,7 +1119,11 @@ func Run() int {
 		return 0
 	}
 	if len(args.SearchWords) == 0 {
-		showUsage()
+		if len(os.Args) > 1 {
+			fmt.Fprintln(os.Stderr, "Error: at least one search term is required")
+		} else {
+			showUsage()
+		}
 		return 1
 	}
 	// Exit early on flag validation errors

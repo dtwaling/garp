@@ -16,6 +16,49 @@ import (
 	"garp/search"
 )
 
+func TestRunEmptyPositiveQuery(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		usage bool
+	}{
+		{name: "exclusions only", args: []string{"--not", "foo"}},
+		{name: "exclusions with JSON", args: []string{"--not", "foo", "--json"}},
+		{name: "empty term with JSON", args: []string{"", "--json"}},
+		{name: "JSON only", args: []string{"--json"}},
+		{name: "plain only", args: []string{"--plain"}},
+		{name: "path only", args: []string{"-l"}},
+		{name: "bare invocation", usage: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var code int
+			var stderr string
+			stdout := string(captureCLIStdout(t, func() int {
+				code, stderr = runWithArgsAndStderr(t, append([]string{"garp"}, tc.args...))
+				return 0 // Assert Run's exit code separately from the capture helper.
+			}))
+			if code != 1 {
+				t.Errorf("Run() = %d, want 1", code)
+			}
+			if tc.usage {
+				if !strings.Contains(stdout, "USAGE") {
+					t.Errorf("stdout = %q, want usage banner", stdout)
+				}
+				if stderr != "" {
+					t.Errorf("stderr = %q, want empty", stderr)
+				}
+			} else {
+				if stdout != "" {
+					t.Errorf("stdout = %q, want empty", stdout)
+				}
+				if want := "Error: at least one search term is required\n"; stderr != want {
+					t.Errorf("stderr = %q, want %q", stderr, want)
+				}
+			}
+		})
+	}
+}
+
 func TestConcurrencyFlagBounds(t *testing.T) {
 	for _, tc := range []struct {
 		flag    string
