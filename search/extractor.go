@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/emersion/go-mbox"
 	"github.com/jhillyerd/enmime"
@@ -226,7 +227,7 @@ func (e *MBOXExtractor) ExtractText(data []byte) (string, error) {
 	}
 
 	if text.Len() == 0 {
-		return string(data), nil
+		return "", fmt.Errorf("no valid mbox messages found")
 	}
 	return text.String(), nil
 }
@@ -412,6 +413,7 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			}
 		}()
 		if pageErr != nil {
+			atomic.AddInt64(&pdfPagesTruncated, int64(pages-i+1))
 			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, limit)
 		}
 	}
@@ -449,6 +451,7 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			break
 		}
 		if int64(plainBuf.Len()+len(pagePlain)) > limit {
+			atomic.AddInt64(&pdfPagesTruncated, int64(pages-i+1))
 			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, limit)
 		}
 		plainBuf.WriteString(pagePlain)
