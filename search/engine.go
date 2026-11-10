@@ -29,12 +29,14 @@ var (
 )
 
 // capForBinaryPrefilter returns the byte cap for the bounded streaming prefilter:
-// a smaller window for EML/MSG, a conservative default for PDFs and other binaries.
+// a smaller window for mail, shared by discovery and Stage 2 filtering.
 func capForBinaryPrefilter(ext string) int64 {
-	if strings.EqualFold(ext, ".eml") || strings.EqualFold(ext, ".msg") {
+	switch strings.ToLower(ext) {
+	case ".eml", ".msg", ".mbox":
 		return 256 * 1024
+	default:
+		return 2 * 1024 * 1024
 	}
-	return 1024 * 1024
 }
 
 // SearchResult represents a file that matches all search criteria
@@ -91,11 +93,13 @@ type candidateMatch struct {
 }
 
 type discoveredCandidate struct {
-	filePath     string
-	canonicalKey string
-	root         StartRoot
-	rankingRoot  StartRoot
-	rootOrder    int
+	// Set only by discoverCandidates, not by the public path-only filtering API.
+	primaryPrefiltered bool
+	filePath           string
+	canonicalKey       string
+	root               StartRoot
+	rankingRoot        StartRoot
+	rootOrder          int
 }
 
 func (match *candidateMatch) setAnalysis(analysis rankedTextAnalysis) {
@@ -402,6 +406,7 @@ func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int, r
 		for _, filePath := range candidateFiles {
 			key := canonicalCandidateKey(root, filePath)
 			candidate := newDiscoveredCandidate(filePath, key, root, roots)
+			candidate.primaryPrefiltered = true
 			if index, exists := candidateIndex[key]; exists {
 				if discoveredCandidateProducerBetter(candidate, candidates[index]) {
 					candidates[index] = candidate
@@ -731,23 +736,21 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 			if IsBinaryFormat(filePath) {
 				ext := filepath.Ext(filePath)
 
-				// Bounded streaming prefilter for supported binary types.
-				cap := capForBinaryPrefilter(ext)
-				startPF := time.Now()
-				found, decided := binaryStreamingPrefilterDecidedQuery(filePath, query, cap, se.Strict)
-				durPF := time.Since(startPF)
-				switch strings.ToLower(ext) {
-				case ".eml":
-					atomic.AddInt64(&se.emlPrefilterCount, 1)
-					atomic.AddInt64(&se.emlPrefilterDurNanos, durPF.Nanoseconds())
-				case ".msg":
-					atomic.AddInt64(&se.msgPrefilterCount, 1)
-					atomic.AddInt64(&se.msgPrefilterDurNanos, durPF.Nanoseconds())
-				}
+				// MSG raw bytes cannot prove absence; its extractor handles it once.
+				if !strings.EqualFold(ext, ".msg") {
+					cap := capForBinaryPrefilter(ext)
+					startPF := time.Now()
+					found, decided := binaryStreamingPrefilterDecidedQuery(filePath, query, cap, se.Strict)
+					durPF := time.Since(startPF)
+					if strings.EqualFold(ext, ".eml") {
+						atomic.AddInt64(&se.emlPrefilterCount, 1)
+						atomic.AddInt64(&se.emlPrefilterDurNanos, durPF.Nanoseconds())
+					}
 
-				// Decided negative => safe skip
-				if decided && !found {
-					return false
+					// Decided negative => safe skip
+					if decided && !found {
+						return false
+					}
 				}
 
 				// Extract and verify distance for binary formats, including PDFs.
@@ -800,12 +803,15 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 			// Single-word presence check
 			if IsBinaryFormat(filePath) {
 				ext := filepath.Ext(filePath)
-				// Run bounded prefilter for binary types before extraction.
-				cap := capForBinaryPrefilter(ext)
-				foundPF, decidedPF := binaryStreamingPrefilterDecidedQuery(filePath, query, cap, true)
-				// Decided negative => safe skip
-				if decidedPF && !foundPF {
-					return false
+				// Discovery already checked this exact single-term query. Direct
+				// FilterCandidates callers still need the bounded prefilter.
+				if !candidate.primaryPrefiltered && !strings.EqualFold(ext, ".msg") {
+					cap := capForBinaryPrefilter(ext)
+					foundPF, decidedPF := binaryStreamingPrefilterDecidedQuery(filePath, query, cap, true)
+					// Decided negative => safe skip
+					if decidedPF && !foundPF {
+						return false
+					}
 				}
 
 				// Bounded extraction fallback under semaphore + timeout.
