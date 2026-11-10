@@ -196,6 +196,11 @@ Use `--partial=contains` for raw substring matching when internal matches are
 useful: `deploy` also matches `redeploy` and `autodeploy`. Contains mode is broad,
 so prefer prefix mode for technical terms and code identifiers when possible.
 
+Both `prefix` and `contains` require terms of at least 3 characters for partial
+matching: the short-term guardrail (`len(term) <= 2`) keeps shorter terms in
+whole-word mode to prevent noisy substring explosion. The implementation measures
+length in bytes. Explicit inline wildcards such as `al*` still work for short terms.
+
 Use `*` and `?` inside an individual query term for inline wildcard matching.
 For example, `ms-*-api` matches `ms-option-api`, `ms-?-api` matches
 `ms-a-api`, and `*OptionApi*` matches `defaultMsOptionApiOrigin`. `?` matches
@@ -333,6 +338,12 @@ less than the adjusted `matches`. Errors go to stderr; check the exit code
 before parsing stdout as JSON.
 
 ### Bounded-overlap excerpts
+
+When matched terms are further apart than the excerpt display budget
+(`span > budget`), garp builds a multipart excerpt from per-term context windows.
+It orders these windows by source position, merges overlapping windows, and joins
+the remaining parts with `" ... "` (space, three ASCII dots, space). The joiner
+marks omitted text; the excerpt need not be one contiguous source passage.
 
 `--max-excerpts` controls how many excerpts garp can return for each matching file.
 The default is one and the maximum is 50. When more than one excerpt is requested,

@@ -28,6 +28,7 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 ## Flags that matter
 
 - `--startdir <dir>`: search roots (default: cwd). Use one comma-separated value for a multi-repository search; specify the flag once. An existing directory name that contains a comma stays intact.
+- `--pathscope <patterns>`: comma-separated path patterns in one flag occurrence; prefix with `!` to exclude. Anchored prefixes such as `src/` prune unrelated directories during the walk. Uses the path pattern rules below and intersects with positive `-g` / `--iglob` globs.
 - `-g <pattern>` is case-sensitive and `--iglob <pattern>` is case-insensitive; both are repeatable, positive globs form one union, and commas are literal. Prefix a pattern with `!` to exclude it. Bare `name` matches basenames at any depth. `name/`, `./name`, and patterns that contain `/` are root-anchored. `*` and `?` stay within one segment; `**` crosses segments.
 - `--code`: include source files, including Dockerfile/Containerfile names. `-t <ext>` restricts file types. Repeat the flag or use comma-separated values. A type restriction overrides `--code`.
 - `.gitignore`, `.ignore`, and `.git/info/exclude` are respected by default. Use `--no-ignore` to search ignored files; other search filters still apply.
@@ -46,7 +47,13 @@ flag parsing. These short flags follow rg conventions, but garp is not a
 drop-in rg replacement. Context flags such as `-C`, `-A`, and `-B` are not
 supported; use `--distance` and `-m`.
 
-On all platforms, an absolute `-g` or `--iglob` pattern must overlap an
+Both `--partial` modes (`prefix` and `contains`) require terms of at least
+3 characters for partial matching. The short-term guardrail (`len(term) <= 2`)
+keeps shorter terms whole-word to prevent noisy substring explosion; the
+implementation measures length in bytes. Explicit inline wildcards such as
+`al*` still work for short terms (quote them in shells).
+
+On all platforms, an absolute `--pathscope`, `-g`, or `--iglob` pattern must overlap an
 effective start root. Examples are `/repo/src/**` on POSIX and `C:/repo/src/**`
 on Windows. A pattern can select inside the root, or an ancestor pattern can
 cover the root. If no root intersects it, validation fails before search. Use
@@ -60,6 +67,7 @@ One-shot find -> pinpoint -> targeted read: each result carries the file, a rank
 - Top-level `matches` counts all matching files; `returned` counts files in `results`. `truncated: true` means only the top `N` ranked files were returned under `--max-results N`; use `--max-results 0` for all matches.
 - Sort order: score, matched-term count, path-term count, boundary quality, tighter span, top-quality chunk count, ranking-root-relative path, supplied root order, then canonical path. `matched_terms` lists the terms that actually hit.
 - Each excerpt: `text` (context-padded, newlines collapsed) plus 1-based `start_line` = line of the earliest matched term in that chunk, and per-chunk `score`/`term_count`. Present for text/code; omitted for extracted formats (PDF, DOCX, email).
+- When matched terms are further apart than the excerpt display budget (`span > budget`), multipart excerpts join per-term context windows with `" ... "` (space, three ASCII dots, space). Windows are in source order and overlapping windows are merged; the joiner marks omitted text, not a contiguous source passage.
 - Chunks within a file are a ranked subset, best-first: with `-m N` where `N > 1`, every quality tier can seed a chunk, so a strong cluster no longer hides the file's other clusters. Every chunk is >=90% new content (bounded overlap).
 - Act on results by reading the file at `start_line` (with margin) instead of re-searching or paging through reads.
 - `query.start_dir` is the first reported root. `query.start_dirs` appears only for two or more reported roots. A nested supplied root can become traversal-only to prevent data loss; results remain under its reported ancestor. Both fields are omitted when `--startdir` is absent.
