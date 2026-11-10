@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 
 	"garp/search"
 )
@@ -535,13 +537,7 @@ func buildOutputOrderingParityFixture(t *testing.T) (string, []string) {
 		"neutral/00-edge.txt":  "xalphay beta",
 	}
 	for name, content := range fixtures {
-		path := filepath.Join(root, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatalf("create fixture directory %q: %v", name, err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatalf("write fixture %q: %v", name, err)
-		}
+		writeCLISearchFixture(t, root, name, content)
 	}
 
 	relativeOrder := []string{
@@ -661,10 +657,7 @@ func buildOutputLimitFixture(t *testing.T, count int) string {
 	t.Helper()
 	root := t.TempDir()
 	for i := 0; i < count; i++ {
-		name := filepath.Join(root, fmt.Sprintf("match-%03d.txt", i))
-		if err := os.WriteFile(name, []byte("alpha"), 0o600); err != nil {
-			t.Fatalf("write fixture %q: %v", name, err)
-		}
+		writeCLISearchFixture(t, root, fmt.Sprintf("match-%03d.txt", i), "alpha")
 	}
 	return root
 }
@@ -712,4 +705,292 @@ func slicesEqual(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+func TestEscapeOutputLine(t *testing.T) {
+	for _, tt := range []struct{ input, want string }{
+		{"ordinary café.txt", "ordinary café.txt"},
+		{"\r\n\t\x00\x1b\x7f\u0085\u2028\u2029", `\r\n\t\x00\x1b\x7f\u0085\u2028\u2029`},
+		{`literal\n "quoted"`, `literal\\n \"quoted\"`},
+		{string([]byte{0xff, 0x9b}), `\xff\x9b`},
+	} {
+		if got := escapeOutputLine(tt.input); got != tt.want {
+			t.Errorf("escapeOutputLine(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+	for r := rune(0); r <= 0x9f; r++ {
+		if unicode.IsControl(r) && strings.ContainsRune(escapeOutputLine(string(r)), r) {
+			t.Errorf("control U+%04X survived escaping", r)
+		}
+	}
+}
+
+func TestPlainOutputCannotForgeRecords(t *testing.T) {
+	const payload = "evil\r\nMATCH 9\nFILE: forged\rSIZE: 0\nEXCERPT 9: forged\n---\x1b[2J\x00\u0085\u2028\u2029"
+	const escaped = `evil\r\nMATCH 9\nFILE: forged\rSIZE: 0\nEXCERPT 9: forged\n---\x1b[2J\x00\u0085\u2028\u2029`
+	args := parseArguments([]string{"alpha"})
+	outcome := search.ExecutionResult{
+		Returned: 1,
+		Results: []search.SearchResult{{
+			FilePath: payload, FileSize: 42,
+			RawExcerpts:     []string{payload, payload, payload, payload},
+			StartLines:      []int{2, 0, 3, 0},
+			ChunkScores:     []int{1, 1, 0, 0},
+			ChunkTermCounts: []int{1, 1, 0, 0},
+		}},
+	}
+	var out bytes.Buffer
+	writePlainOutput(&out, args, outcome)
+	want := "MATCH 1/1 [Score: 0 (0/1 terms)]\nFILE: " + escaped + "\nSIZE: 42\n" +
+		"EXCERPT 1 [L2, Score: 1 (1 terms)]: " + escaped + "\n" +
+		"EXCERPT 2 [Score: 1 (1 terms)]: " + escaped + "\n" +
+		"EXCERPT 3 [L3]: " + escaped + "\n" +
+		"EXCERPT 4: " + escaped + "\n---\n"
+	if out.String() != want {
+		t.Fatalf("plain output = %q, want %q", out.String(), want)
+	}
+	if outcome.Results[0].FilePath != payload || outcome.Results[0].RawExcerpts[0] != payload {
+		t.Fatal("output escaping mutated search results")
+	}
+}
+
+func TestPathOnlyCannotForgeLines(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not support control characters in filenames")
+	}
+	root := t.TempDir()
+	name := "evil\r\nMATCH 9\nFILE: forged\nSIZE: 0\nEXCERPT 9\n---\t\x1b\x7f\u0085\u2028.txt"
+	path := filepath.Join(root, name)
+	if err := os.WriteFile(path, []byte("alpha"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := parseArguments([]string{"alpha", "--startdir", root, "--only", "txt", "--pathonly"})
+	out := string(captureCLIStdout(t, func() int { return runPathOnly(args) }))
+	want := root + `/evil\r\nMATCH 9\nFILE: forged\nSIZE: 0\nEXCERPT 9\n---\t\x1b\x7f\u0085\u2028.txt` + "\n"
+	if out != want {
+		t.Fatalf("pathonly output = %q, want %q", out, want)
+	}
+}
+
+func TestPlainOutputBackslashPathsRoundTripInParityHelpers(t *testing.T) {
+	const winPath = `C:\Users\runner\project\neutral\zz-top.txt`
+	args := parseArguments([]string{"alpha"})
+	outcome := search.ExecutionResult{
+		Returned: 1,
+		Results: []search.SearchResult{{
+			FilePath:        winPath,
+			FileSize:        42,
+			RawExcerpts:     []string{"alpha beta", "alpha gamma"},
+			StartLines:      []int{1, 10},
+			ChunkScores:     []int{10, 8},
+			ChunkTermCounts: []int{2, 2},
+		}},
+	}
+	var out bytes.Buffer
+	writePlainOutput(&out, args, outcome)
+
+	gotPaths := outputPathsFromPlainOutput(t, out.String())
+	if !slicesEqual(gotPaths, []string{winPath}) {
+		t.Fatalf("outputPathsFromPlainOutput = %q, want [%q]", gotPaths, winPath)
+	}
+	if got := excerptCountForPlainFile(out.String(), winPath); got != 2 {
+		t.Fatalf("excerptCountForPlainFile(%q) = %d, want 2", winPath, got)
+	}
+}
+
+func TestJSONOutputPartial(t *testing.T) {
+	root := t.TempDir()
+	writeCLISearchFixture(t, root, "deployment.md", "deployment completed successfully\n")
+
+	for _, tc := range []struct {
+		name     string
+		partial  string
+		wantJSON string
+		wantMode string
+	}{
+		{name: "prefix", partial: "--partial=prefix", wantJSON: "prefix", wantMode: "Mode: partial (prefix)"},
+		{name: "contains", partial: "--partial=contains", wantJSON: "contains", wantMode: "Mode: partial (contains)"},
+		{name: "off omits partial", partial: "", wantJSON: "", wantMode: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			argv := []string{"deploy", "--startdir", root, "--only", "md"}
+			if tc.partial != "" {
+				argv = append(argv, tc.partial)
+			}
+			args := parseArguments(argv)
+
+			jsonOut := captureCLIStdout(t, func() int { return runJSON(args) })
+			var output struct {
+				Query map[string]json.RawMessage `json:"query"`
+			}
+			if err := json.Unmarshal(jsonOut, &output); err != nil {
+				t.Fatalf("decode JSON output: %v", err)
+			}
+			partial, present := output.Query["partial"]
+			if tc.wantJSON == "" {
+				if present {
+					t.Errorf("JSON query partial = %s, want omitted", partial)
+				}
+			} else {
+				var got string
+				if !present || json.Unmarshal(partial, &got) != nil || got != tc.wantJSON {
+					t.Errorf("JSON query partial = %s, want %q", partial, tc.wantJSON)
+				}
+			}
+
+			plainOut := string(captureCLIStdout(t, func() int { return runPlain(args) }))
+			if tc.wantMode == "" {
+				if strings.Contains(plainOut, "Mode: partial (") {
+					t.Errorf("plain output unexpectedly includes partial mode:\n%s", plainOut)
+				}
+			} else if !strings.Contains(plainOut, tc.wantMode) {
+				t.Errorf("plain output missing partial mode %q:\n%s", tc.wantMode, plainOut)
+			}
+		})
+	}
+}
+
+// buildRankedSubsetFixture creates one file with two separated clusters of
+// unequal quality: a three-term cluster followed by a two-term cluster.
+func buildRankedSubsetFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	content := strings.Join([]string{
+		"First cluster begins. alpha beta gamma first cluster. First cluster ends.",
+		skipAheadCLIPadding("between", 90),
+		"Second cluster begins. alpha beta second cluster. Second cluster ends.",
+	}, " ")
+	writeCLISearchFixture(t, root, "fixture.txt", content)
+	return root
+}
+
+func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {
+	root := buildRankedSubsetFixture(t)
+	args := parseArguments([]string{
+		"alpha", "beta", "gamma",
+		"--startdir", root,
+		"--only", "txt",
+		"--distance", "100",
+		"--max-excerpts", "3",
+	})
+
+	t.Run("JSON excerpts carry per-chunk score and term_count", func(t *testing.T) {
+		out := captureCLIStdout(t, func() int { return runJSON(args) })
+		var result jsonOutput
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatalf("decode JSON output: %v", err)
+		}
+		if result.Matches != 1 || len(result.Results) != 1 {
+			t.Fatalf("JSON matches/results = %d/%d, want 1/1", result.Matches, len(result.Results))
+		}
+		excerpts := result.Results[0].Excerpts
+		if len(excerpts) != 2 {
+			t.Fatalf("JSON excerpt count = %d, want 2 (both quality levels)", len(excerpts))
+		}
+		if excerpts[0].Score != 14 || excerpts[0].TermCount != 3 {
+			t.Fatalf("first excerpt quality = (score %d, terms %d), want (14, 3)", excerpts[0].Score, excerpts[0].TermCount)
+		}
+		if excerpts[1].Score != 9 || excerpts[1].TermCount != 2 {
+			t.Fatalf("second excerpt quality = (score %d, terms %d), want (9, 2)", excerpts[1].Score, excerpts[1].TermCount)
+		}
+		if !strings.Contains(excerpts[0].Text, "gamma") {
+			t.Fatalf("first excerpt should be the best cluster: %q", excerpts[0].Text)
+		}
+		if strings.Contains(excerpts[1].Text, "gamma") {
+			t.Fatalf("second excerpt should be the lower-quality cluster: %q", excerpts[1].Text)
+		}
+		if line := excerpts[0].StartLine; line <= 0 {
+			t.Fatalf("first excerpt start_line = %d, want positive", line)
+		}
+	})
+
+	t.Run("plain excerpt headers carry per-chunk quality", func(t *testing.T) {
+		out := string(captureCLIStdout(t, func() int { return runPlain(args) }))
+		if got := strings.Count(out, "EXCERPT "); got != 2 {
+			t.Fatalf("plain excerpt count = %d, want 2:\n%s", got, out)
+		}
+		if !strings.Contains(out, "EXCERPT 1 [L1, Score: 14 (3 terms)]") {
+			t.Errorf("plain output missing per-chunk quality header for the best chunk:\n%s", out)
+		}
+		if !strings.Contains(out, "EXCERPT 2 [L1, Score: 9 (2 terms)]") {
+			t.Errorf("plain output missing per-chunk quality header for the lower chunk:\n%s", out)
+		}
+	})
+}
+
+func TestSkipAheadJSONAndPlainOutput(t *testing.T) {
+	root := t.TempDir()
+	content := strings.Join([]string{
+		"First cluster begins. needle first marker. First cluster ends.",
+		skipAheadCLIPadding("between-first-second", 90),
+		"Second cluster begins. needle second marker. Second cluster ends.",
+		skipAheadCLIPadding("between-second-third", 90),
+		"Third cluster begins. needle third marker. Third cluster ends.",
+	}, " ")
+	if err := os.WriteFile(filepath.Join(root, "fixture.txt"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	args := parseArguments([]string{
+		"needle",
+		"--startdir", root,
+		"--only", "txt",
+		"--distance", "100",
+		"--max-excerpts", "3",
+	})
+
+	jsonOut := captureCLIStdout(t, func() int { return runJSON(args) })
+	var got jsonOutput
+	if err := json.Unmarshal(jsonOut, &got); err != nil {
+		t.Fatalf("decode JSON output: %v", err)
+	}
+	if got.Matches != 1 || len(got.Results) != 1 {
+		t.Fatalf("JSON matches/results = %d/%d, want 1/1", got.Matches, len(got.Results))
+	}
+	if len(got.Results[0].Excerpts) != 3 {
+		t.Fatalf("JSON excerpt count = %d, want 3", len(got.Results[0].Excerpts))
+	}
+	for i := range got.Results[0].Excerpts {
+		for j := 0; j < i; j++ {
+			common := skipAheadCLILongestCommonRun(got.Results[0].Excerpts[i].Text, got.Results[0].Excerpts[j].Text)
+			shorter := len(got.Results[0].Excerpts[i].Text)
+			if len(got.Results[0].Excerpts[j].Text) < shorter {
+				shorter = len(got.Results[0].Excerpts[j].Text)
+			}
+			if common*5 >= shorter {
+				t.Fatalf("JSON excerpts %d and %d share common run %d, want less than 20%% of shorter length %d", i, j, common, shorter)
+			}
+		}
+	}
+
+	plainOut := string(captureCLIStdout(t, func() int { return runPlain(args) }))
+	if got := strings.Count(plainOut, "EXCERPT "); got != 3 {
+		t.Fatalf("plain output excerpt count = %d, want 3:\n%s", got, plainOut)
+	}
+}
+
+func skipAheadCLIPadding(prefix string, count int) string {
+	parts := make([]string, count)
+	for i := range parts {
+		parts[i] = fmt.Sprintf("%s-%03d", prefix, i)
+	}
+	return strings.Join(parts, " ")
+}
+
+func skipAheadCLILongestCommonRun(a, b string) int {
+	previous := make([]int, len(b)+1)
+	best := 0
+	for i := 1; i <= len(a); i++ {
+		current := make([]int, len(b)+1)
+		for j := 1; j <= len(b); j++ {
+			if a[i-1] == b[j-1] {
+				current[j] = previous[j-1] + 1
+				if current[j] > best {
+					best = current[j]
+				}
+			}
+		}
+		previous = current
+	}
+	return best
 }

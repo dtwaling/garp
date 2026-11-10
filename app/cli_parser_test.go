@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,7 +10,398 @@ import (
 	"garp/search"
 )
 
-func TestParseArgumentsStrict(t *testing.T) {
+func TestParseArgumentsMaxFileSize(t *testing.T) {
+	t.Run("valid value", func(t *testing.T) {
+		args := parseArguments([]string{"needle", "--max-filesize", "12MiB"})
+		if args.MaxFileSizeErr != nil {
+			t.Fatalf("MaxFileSizeErr = %v, want nil", args.MaxFileSizeErr)
+		}
+		if args.MaxFileSize != 12*1024*1024 {
+			t.Errorf("MaxFileSize = %d, want %d", args.MaxFileSize, 12*1024*1024)
+		}
+	})
+
+	t.Run("missing terminal value", func(t *testing.T) {
+		args := parseArguments([]string{"needle", "--max-filesize"})
+		if args.MaxFileSizeErr == nil {
+			t.Fatal("MaxFileSizeErr = nil, want missing-value error")
+		}
+	})
+
+	t.Run("following flag is not consumed", func(t *testing.T) {
+		args := parseArguments([]string{"needle", "--max-filesize", "--no-ignore"})
+		if args.MaxFileSizeErr == nil {
+			t.Fatal("MaxFileSizeErr = nil, want invalid-value error")
+		}
+		if !args.NoIgnore {
+			t.Error("NoIgnore = false, following flag was consumed as max-filesize value")
+		}
+	})
+
+	t.Run("later valid value preserves first parse error", func(t *testing.T) {
+		args := parseArguments([]string{
+			"needle",
+			"--max-filesize", "invalid",
+			"--max-filesize", "2M",
+		})
+		if args.MaxFileSizeErr != nil {
+			t.Fatalf("MaxFileSizeErr = %v, want nil from latest value", args.MaxFileSizeErr)
+		}
+		if args.MaxFileSize != 2*1024*1024 {
+			t.Errorf("MaxFileSize = %d, want %d", args.MaxFileSize, 2*1024*1024)
+		}
+		if args.ParseErr == nil {
+			t.Fatal("ParseErr = nil, want first max-filesize error")
+		}
+	})
+
+	t.Run("latest invalid value clears prior size", func(t *testing.T) {
+		args := parseArguments([]string{
+			"needle",
+			"--max-filesize", "2M",
+			"--max-filesize", "invalid",
+		})
+		if args.MaxFileSizeErr == nil {
+			t.Fatal("MaxFileSizeErr = nil, want error from latest value")
+		}
+		if args.MaxFileSize != 0 {
+			t.Errorf("MaxFileSize = %d, want 0 after latest value failed", args.MaxFileSize)
+		}
+	})
+}
+
+func TestParseArgumentsNoIgnore(t *testing.T) {
+	args := parseArguments([]string{"needle", "--no-ignore"})
+	if !args.NoIgnore {
+		t.Error("NoIgnore = false, want true")
+	}
+}
+
+func TestParseArgumentsMaxResults(t *testing.T) {
+	tests := []struct {
+		name     string
+		argv     []string
+		want     int
+		provided bool
+		wantErr  bool
+		parseErr bool
+	}{
+		{name: "positive", argv: []string{"needle", "--max-results", "12"}, want: 12, provided: true},
+		{name: "explicit zero", argv: []string{"needle", "--max-results", "0"}, provided: true},
+		{name: "missing value", argv: []string{"needle", "--max-results"}, provided: true, wantErr: true, parseErr: true},
+		{name: "negative value", argv: []string{"needle", "--max-results", "-1"}, provided: true, wantErr: true, parseErr: true},
+		{name: "non-integer value", argv: []string{"needle", "--max-results", "many"}, provided: true, wantErr: true, parseErr: true},
+		{name: "latest repeated value wins", argv: []string{"needle", "--max-results", "3", "--max-results", "7"}, want: 7, provided: true},
+		{name: "later valid value preserves first parse error", argv: []string{"needle", "--max-results", "bad", "--max-results", "5"}, want: 5, provided: true, parseErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := parseArguments(tt.argv)
+			if args.MaxResults != tt.want {
+				t.Errorf("MaxResults = %d, want %d", args.MaxResults, tt.want)
+			}
+			if args.MaxResultsProvided != tt.provided {
+				t.Errorf("MaxResultsProvided = %t, want %t", args.MaxResultsProvided, tt.provided)
+			}
+			if (args.MaxResultsErr != nil) != tt.wantErr {
+				t.Fatalf("MaxResultsErr = %v, want error %t", args.MaxResultsErr, tt.wantErr)
+			}
+			if tt.wantErr && !strings.Contains(args.MaxResultsErr.Error(), "--max-results") {
+				t.Errorf("MaxResultsErr = %q, want --max-results", args.MaxResultsErr)
+			}
+			if (args.ParseErr != nil) != tt.parseErr {
+				t.Errorf("ParseErr = %v, want error %t", args.ParseErr, tt.parseErr)
+			}
+			if len(args.SearchWords) != 1 || args.SearchWords[0] != "needle" {
+				t.Errorf("SearchWords = %q, max-results value was not consumed", args.SearchWords)
+			}
+		})
+	}
+}
+
+func TestCLIArgumentsPartial(t *testing.T) {
+	tests := []struct {
+		name    string
+		argv    []string
+		partial search.PartialMode
+		wantErr bool
+	}{
+		{
+			name:    "default is off",
+			argv:    []string{"deploy"},
+			partial: search.PartialModeOff,
+		},
+		{
+			name:    "bare flag enables prefix",
+			argv:    []string{"deploy", "--partial"},
+			partial: search.PartialModePrefix,
+		},
+		{
+			name:    "prefix mode",
+			argv:    []string{"deploy", "--partial=prefix"},
+			partial: search.PartialModePrefix,
+		},
+		{
+			name:    "contains mode",
+			argv:    []string{"deploy", "--partial=contains"},
+			partial: search.PartialModeContains,
+		},
+		{
+			name:    "off mode",
+			argv:    []string{"deploy", "--partial=off"},
+			partial: search.PartialModeOff,
+		},
+		{
+			name:    "invalid mode reports validation error",
+			argv:    []string{"deploy", "--partial=fuzzy"},
+			wantErr: true,
+		},
+		{
+			name:    "combines with other flags",
+			argv:    []string{"deploy", "--partial=prefix", "--code", "--distance", "200", "--json"},
+			partial: search.PartialModePrefix,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := parseArguments(tt.argv)
+			if tt.wantErr {
+				if args.PartialErr == nil {
+					t.Fatal("PartialErr = nil, want validation error")
+				}
+				return
+			}
+			if args.PartialErr != nil {
+				t.Fatalf("PartialErr = %v, want nil", args.PartialErr)
+			}
+			if args.Partial != tt.partial {
+				t.Errorf("Partial = %q, want %q", args.Partial, tt.partial)
+			}
+		})
+	}
+}
+
+func TestCLIArgumentsCanonicalTerms(t *testing.T) {
+	root := t.TempDir()
+	fixture := filepath.Join(root, "service.md")
+
+	args := parseArguments([]string{
+		"ms-**-api",
+		"MS-*-API",
+		"--startdir", root,
+		"--only", "md",
+	})
+	if !slicesEqual(args.SearchWords, []string{"ms-*-api"}) {
+		t.Fatalf("SearchWords = %q, want [ms-*-api]", args.SearchWords)
+	}
+
+	engine := newSilentSearchEngine(args)
+	if !slicesEqual(engine.SearchWords, []string{"ms-*-api"}) {
+		t.Fatalf("engine SearchWords = %q, want [ms-*-api]", engine.SearchWords)
+	}
+
+	out := captureCLIStdout(t, func() int { return runJSON(args) })
+	var result jsonOutput
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("decode JSON output: %v", err)
+	}
+	if !slicesEqual(result.Query.Terms, []string{"ms-*-api"}) {
+		t.Errorf("JSON query terms = %q, want [ms-*-api]", result.Query.Terms)
+	}
+
+	lastExcerptInnerWidth = 0
+	lastContentHeight = 0
+	view := (model{
+		results: []search.SearchResult{{
+			FilePath:     fixture,
+			Score:        len("ms-*-api"),
+			TermCount:    1,
+			MatchedTerms: []string{"ms-*-api"},
+			Excerpts:     []string{"ms-option-api"},
+		}},
+		width:           200,
+		height:          60,
+		searchWords:     args.SearchWords,
+		totalFiles:      1,
+		confirmSelected: "yes",
+	}).View()
+	if !strings.Contains(view, "(1/1 terms)") {
+		t.Errorf("TUI did not use canonical term denominator:\n%s", view)
+	}
+}
+
+func TestParseArguments_StartDir_Accepted(t *testing.T) {
+	args := parseArguments([]string{"foo", "--startdir", "/home/user/project", "bar"})
+	expected := filepath.Clean("/home/user/project")
+	if args.StartDir != expected {
+		t.Errorf("expected StartDir=%q, got %q", expected, args.StartDir)
+	}
+	if len(args.SearchWords) != 2 {
+		t.Errorf("expected 2 search words, got %v", args.SearchWords)
+	}
+}
+
+func TestParseArguments_StartDir_NormalizesTrailingSlash(t *testing.T) {
+	args := parseArguments([]string{"foo", "--startdir", "/home/user/project/", "bar"})
+	// filepath.Clean should remove trailing slash
+	if args.StartDir == "/home/user/project/" {
+		t.Errorf("expected trailing slash to be cleaned, got %q", args.StartDir)
+	}
+}
+
+func TestParseArguments_StartDir_RejectsWildcard(t *testing.T) {
+	args := parseArguments([]string{"foo", "--startdir", "/home/user/proj*"})
+	// Invalid startdir should not be stored; StartDirErr should be set
+	if args.StartDirErr == nil {
+		t.Error("expected StartDirErr to be set for wildcard path, got nil")
+	}
+}
+
+func TestParseArguments_StartDir_RejectsSemicolon(t *testing.T) {
+	args := parseArguments([]string{"foo", "--startdir", "/home;bad"})
+	if args.StartDirErr == nil {
+		t.Error("expected StartDirErr to be set for semicolon injection, got nil")
+	}
+}
+
+func TestParseArguments_StartDir_NotProvided(t *testing.T) {
+	args := parseArguments([]string{"foo", "bar"})
+	if args.StartDir != "" {
+		t.Errorf("expected empty StartDir when not provided, got %q", args.StartDir)
+	}
+	if args.StartDirErr != nil {
+		t.Errorf("expected nil StartDirErr when not provided, got %v", args.StartDirErr)
+	}
+}
+
+func TestParseArguments_PathScope_Accepted(t *testing.T) {
+	args := parseArguments([]string{"foo", "--pathscope", "*/backend/*,tests/*"})
+	if len(args.PathScope) != 2 {
+		t.Errorf("expected 2 path scope segments, got %v", args.PathScope)
+	}
+	if args.PathScope[0] != "*/backend/*" {
+		t.Errorf("expected first segment '*/backend/*', got %q", args.PathScope[0])
+	}
+	if args.PathScope[1] != "tests/*" {
+		t.Errorf("expected second segment 'tests/*', got %q", args.PathScope[1])
+	}
+}
+
+func TestParseArguments_PathScope_RejectsExtension(t *testing.T) {
+	// Dots are valid in pathscope -- treated as part of dir/filename.
+	// garp always runs; CLI help warns users to use --not/--only instead.
+	args := parseArguments([]string{"foo", "--pathscope", "*/backend/*.cs"})
+	if args.PathScopeErr != nil {
+		t.Errorf("unexpected PathScopeErr for dotted segment: %v", args.PathScopeErr)
+	}
+	if len(args.PathScope) != 1 {
+		t.Errorf("expected 1 scope segment, got %v", args.PathScope)
+	}
+}
+
+func TestParseArguments_PathScope_RejectsRegex(t *testing.T) {
+	args := parseArguments([]string{"foo", "--pathscope", "*/backend/[Aa]ssembly"})
+	if args.PathScopeErr == nil {
+		t.Error("expected PathScopeErr for regex bracket, got nil")
+	}
+}
+
+func TestParseArguments_PathScope_NotProvided(t *testing.T) {
+	args := parseArguments([]string{"foo", "bar"})
+	if len(args.PathScope) != 0 {
+		t.Errorf("expected empty PathScope when not provided, got %v", args.PathScope)
+	}
+	if args.PathScopeErr != nil {
+		t.Errorf("expected nil PathScopeErr when not provided, got %v", args.PathScopeErr)
+	}
+}
+
+func TestParseArguments_BothFlags_WorkTogether(t *testing.T) {
+	args := parseArguments([]string{
+		"assembly", "main",
+		"--startdir", "/home/user/project",
+		"--pathscope", "*/backend/*/Assembly",
+		"--code",
+	})
+	expectedStartDir := filepath.Clean("/home/user/project")
+	if args.StartDir != expectedStartDir {
+		t.Errorf("unexpected StartDir: %q", args.StartDir)
+	}
+	if len(args.PathScope) != 1 || args.PathScope[0] != "*/backend/*/Assembly" {
+		t.Errorf("unexpected PathScope: %v", args.PathScope)
+	}
+	if !args.IncludeCode {
+		t.Error("expected IncludeCode=true")
+	}
+	if len(args.SearchWords) != 2 {
+		t.Errorf("expected 2 search words, got %v", args.SearchWords)
+	}
+}
+
+func TestParseArguments_StartDir_WithEquals(t *testing.T) {
+	args := parseArguments([]string{"foo", "--startdir=/home/user/project"})
+	if args.ParseErr != nil {
+		t.Fatalf("ParseErr = %v, want nil", args.ParseErr)
+	}
+	if want := filepath.Clean("/home/user/project"); args.StartDir != want {
+		t.Errorf("StartDir = %q, want %q", args.StartDir, want)
+	}
+}
+
+func TestParseArgumentsStartDirs(t *testing.T) {
+	args := parseArguments([]string{
+		"needle",
+		"--startdir", "first, second",
+	})
+	if args.ParseErr != nil {
+		t.Fatal(args.ParseErr)
+	}
+	if !args.StartDirProvided {
+		t.Fatal("StartDirProvided = false")
+	}
+	if len(args.StartDirs) != 1 || args.StartDirs[0] != "first, second" {
+		t.Fatalf("StartDirs = %q", args.StartDirs)
+	}
+	if args.StartDir != filepath.Clean("first") {
+		t.Fatalf("StartDir = %q, want first compatibility value", args.StartDir)
+	}
+}
+
+func TestParseArgumentsStrict_DefaultsFalse(t *testing.T) {
+	args := parseArguments([]string{"term1", "term2", "term3"})
+	if args.Strict {
+		t.Error("Strict = true without --strict, want false")
+	}
+}
+
+func TestParseArgumentsStrict_Enabled(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		extra []string
+	}{
+		{name: "alone"},
+		{name: "with output and search flags", extra: []string{"--json", "--plain", "--code", "--distance", "321"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := parseArguments(append([]string{"term1", "term2", "term3", "--strict"}, tt.extra...))
+			if args.ParseErr != nil {
+				t.Fatal(args.ParseErr)
+			}
+			if !args.Strict {
+				t.Error("Strict = false with --strict, want true")
+			}
+			if len(tt.extra) > 0 {
+				if !args.JSONOutput || !args.PlainOutput || !args.IncludeCode || args.Distance != 321 {
+					t.Errorf("combined output/search flags not preserved: %+v", args)
+				}
+			}
+		})
+	}
+}
+
+func TestParseArgumentsFlagValueFormsAndErrors(t *testing.T) {
 	t.Run("space and equals value forms", func(t *testing.T) {
 		space := parseArguments([]string{
 			"needle", "--distance", "12", "--workers", "3", "--heavy-concurrency", "2",

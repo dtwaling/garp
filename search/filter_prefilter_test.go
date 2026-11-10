@@ -1,8 +1,9 @@
-package search_test
+package search
 
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"garp/search"
 )
 
 // These fixtures contain encoded terms invisible to raw-byte matching. Reuse the real
@@ -41,21 +40,21 @@ func TestEncodedBinarySearchPipeline(t *testing.T) {
 			for _, tc := range []struct {
 				name           string
 				words, exclude []string
-				partial        search.PartialMode
+				partial        PartialMode
 				want           int
 			}{
 				{name: "subject", words: []string{"subject"}, want: 1},
 				{name: "body", words: []string{"body"}, want: 1},
 				{name: "case insensitive", words: []string{"SUBJECT", "BODY"}, want: 1},
 				{name: "wildcards", words: []string{"subj*", "bo?y"}, want: 1},
-				{name: "partial", words: []string{"subj", "bod"}, partial: search.PartialModePrefix, want: 1},
+				{name: "partial", words: []string{"subj", "bod"}, partial: PartialModePrefix, want: 1},
 				{name: "absent primary", words: []string{"unfindableterm"}},
 				{name: "absent secondary", words: []string{"subject", "unfindableterm"}},
 				{name: "decoded exclusion", words: []string{"subject"}, exclude: []string{"body"}},
 			} {
 				for _, strict := range []bool{false, true} {
 					t.Run(fmt.Sprintf("%s/strict=%t", tc.name, strict), func(t *testing.T) {
-						engine := search.NewSearchEngineWithWorkers(tc.words, tc.exclude, nil, false, 1, 5000, 1)
+						engine := NewSearchEngineWithWorkers(tc.words, tc.exclude, nil, false, 1, 5000, 1)
 						engine.StartDir, engine.Silent = root, true
 						engine.Strict, engine.Partial, engine.Distance = strict, tc.partial, 10000
 						// Explicit Stage 2 assertions prevent Stage 3 from masking a
@@ -187,7 +186,7 @@ func TestBinaryPrefilterStrictnessAndRelaxedStrategyA(t *testing.T) {
 				t.Fatalf("write candidate: %v", err)
 			}
 
-			found, decided := search.BinaryStreamingPrefilterRankedDecided(path, words, 0, tt.strict)
+			found, decided := BinaryStreamingPrefilterRankedDecided(path, words, 0, tt.strict)
 			if !decided {
 				t.Fatal("complete unencoded mail scan must be decisive")
 			}
@@ -204,7 +203,7 @@ func TestBinaryPrefilterCompatibilityWrapperIsStrict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	found, decided := search.BinaryStreamingPrefilterDecided(
+	found, decided := BinaryStreamingPrefilterDecided(
 		path, []string{"primary", "secondary", "missing"}, 0,
 	)
 	if found || !decided {
@@ -223,14 +222,18 @@ func TestBinaryPrefilterEncodingGates(t *testing.T) {
 						t.Fatal(err)
 					}
 					for _, capBytes := range []int64{0, int64(len(content))} {
-						found, decided := search.BinaryStreamingPrefilterDecided(path, []string{"missing"}, capBytes)
+						found, decided := BinaryStreamingPrefilterDecided(path, []string{"missing"}, capBytes)
 						if found || decided {
 							t.Fatalf("encoded miss = (%v, %v), want (false, false)", found, decided)
 						}
-						found, decided = search.BinaryStreamingPrefilterDecided(path, []string{"available"}, capBytes)
+						found, decided = BinaryStreamingPrefilterDecided(path, []string{"available"}, capBytes)
 						if !found || !decided {
 							t.Fatalf("encoded raw hit = (%v, %v), want (true, true)", found, decided)
 						}
+					}
+					paths, err := FindFilesWithFirstWordProgress([]string{"missing"}, nil, 1, nil, filepath.Dir(path), nil)
+					if err != nil || len(paths) != 1 || paths[0] != path {
+						t.Fatalf("encoded admission=%v err=%v", paths, err)
 					}
 				})
 			}
@@ -274,18 +277,24 @@ func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, capBytes := range []int64{0, int64(len(tc.content)), int64(len(tc.content) + 1)} {
-				found, decided := search.BinaryStreamingPrefilterDecided(path, []string{tc.word}, capBytes)
+				found, decided := BinaryStreamingPrefilterDecided(path, []string{tc.word}, capBytes)
 				if found != tc.found || decided != tc.decided {
 					t.Fatalf("cap=%d: got (%v, %v), want (%v, %v)", capBytes, found, decided, tc.found, tc.decided)
 				}
 			}
-			found, decided := search.BinaryStreamingPrefilterDecided(path, []string{"missing"}, 1)
+			found, decided := BinaryStreamingPrefilterDecided(path, []string{"missing"}, 1)
 			if found || decided {
 				t.Fatalf("capped miss = (%v, %v), want (false, false)", found, decided)
 			}
+			if !tc.decided {
+				paths, err := FindFilesWithFirstWordProgress([]string{tc.word}, nil, 1, nil, filepath.Dir(path), nil)
+				if err != nil || len(paths) != 1 || paths[0] != path {
+					t.Fatalf("undecided admission=%v err=%v", paths, err)
+				}
+			}
 			if tc.word == "PDF" || tc.word == "café" || tc.word == "R&D" {
 				for _, strict := range []bool{false, true} {
-					engine := search.NewSearchEngineWithWorkers([]string{tc.word}, nil, nil, false, 1, 5000, 1)
+					engine := NewSearchEngineWithWorkers([]string{tc.word}, nil, nil, false, 1, 5000, 1)
 					engine.StartDir, engine.Silent, engine.Strict = filepath.Dir(path), true, strict
 					matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
 					if err != nil || len(matches) != 1 {
@@ -310,23 +319,23 @@ func TestBinaryWildcardChunkBoundaryAndIncompleteBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	found, decided := search.BinaryStreamingPrefilterRankedDecidedPartial(
+	found, decided := BinaryStreamingPrefilterRankedDecidedPartial(
 		path,
 		[]string{term, "unavailable-secondary", "short"},
 		int64(len(content)),
 		false,
-		search.PartialModeOff,
+		PartialModeOff,
 	)
 	if !found || !decided {
 		t.Fatalf("relaxed wildcard binary result = (%v, %v), want (true, true)", found, decided)
 	}
 
-	found, decided = search.BinaryStreamingPrefilterRankedDecidedPartial(
+	found, decided = BinaryStreamingPrefilterRankedDecidedPartial(
 		path,
 		[]string{term, "missing"},
 		chunkSize,
 		true,
-		search.PartialModeOff,
+		PartialModeOff,
 	)
 	if found || decided {
 		t.Fatalf("incomplete binary budget = (%v, %v), want (false, false)", found, decided)
@@ -354,8 +363,8 @@ func TestBinaryXMLWildcardChunkBoundary(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "candidate"+tt.extension)
 			writeXMLContainer(t, path, tt.entry, content)
 
-			found, decided := search.BinaryStreamingPrefilterRankedDecidedPartial(
-				path, []string{tt.term, "anchor"}, int64(len(content)), true, search.PartialModeOff,
+			found, decided := BinaryStreamingPrefilterRankedDecidedPartial(
+				path, []string{tt.term, "anchor"}, int64(len(content)), true, PartialModeOff,
 			)
 			if !found || !decided {
 				t.Fatalf("XML wildcard result = (%v, %v), want (true, true)", found, decided)
@@ -391,7 +400,7 @@ func TestBinaryXMLMissingTermCapDecision(t *testing.T) {
 
 			for _, cap := range caps {
 				t.Run(cap.name, func(t *testing.T) {
-					found, decided := search.BinaryStreamingPrefilterDecided(
+					found, decided := BinaryStreamingPrefilterDecided(
 						path, []string{"available", "missing"}, cap.bytes,
 					)
 					if found || decided != cap.wantDecided {
@@ -415,19 +424,517 @@ func TestBinaryDiscoveryPrefiltersOnlyPrimary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files, err := search.FindFilesWithFirstWordProgressPartial(
+	files, err := FindFilesWithFirstWordProgressPartial(
 		[]string{"primary", "missing-secondary"},
 		nil,
 		1,
 		nil,
 		dir,
 		nil,
-		search.PartialModeOff,
+		PartialModeOff,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(files) != 1 || files[0] != path {
 		t.Fatalf("binary discovery files = %v, want [%s]", files, path)
+	}
+}
+
+func TestBinaryPrefilterPlainMissCapBoundary(t *testing.T) {
+	for _, ext := range []string{".eml", ".mbox", ".rtf"} {
+		capBytes := 256 * 1024
+		if ext == ".rtf" {
+			capBytes = 2 * 1024 * 1024
+		}
+		for _, delta := range []int{-1, 0, 1} {
+			t.Run(fmt.Sprintf("%s/size=cap%+d", ext, delta), func(t *testing.T) {
+				root := t.TempDir()
+				path := filepath.Join(root, "plain"+ext)
+				content := strings.Repeat(" ", capBytes+delta)
+				if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+				found, decided := BinaryStreamingPrefilterDecided(path, []string{"missing"}, int64(capBytes))
+				if found || decided != (delta <= 0) {
+					t.Fatalf("decision=(%v,%v), delta=%d", found, decided, delta)
+				}
+				engine := NewSearchEngineWithWorkers([]string{"missing"}, nil, nil, false, 1, 5000, 1)
+				engine.StartDir, engine.Silent, engine.Strict = root, true, true
+				paths, total, err := engine.DiscoverCandidates(1)
+				want := 0
+				if delta > 0 {
+					want = 1
+				}
+				if err != nil || len(paths) != want {
+					t.Fatalf("discovery=%v err=%v, want %d candidates", paths, err, want)
+				}
+				matches, err := engine.FilterCandidates(paths, total, time.Now())
+				if err != nil || len(matches) != 0 {
+					t.Fatalf("Stage 2 matches=%v err=%v, want no matches", matches, err)
+				}
+			})
+		}
+	}
+}
+
+func TestCheckTextContainsAllWordsPartial(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		words    []string
+		distance int
+		partial  PartialMode
+		want     bool
+	}{
+		{name: "prefix uses captured token start for distance", text: "_deployment service", words: []string{"deploy", "service"}, distance: 11, partial: PartialModePrefix, want: true},
+		{name: "off rejects derivative", text: "_deployment service", words: []string{"deploy", "service"}, distance: 50, partial: PartialModeOff, want: false},
+		{name: "prefix accepts derivative", text: "_deployment service", words: []string{"deploy", "service"}, distance: 50, partial: PartialModePrefix, want: true},
+		{name: "contains accepts derivative", text: "_deployment service", words: []string{"deploy", "service"}, distance: 50, partial: PartialModeContains, want: true},
+		{name: "inline glob expands while off", text: "deployment service", words: []string{"deploy*", "service"}, distance: 50, partial: PartialModeOff, want: true},
+		{name: "prefix rejects internal substring", text: "redeploy service", words: []string{"deploy", "service"}, distance: 50, partial: PartialModePrefix, want: false},
+		{name: "contains accepts internal substring", text: "redeploy service", words: []string{"deploy", "service"}, distance: 50, partial: PartialModeContains, want: true},
+		{name: "distance remains bounded", text: "deploying " + strings.Repeat("x", 300) + " service", words: []string{"deploy", "service"}, distance: 100, partial: PartialModePrefix, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CheckTextContainsAllWordsPartial(tt.text, tt.words, tt.distance, tt.partial); got != tt.want {
+				t.Fatalf("CheckTextContainsAllWordsPartial() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPartialStreamingPrefilters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "candidate.eml")
+	if err := os.WriteFile(path, []byte(".deployment service"), 0o600); err != nil {
+		t.Fatalf("write candidate: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name    string
+		words   []string
+		partial PartialMode
+		want    bool
+	}{
+		{name: "off rejects derivative", words: []string{"deploy", "service"}, partial: PartialModeOff, want: false},
+		{name: "prefix accepts derivative", words: []string{"deploy", "service"}, partial: PartialModePrefix, want: true},
+		{name: "glob expands while off", words: []string{"deploy*", "service"}, partial: PartialModeOff, want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			found, decided := BinaryStreamingPrefilterDecidedPartial(path, tt.words, 0, tt.partial)
+			if !decided {
+				t.Fatal("complete unencoded mail scan must be decisive")
+			}
+			if found != tt.want {
+				t.Fatalf("BinaryStreamingPrefilterDecidedPartial() = %v, want %v", found, tt.want)
+			}
+		})
+	}
+
+	underscorePath := filepath.Join(t.TempDir(), "underscore.eml")
+	if err := os.WriteFile(underscorePath, []byte("_deployment service"), 0o600); err != nil {
+		t.Fatalf("write underscore candidate: %v", err)
+	}
+	found, decided := BinaryStreamingPrefilterDecidedPartial(
+		underscorePath,
+		[]string{"deploy", "service"},
+		0,
+		PartialModePrefix,
+	)
+	if !decided || !found {
+		t.Fatalf("plain prefix underscore fixture = found:%v decided:%v, want true/true", found, decided)
+	}
+}
+
+func TestSearchEngineThreadsPartialModeThroughDiscoveryAndFiltering(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "candidate.txt"), []byte("_deployment service"), 0o600); err != nil {
+		t.Fatalf("write candidate: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name    string
+		partial PartialMode
+		want    int
+	}{
+		{name: "off rejects derivative at discovery", partial: PartialModeOff, want: 0},
+		{name: "prefix retains derivative through stage two", partial: PartialModePrefix, want: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := NewSearchEngineWithWorkers([]string{"deploy", "service"}, nil, []string{"-g", "*.txt"}, false, 1, 1000, 1)
+			engine.StartDir = root
+			engine.Distance = 50
+			engine.Partial = tt.partial
+			engine.Silent = true
+
+			results, err := engine.Execute()
+			if err != nil {
+				t.Fatalf("Execute() error: %v", err)
+			}
+			if len(results) != tt.want {
+				t.Fatalf("result count = %d, want %d", len(results), tt.want)
+			}
+		})
+	}
+}
+
+type errorAfterDataReader struct {
+	data []byte
+	err  error
+	read bool
+}
+
+func (r *errorAfterDataReader) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, r.err
+	}
+	r.read = true
+	return copy(p, r.data), r.err
+}
+
+func TestStreamQueryReadErrorDecision(t *testing.T) {
+	readErr := errors.New("injected read failure")
+
+	t.Run("unproven match remains undecided", func(t *testing.T) {
+		query := compileQuery([]string{"missing"}, PartialModeOff)
+		found, complete, err := streamMatchesQuery(
+			&errorAfterDataReader{data: []byte("partial data"), err: readErr},
+			query,
+			true,
+			1024,
+		)
+		gotFound, gotDecided := decideStreamQueryResult(found, complete, err, true)
+		if gotFound || gotDecided {
+			t.Fatalf("read error result = (%v, %v), want (false, false)", gotFound, gotDecided)
+		}
+	})
+
+	t.Run("proven match survives read error", func(t *testing.T) {
+		query := compileQuery([]string{"needle"}, PartialModeOff)
+		found, complete, err := streamMatchesQuery(
+			&errorAfterDataReader{data: []byte("needle"), err: readErr},
+			query,
+			true,
+			1024,
+		)
+		gotFound, gotDecided := decideStreamQueryResult(found, complete, err, true)
+		if !gotFound || !gotDecided {
+			t.Fatalf("proven match result = (%v, %v), want (true, true)", gotFound, gotDecided)
+		}
+	})
+}
+
+func TestReaderValidatedEOF(t *testing.T) {
+	readErr := errors.New("injected checksum failure")
+
+	t.Run("validated EOF", func(t *testing.T) {
+		if !readerValidatedEOF(strings.NewReader("")) {
+			t.Fatal("empty reader did not validate EOF")
+		}
+	})
+	t.Run("understated size exposes more data", func(t *testing.T) {
+		if readerValidatedEOF(strings.NewReader("x")) {
+			t.Fatal("reader with remaining data validated EOF")
+		}
+	})
+	t.Run("checksum failure remains undecided", func(t *testing.T) {
+		if readerValidatedEOF(&errorAfterDataReader{err: readErr}) {
+			t.Fatal("reader error validated EOF")
+		}
+	})
+}
+
+func TestStreamPrefilterOpenFailureIsUndecided(t *testing.T) {
+	missingText := filepath.Join(t.TempDir(), "missing.txt")
+	missingEmail := filepath.Join(t.TempDir(), "missing.eml")
+	missingRTF := filepath.Join(t.TempDir(), "missing.rtf")
+
+	tests := []struct {
+		name string
+		run  func() (bool, bool)
+	}{
+		{
+			name: "all words text",
+			run: func() (bool, bool) {
+				return StreamContainsAllWordsDecided(missingText, []string{"needle"})
+			},
+		},
+		{
+			name: "ranked text",
+			run: func() (bool, bool) {
+				return StreamContainsRankedWordsDecided(missingText, []string{"needle", "anchor"}, true)
+			},
+		},
+		{
+			name: "capped stream",
+			run: func() (bool, bool) {
+				return StreamContainsAllWordsDecidedWithCap(missingText, []string{"needle"}, 1024)
+			},
+		},
+		{
+			name: "email binary",
+			run: func() (bool, bool) {
+				return BinaryStreamingPrefilterDecided(missingEmail, []string{"needle"}, 1024)
+			},
+		},
+		{
+			name: "RTF binary",
+			run: func() (bool, bool) {
+				return BinaryStreamingPrefilterDecided(missingRTF, []string{"needle"}, 1024)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			found, decided := tt.run()
+			if found || decided {
+				t.Fatalf("open failure result = (%v, %v), want (false, false)", found, decided)
+			}
+		})
+	}
+}
+
+func TestStreamContainsRankedWordsDecided(t *testing.T) {
+	dir := t.TempDir()
+	words := []string{"alpha", "beta", "gamma"}
+	tests := []struct {
+		name   string
+		text   string
+		strict bool
+		found  bool
+	}{
+		{
+			name:  "relaxed mode accepts primary and tertiary",
+			text:  "alpha gamma",
+			found: true,
+		},
+		{
+			name:  "relaxed mode rejects primary alone",
+			text:  "alpha",
+			found: false,
+		},
+		{
+			name:  "relaxed mode rejects missing primary",
+			text:  "beta gamma",
+			found: false,
+		},
+		{
+			name:   "strict mode rejects missing secondary",
+			text:   "alpha gamma",
+			strict: true,
+			found:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "-")+".txt")
+			if err := os.WriteFile(path, []byte(tt.text), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			found, decided := StreamContainsRankedWordsDecided(path, words, tt.strict)
+			if !decided {
+				t.Fatal("small text file prefilter was inconclusive")
+			}
+			if found != tt.found {
+				t.Fatalf("found = %v, want %v", found, tt.found)
+			}
+		})
+	}
+}
+
+func TestCheckFileContainsRankedWords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "candidate.txt")
+	if err := os.WriteFile(path, []byte("alpha gamma"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	score, count, terms, span, ok, err := CheckFileContainsRankedWords(path, []string{"alpha", "beta", "gamma"}, 20, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || score != 10 || count != 2 || strings.Join(terms, ",") != "alpha,gamma" || span != 11 {
+		t.Fatalf("ranked file match = (%d, %d, %v, %d, %v), want (10, 2, [alpha gamma], 11, true)", score, count, terms, span, ok)
+	}
+}
+
+func TestStreamReaders(t *testing.T) {
+	const chunkSize = 64 * 1024
+	const defaultTextCap = 5 << 20
+	for _, tt := range []struct {
+		name, content  string
+		found, decided bool
+	}{
+		{"MatchAcrossChunkBoundary", strings.Repeat("x", chunkSize-3) + " alpha beta", true, true},
+		{"StopAtDefaultTextCap", strings.Repeat(" ", defaultTextCap) + "alpha beta", false, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "candidate.txt")
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			words := []string{"alpha", "beta"}
+			for _, reader := range []string{"all-words", "ranked"} {
+				t.Run(reader, func(t *testing.T) {
+					var found, decided bool
+					if reader == "all-words" {
+						found, decided = StreamContainsAllWordsDecided(path, words)
+					} else {
+						found, decided = StreamContainsRankedWordsDecided(path, words, true)
+					}
+					if found != tt.found || decided != tt.decided {
+						t.Fatalf("match = (%v, %v), want (%v, %v)", found, decided, tt.found, tt.decided)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestStreamWildcardChunkBoundaryStrictAndRelaxed(t *testing.T) {
+	const chunkSize = 64 * 1024
+	shortTerm, shortMatch := wildcardExpansionFixture(120)
+	maxTerm, maxMatch := maximumWildcardFixture()
+
+	tests := []struct {
+		name    string
+		words   []string
+		strict  bool
+		content string
+		want    bool
+	}{
+		{
+			name:    "strict primary 120 byte expansion",
+			words:   []string{shortTerm, "anchor"},
+			strict:  true,
+			content: wildcardAcrossBoundary(shortMatch, chunkSize) + " anchor",
+			want:    true,
+		},
+		{
+			name:    "strict secondary maximum 272 bytes",
+			words:   []string{"anchor", maxTerm},
+			strict:  true,
+			content: wildcardAcrossBoundaryWithLeadingText("anchor ", maxMatch, chunkSize),
+			want:    true,
+		},
+		{
+			name:    "relaxed primary maximum 272 bytes",
+			words:   []string{maxTerm, "unavailable-secondary", "short"},
+			content: wildcardAcrossBoundary(maxMatch, chunkSize) + " short",
+			want:    true,
+		},
+		{
+			name:    "relaxed secondary 120 byte expansion",
+			words:   []string{"anchor", "unavailable-secondary", shortTerm},
+			content: wildcardAcrossBoundaryWithLeadingText("anchor ", shortMatch, chunkSize),
+			want:    true,
+		},
+		{
+			name:    "rejects maximum 272 byte match attached to leading word byte across boundary",
+			words:   []string{maxTerm, "anchor"},
+			strict:  true,
+			content: wildcardAttachedAcrossBoundary(maxMatch, chunkSize) + " anchor",
+			want:    false,
+		},
+		{
+			name:    "rejects artificial leading boundary at retained overlap start",
+			words:   []string{maxTerm, "anchor"},
+			strict:  true,
+			content: wildcardAttachedAtOverlapStart(maxMatch, chunkSize, len(maxMatch)+1) + " anchor",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "candidate.txt")
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			found, decided := StreamContainsRankedWordsDecidedPartial(
+				path, tt.words, tt.strict, PartialModeOff,
+			)
+			if found != tt.want || !decided {
+				t.Fatalf("wildcard stream result = (%v, %v), want (%v, true)", found, decided, tt.want)
+			}
+		})
+	}
+}
+
+func TestStreamWildcardChunkBoundaryWithCap(t *testing.T) {
+	const chunkSize = 64 * 1024
+	term, match := maximumWildcardFixture()
+	content := wildcardAcrossBoundary(match, chunkSize) + " anchor"
+	path := filepath.Join(t.TempDir(), "candidate.txt")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	found, decided := StreamContainsAllWordsDecidedWithCapPartial(
+		path, []string{term, "anchor"}, int64(len(content)), PartialModeOff,
+	)
+	if !found || !decided {
+		t.Fatalf("complete capped wildcard result = (%v, %v), want (true, true)", found, decided)
+	}
+
+	found, decided = StreamContainsAllWordsDecidedWithCapPartial(
+		path, []string{term, "missing"}, chunkSize, PartialModeOff,
+	)
+	if found || decided {
+		t.Fatalf("incomplete capped result = (%v, %v), want (false, false)", found, decided)
+	}
+}
+
+func wildcardExpansionFixture(expansion int) (term string, match string) {
+	return "left*right", "left" + strings.Repeat("x", expansion) + "right"
+}
+
+func maximumWildcardFixture() (term string, match string) {
+	segments := []string{
+		strings.Repeat("a", 26),
+		strings.Repeat("b", 26),
+		strings.Repeat("c", 26),
+		strings.Repeat("d", 25),
+		strings.Repeat("e", 25),
+	}
+	questions := strings.Repeat("?", 16)
+	questionMatch := strings.Repeat("q", 16)
+	term = segments[0] + "*" + segments[1] + "*" + segments[2] + "*" +
+		segments[3] + "*" + questions + segments[4]
+	match = segments[0] + strings.Repeat("1", 32) +
+		segments[1] + strings.Repeat("2", 32) +
+		segments[2] + strings.Repeat("3", 32) +
+		segments[3] + strings.Repeat("4", 32) +
+		questionMatch + segments[4]
+	return term, match
+}
+
+func wildcardAcrossBoundary(match string, boundary int) string {
+	return wildcardAcrossBoundaryWithLeadingText("", match, boundary)
+}
+
+func wildcardAcrossBoundaryWithLeadingText(leading, match string, boundary int) string {
+	start := boundary - len(match) + 1
+	return leading + strings.Repeat("z", start-1-len(leading)) + "!" + match + "!"
+}
+
+func wildcardAttachedAcrossBoundary(match string, boundary int) string {
+	start := boundary - len(match) + 1
+	return strings.Repeat("z", start-1) + "x" + match + "!"
+}
+
+func wildcardAttachedAtOverlapStart(match string, boundary, overlap int) string {
+	start := boundary - overlap
+	return strings.Repeat("z", start-1) + "x" + match + "!" + strings.Repeat("z", boundary-start-len(match))
+}
+
+func writeXMLContainer(t *testing.T, filePath, entryName, content string) {
+	t.Helper()
+	if err := os.WriteFile(filePath, readerAtZIP(t, entryName, content, 0), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

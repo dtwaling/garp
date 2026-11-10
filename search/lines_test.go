@@ -278,59 +278,27 @@ func TestLineIndexerLineOf(t *testing.T) {
 	}
 }
 
-func TestComputeExcerptLinesSingleTerm(t *testing.T) {
-	// 'needle' lives on line 3 (1-based).
-	raw := "line one\nline two\nhere is the needle right here\nline four"
-	query := compileQuery([]string{"needle"}, PartialModeOff)
-	starts := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0}), query, 0)
-	if len(starts) != 1 {
-		t.Fatalf("expected 1 start line, got %d", len(starts))
-	}
-	if starts[0] != 3 {
-		t.Errorf("start line = %d, want 3", starts[0])
-	}
-}
-
-func TestComputeExcerptLinesMultiTermStartsAtEarliest(t *testing.T) {
-	// 'alpha' on line 2, 'omega' on line 4 -> start line is the earliest term (line 2).
-	raw := "intro\nthe alpha begins\nmiddle filler line\nthe omega ends\noutro"
-	query := compileQuery([]string{"alpha", "omega"}, PartialModeOff)
-	starts := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0, 1}), query, 5000)
-	if starts[0] != 2 {
-		t.Errorf("start line = %d, want 2", starts[0])
-	}
-}
-
-func TestComputeExcerptLinesDisambiguatesRepeats(t *testing.T) {
-	// 'config' appears on lines 1 and 5; the rare term 'payload' (line 5) should pin the
-	// cluster to the second occurrence.
-	raw := "config header here\nbody\nmore body\nfiller\nconfig with payload inside\ntail"
-	query := compileQuery([]string{"config", "payload"}, PartialModeOff)
-	starts := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0, 1}), query, 5000)
-	if starts[0] != 5 {
-		t.Errorf("start line = %d, want 5 (second config cluster)", starts[0])
-	}
-}
-
-func TestComputeExcerptLinesMultipleExcerptsInOrder(t *testing.T) {
-	// Two clusters of 'target'; excerpts should map to them in document order.
-	raw := "target near top\nx\nx\nx\nx\nx\nx\nx\nx\nx\ntarget near bottom"
-	query := compileQuery([]string{"target"}, PartialModeOff)
-	starts := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0}, []int{0}), query, 200)
-	if starts[0] != 1 {
-		t.Errorf("excerpt 0 start line = %d, want 1", starts[0])
-	}
-	if starts[1] != 11 {
-		t.Errorf("excerpt 1 start line = %d, want 11", starts[1])
-	}
-}
-
-func TestComputeExcerptLinesNoTermLeavesUnknown(t *testing.T) {
-	raw := "nothing relevant here\nstill nothing"
-	query := compileQuery([]string{"absentword"}, PartialModeOff)
-	starts := computeExcerptSpanLinesQuery(raw, lineSpans(nil), query, 0)
-	if starts[0] != 0 {
-		t.Errorf("expected unknown (0), got %d", starts[0])
+func TestComputeExcerptLines(t *testing.T) {
+	for _, tt := range []struct {
+		name, raw string
+		words     []string
+		termSets  [][]int
+		distance  int
+		want      []int
+	}{
+		{"SingleTerm", "line one\nline two\nhere is the needle right here\nline four", []string{"needle"}, [][]int{{0}}, 0, []int{3}},
+		{"MultiTermStartsAtEarliest", "intro\nthe alpha begins\nmiddle filler line\nthe omega ends\noutro", []string{"alpha", "omega"}, [][]int{{0, 1}}, 5000, []int{2}},
+		{"DisambiguatesRepeats", "config header here\nbody\nmore body\nfiller\nconfig with payload inside\ntail", []string{"config", "payload"}, [][]int{{0, 1}}, 5000, []int{5}},
+		{"MultipleExcerptsInOrder", "target near top\nx\nx\nx\nx\nx\nx\nx\nx\nx\ntarget near bottom", []string{"target"}, [][]int{{0}, {0}}, 200, []int{1, 11}},
+		{"NoTermLeavesUnknown", "nothing relevant here\nstill nothing", []string{"absentword"}, [][]int{nil}, 0, []int{0}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			query := compileQuery(tt.words, PartialModeOff)
+			starts := computeExcerptSpanLinesQuery(tt.raw, lineSpans(tt.termSets...), query, tt.distance)
+			if !slices.Equal(starts, tt.want) {
+				t.Errorf("start lines = %v, want %v", starts, tt.want)
+			}
+		})
 	}
 }
 
@@ -413,9 +381,9 @@ func BenchmarkExcerptLinesManyLateMatches(b *testing.B) {
 	}
 }
 
-// Issue #32: removed occurrences and OCR-created tokens must not redirect a
+// Removed occurrences and OCR-created tokens must not redirect a
 // visible cluster to an unrelated raw occurrence or a stripped opening block.
-func TestIssue32TransformedLineAnchors(t *testing.T) {
+func TestStage3TransformedLineAnchors(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw string
 		terms     []string
@@ -438,7 +406,7 @@ func TestIssue32TransformedLineAnchors(t *testing.T) {
 	}
 }
 
-func TestIssue32FiveDistinctRankedAnchors(t *testing.T) {
+func TestStage3DistinctRankedChunkAnchors(t *testing.T) {
 	raw := "> proximity search hidden\n"
 	wantByMarker := make(map[string]int)
 	for i := 0; i < 5; i++ {
@@ -481,7 +449,7 @@ func TestIssue32FiveDistinctRankedAnchors(t *testing.T) {
 // Benchmark only line resolution, not cleaning/excerpt extraction. The stripped
 // script makes raw and cleaned occurrence counts differ, triggering the former
 // quadratic fallback. Keep setup outside the timer and assert every result.
-func BenchmarkIssue32ExcerptLines5MB(b *testing.B) {
+func BenchmarkComputeExcerptSpanLines5MB(b *testing.B) {
 	const size = 5_000_000
 	const prefix = "<script>alpha beta</script>\n"
 	const row = "alpha beta frequent terms padding.\n"
@@ -522,5 +490,291 @@ func TestComputeExcerptLinesNormalizedWhitespace(t *testing.T) {
 
 	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); len(got) != 1 || got[0] != 1 {
 		t.Fatalf("normalized whitespace line anchor = %v, want [1]", got)
+	}
+}
+
+func TestLinesPartialAnchorsDerivativeOnSourceLine(t *testing.T) {
+	raw := strings.Repeat("filler\n", 41) + "func run_deployment() {\n"
+	query := compileQuery([]string{"deploy"}, PartialModePrefix)
+	starts := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0}), query, 0)
+	if len(starts) != 1 {
+		t.Fatalf("expected one start line, got %d", len(starts))
+	}
+	if starts[0] != 42 {
+		t.Errorf("start line = %d, want 42", starts[0])
+	}
+}
+
+func TestPartialEmittedLinesKeepOccurrenceThroughExpansion(t *testing.T) {
+	raw := "header\nrun_deployment " + strings.Repeat("loose ", 30) + "ms-first-api.\n" +
+		strings.Repeat("padding line.\n", 100) + "run_deployment ms-last-api tight.\n"
+	query := compileQuery([]string{"deploy", "ms-*-api"}, PartialModePrefix)
+	spans := extractRankedExcerptSpansQuery(raw, query, 1, 2, 2, true, 5000)
+	if len(spans) != 1 || !strings.Contains(spans[0].text, "ms-last-api") {
+		t.Fatalf("expected later partial-match cluster: %#v", spans)
+	}
+	spans[0] = expandShortExcerptSpan(spans[0], 600)
+	if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, []int{103}) {
+		t.Fatalf("expanded partial anchors = %v, want [103]", got)
+	}
+}
+
+func TestInlineWildcardLineAnchorsUseExactRanges(t *testing.T) {
+	raw := "header\ncall ms-option-api\nuse MyOptionApiClient\ncall ms-x-api\n"
+	tests := []struct {
+		name    string
+		excerpt string
+		term    string
+		want    int
+	}{
+		{name: "internal star", excerpt: "call ms-option-api", term: "ms-*-api", want: 2},
+		{name: "leading and trailing stars", excerpt: "use MyOptionApiClient", term: "*OptionApi*", want: 3},
+		{name: "single byte question", excerpt: "call ms-x-api", term: "ms-?-api", want: 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := compileQuery([]string{tt.term}, PartialModeOff)
+			loc, ok := query.matchers[0].find(raw, 0)
+			if !ok {
+				t.Fatalf("authoritative match missing for %q", tt.term)
+			}
+			spans := []excerptSpan{{
+				text: tt.excerpt,
+				matches: []excerptMatch{{
+					matchRange: matchRange{start: 0, end: loc.end - loc.start},
+					source:     loc,
+					term:       0,
+				}},
+			}}
+			got := computeExcerptSpanLinesQuery(raw, spans, query, 200)
+			if len(got) != 1 || got[0] != tt.want {
+				t.Fatalf("line anchors = %v, want [%d]", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLineAnchorsDistinguishInvalidUTF8FromReplacementRune(t *testing.T) {
+	invalid := string([]byte{0xff})
+	raw := "invalid " + invalid + "\nreplacement \uFFFD\n"
+
+	invalidQuery := compileQuery([]string{invalid}, PartialModeOff)
+	invalidRange, ok := invalidQuery.matchers[0].find(raw, 0)
+	if !ok {
+		t.Fatal("invalid UTF-8 authoritative match missing")
+	}
+	invalidSpan := excerptSpan{matches: []excerptMatch{{source: invalidRange, term: 0}}}
+	if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{invalidSpan}, invalidQuery, 200); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("invalid UTF-8 line anchors = %v, want [1]", got)
+	}
+
+	replacementQuery := compileQuery([]string{"\uFFFD"}, PartialModeOff)
+	replacementRange, ok := replacementQuery.matchers[0].find(raw, 0)
+	if !ok {
+		t.Fatal("U+FFFD authoritative match missing")
+	}
+	replacementSpan := excerptSpan{matches: []excerptMatch{{source: replacementRange, term: 0}}}
+	if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{replacementSpan}, replacementQuery, 200); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("U+FFFD line anchors = %v, want [2]", got)
+	}
+}
+
+func TestLineAnchorsRetainAdjacentPunctuationMatches(t *testing.T) {
+	raw := ".\n..\n"
+	query := compileQuery([]string{"."}, PartialModeOff)
+	ranges := query.matchers[0].findAll(raw)
+	if len(ranges) != 3 {
+		t.Fatalf("authoritative punctuation ranges = %#v, want 3", ranges)
+	}
+	spans := make([]excerptSpan, len(ranges))
+	for i, loc := range ranges {
+		spans[i].matches = []excerptMatch{{source: loc, term: 0}}
+	}
+	got := computeExcerptSpanLinesQuery(raw, spans, query, 200)
+	want := []int{1, 2, 2}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("punctuation line anchors = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestExcerptLineAnchorsDoNotCreateBoundaryAtSliceStart(t *testing.T) {
+	raw := "myapi\napi\n"
+	query := compileQuery([]string{"api"}, PartialModeOff)
+	spans := []excerptSpan{
+		{text: "api"},
+		{
+			text: "api",
+			matches: []excerptMatch{{
+				matchRange: matchRange{start: 0, end: 3},
+				term:       0,
+			}},
+		},
+	}
+	if got, want := computeExcerptSpanLinesQuery(raw, spans, query, 200), []int{0, 2}; !slices.Equal(got, want) {
+		t.Fatalf("excerpt line anchors = %v, want %v", got, want)
+	}
+}
+
+func TestAuthoritativeLineAnchorSkipsSubstringOccurrence(t *testing.T) {
+	raw := "myapi\napi\n"
+	query := compileQuery([]string{"api"}, PartialModeOff)
+	if got := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0}), query, 200); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("authoritative line anchor = %v, want [2]", got)
+	}
+}
+
+func TestMultipartExcerptLinesKeepWideClusterIdentity(t *testing.T) {
+	raw := "header\nalpha " + strings.Repeat("loose ", 300) + "beta.\n" +
+		strings.Repeat("padding line.\n", 100) + "alpha " + strings.Repeat("tight ", 180) + "beta.\n"
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	spans := extractRankedExcerptSpansQuery(raw, query, 2, 2, 2, true, 5000)
+	if len(spans) != 2 || !strings.Contains(spans[0].text, " ... ") || !strings.Contains(spans[0].text, "tight") {
+		t.Fatalf("expected later multipart cluster first: %#v", spans)
+	}
+	if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, []int{103, 2}) {
+		t.Fatalf("multipart anchors = %v, want [103 2]", got)
+	}
+}
+
+func TestExcerptLineAnchorsFollowDistinctRawClusters(t *testing.T) {
+	raw := strings.Join([]string{
+		"header",
+		"needle deploy first cluster",
+		"between first and second",
+		"needle deploy second cluster",
+		"between second and third",
+		"needle deploy third cluster",
+	}, "\n")
+	query := compileQuery([]string{"needle", "deploy"}, PartialModeOff)
+	spans := lineSpans([]int{0, 1}, []int{0, 1}, []int{0, 1})
+	starts := computeExcerptSpanLinesQuery(raw, spans, query, 200)
+	want := []int{2, 4, 6}
+	if len(starts) != len(want) {
+		t.Fatalf("got %d anchors, want %d", len(starts), len(want))
+	}
+	lines := strings.Split(raw, "\n")
+	for i, start := range starts {
+		if start != want[i] {
+			t.Errorf("excerpt %d anchor = line %d, want line %d", i, start, want[i])
+		}
+		if i > 0 && start < starts[i-1] {
+			t.Errorf("excerpt %d anchor = line %d, before prior line %d", i, start, starts[i-1])
+		}
+		if i > 0 && start == starts[i-1] {
+			t.Errorf("excerpt %d reused line %d despite distinct raw clusters", i, start)
+		}
+		if start == 0 || start > len(lines) {
+			t.Errorf("excerpt %d has invalid anchor line %d", i, start)
+			continue
+		}
+		line := lines[start-1]
+		if !strings.Contains(line, "needle") && !strings.Contains(line, "deploy") {
+			t.Errorf("excerpt %d anchor line %d does not contain an excerpt term: %q", i, start, line)
+		}
+	}
+}
+
+func TestExcerptLineAnchorsMayRepeatOnSingleLine(t *testing.T) {
+	raw := "needle deploy first cluster; needle deploy second cluster; needle deploy third cluster"
+	query := compileQuery([]string{"needle", "deploy"}, PartialModeOff)
+	spans := lineSpans([]int{0, 1}, []int{0, 1}, []int{0, 1})
+	starts := computeExcerptSpanLinesQuery(raw, spans, query, 200)
+	if len(starts) != len(spans) {
+		t.Fatalf("got %d anchors, want %d", len(starts), len(spans))
+	}
+	for i, start := range starts {
+		if start != 1 {
+			t.Errorf("excerpt %d anchor = line %d, want line 1 for a single-line file", i, start)
+		}
+		if i > 0 && start < starts[i-1] {
+			t.Errorf("excerpt %d anchor = line %d, before prior line %d", i, start, starts[i-1])
+		}
+	}
+}
+
+func TestStage3MappedCleaning(t *testing.T) {
+	raw := "<style>hidden</style>\n<script>hidden</script>\n> hidden\n-----\n<b>é</b> A1,2B\tend\xff\n"
+	for _, isCode := range []bool{false, true} {
+		mapped := cleanStage3Content(raw, isCode)
+		want := "é A 1, 2 B end\xff"
+		if isCode {
+			want = CleanContentCode(raw)
+		}
+		if mapped.text != want || len(mapped.offsets) != len(mapped.text) {
+			t.Fatalf("code=%t: mapped=%q offsets=%d, want %q", isCode, mapped.text, len(mapped.offsets), want)
+		}
+		for i, offset := range mapped.offsets {
+			if offset < 0 || offset >= len(raw) || i > 0 && offset < mapped.offsets[i-1] {
+				t.Fatalf("code=%t: invalid/nonmonotonic offset at %d: %v", isCode, i, mapped.offsets)
+			}
+			if mapped.text[i] != ' ' && mapped.text[i] != raw[offset] {
+				t.Fatalf("code=%t: byte %d lost identity at raw %d", isCode, i, offset)
+			}
+		}
+	}
+}
+
+func TestStage3RawAnchorSurvivesDisplayChanges(t *testing.T) {
+	for _, isCode := range []bool{false, true} {
+		raw := "<script>alpha beta</script>\n> alpha beta\n" +
+			"beta " + strings.Repeat("wide ", 150) + "alpha.\n"
+		if isCode {
+			raw = "// header\n\n" + "beta " + strings.Repeat("wide ", 150) + "alpha.\n"
+		}
+		query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+		spans := extractRankedExcerptSpansQuery(raw, query, 1, 2, 2, isCode, 5000)
+		if len(spans) != 1 || !spans[0].rawStartValid || spans[0].rawStart != strings.LastIndex(raw, "beta") {
+			t.Fatalf("code=%t: missing raw seed: %#v", isCode, spans)
+		}
+		anchor := spans[0].rawStart
+		spans[0] = expandShortExcerptSpan(spans[0], 1000)
+		if spans[0].rawStart != anchor || !spans[0].rawStartValid {
+			t.Fatal("expansion changed the seed anchor")
+		}
+		spans[0].text, spans[0].matches = truncateExcerpt(spans[0].text, spans[0].matches, 0)
+		if len(spans[0].matches) != 0 {
+			t.Fatal("fixture must delete all displayed matches")
+		}
+		if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, []int{3}) {
+			t.Fatalf("code=%t: truncated anchor=%v, want [3]", isCode, got)
+		}
+	}
+}
+
+func TestStage3RawAnchorForCreatedOCRMatch(t *testing.T) {
+	raw := "<script>ALPHA</script>\n> ALPHA\n-----\nALPHA2 beta\n"
+	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	spans := extractRankedExcerptSpansQuery(raw, query, 1, 2, 2, false, 200)
+	if len(spans) != 1 || !spans[0].rawStartValid {
+		t.Fatalf("expected OCR-created cluster: %#v", spans)
+	}
+	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{4}) {
+		t.Fatalf("OCR anchor=%v, want [4]", got)
+	}
+}
+
+func TestStage3LegacyFallbackStrippedAndExhausted(t *testing.T) {
+	raw := "<style>needle</style>\n<script>needle</script>\n> needle\n-----\nneedle\nneedle\n"
+	query := compileQuery([]string{"needle"}, PartialModeOff)
+	spans := lineSpans([]int{0}, []int{0}, []int{0})
+	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{5, 6, 0}) {
+		t.Fatalf("legacy anchors=%v, want [5 6 0]", got)
+	}
+}
+
+func TestStage3RawAnchorValidity(t *testing.T) {
+	raw := "header\nneedle\n"
+	query := compileQuery([]string{"needle"}, PartialModeOff)
+	span := lineSpans([]int{0})[0]
+	span.rawStartValid = true
+	if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{span}, query, 200); !slices.Equal(got, []int{1}) {
+		t.Fatalf("valid zero anchor=%v, want [1]", got)
+	}
+	span.rawStartValid = false
+	if got := computeExcerptSpanLinesQuery(raw, []excerptSpan{span}, query, 200); !slices.Equal(got, []int{2}) {
+		t.Fatalf("unknown zero must use fallback: %v, want [2]", got)
 	}
 }
