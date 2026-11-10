@@ -27,7 +27,7 @@ func TestTerminalSanitizeAllControls(t *testing.T) {
 
 func TestTerminalCLIErrorSanitized(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing\x1b]52;c;SECRET\a\b\r.txt")
-	out, code := captureIssue4RunStderr(t, []string{"garp", "needle", "--startdir", path})
+	code, out := runWithArgsAndStderr(t, []string{"garp", "needle", "--startdir", path})
 	if code != 1 || !strings.Contains(out, "Error:") {
 		t.Fatalf("code=%d, output=%q", code, out)
 	}

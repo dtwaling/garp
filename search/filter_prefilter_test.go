@@ -232,6 +232,10 @@ func TestBinaryPrefilterEncodingGates(t *testing.T) {
 							t.Fatalf("encoded raw hit = (%v, %v), want (true, true)", found, decided)
 						}
 					}
+					paths, err := search.FindFilesWithFirstWordProgress([]string{"missing"}, nil, 1, nil, filepath.Dir(path), nil)
+					if err != nil || len(paths) != 1 || paths[0] != path {
+						t.Fatalf("encoded admission=%v err=%v", paths, err)
+					}
 				})
 			}
 		}
@@ -282,6 +286,12 @@ func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
 			found, decided := search.BinaryStreamingPrefilterDecided(path, []string{"missing"}, 1)
 			if found || decided {
 				t.Fatalf("capped miss = (%v, %v), want (false, false)", found, decided)
+			}
+			if !tc.decided {
+				paths, err := search.FindFilesWithFirstWordProgress([]string{tc.word}, nil, 1, nil, filepath.Dir(path), nil)
+				if err != nil || len(paths) != 1 || paths[0] != path {
+					t.Fatalf("undecided admission=%v err=%v", paths, err)
+				}
 			}
 			if tc.word == "PDF" || tc.word == "café" || tc.word == "R&D" {
 				for _, strict := range []bool{false, true} {
@@ -429,5 +439,42 @@ func TestBinaryDiscoveryPrefiltersOnlyPrimary(t *testing.T) {
 	}
 	if len(files) != 1 || files[0] != path {
 		t.Fatalf("binary discovery files = %v, want [%s]", files, path)
+	}
+}
+
+func TestBinaryPrefilterPlainMissCapBoundary(t *testing.T) {
+	for _, ext := range []string{".eml", ".mbox", ".rtf"} {
+		capBytes := 256 * 1024
+		if ext == ".rtf" {
+			capBytes = 2 * 1024 * 1024
+		}
+		for _, delta := range []int{-1, 0, 1} {
+			t.Run(fmt.Sprintf("%s/size=cap%+d", ext, delta), func(t *testing.T) {
+				root := t.TempDir()
+				path := filepath.Join(root, "plain"+ext)
+				content := strings.Repeat(" ", capBytes+delta)
+				if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+				found, decided := search.BinaryStreamingPrefilterDecided(path, []string{"missing"}, int64(capBytes))
+				if found || decided != (delta <= 0) {
+					t.Fatalf("decision=(%v,%v), delta=%d", found, decided, delta)
+				}
+				engine := search.NewSearchEngineWithWorkers([]string{"missing"}, nil, nil, false, 1, 5000, 1)
+				engine.StartDir, engine.Silent, engine.Strict = root, true, true
+				paths, total, err := engine.DiscoverCandidates(1)
+				want := 0
+				if delta > 0 {
+					want = 1
+				}
+				if err != nil || len(paths) != want {
+					t.Fatalf("discovery=%v err=%v, want %d candidates", paths, err, want)
+				}
+				matches, err := engine.FilterCandidates(paths, total, time.Now())
+				if err != nil || len(matches) != 0 {
+					t.Fatalf("Stage 2 matches=%v err=%v, want no matches", matches, err)
+				}
+			})
+		}
 	}
 }

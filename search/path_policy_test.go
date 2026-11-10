@@ -2,11 +2,17 @@ package search
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"garp/config"
 )
 
 func TestValidateUserGlob(t *testing.T) {
@@ -706,4 +712,259 @@ func TestPathPolicyBasenameDoesNotMatchExplicitRoot(t *testing.T) {
 	if policy.MatchesFile(filepath.Join(root, "match.txt")) {
 		t.Fatal("basename pathscope implicitly matched the explicit root itself")
 	}
+}
+
+func TestPatternIndicesAtRoot(t *testing.T) {
+	for _, tt := range []struct {
+		name, pattern, root     string
+		patternIndex, rootIndex int
+		foldCase                bool
+		want                    []int
+	}{
+		{name: "empty", want: []int{0}},
+		{name: "root exhausted", pattern: "a/**/**", root: "a", want: []int{1}},
+		{name: "pattern exhausted", pattern: "a", root: "a/b", want: []int{1}},
+		{name: "globstar offsets", pattern: "**/**/b", root: "a", want: []int{1, 0}},
+		{name: "globstar and literal", pattern: "**/**/b", root: "a/b", want: []int{3, 1, 0}},
+		{name: "trailing globstars", pattern: "**/**", root: "a/b", want: []int{2, 1, 0}},
+		{name: "mismatch", pattern: "a/b", root: "a/c"},
+		{name: "invalid", pattern: "**/[", root: "a/b", want: []int{0}},
+		{name: "fold case", pattern: "A/[B]", root: "a/b", foldCase: true, want: []int{2}},
+		{name: "case sensitive", pattern: "A/[B]", root: "a/b"},
+		{name: "offsets", pattern: "skip/**/**/b", root: "skip/a/b", patternIndex: 1, rootIndex: 1, want: []int{4, 2, 1}},
+		{name: "discovery order", pattern: "repo/**/a/b/**", root: "repo/a", want: []int{3, 1}},
+		{name: "escaped literal", pattern: `\*\*/x`, root: "**/x", want: []int{2}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pattern, root := splitPathScopeParts(tt.pattern), splitPathScopeParts(tt.root)
+			beforePattern, beforeRoot := slices.Clone(pattern), slices.Clone(root)
+			got := patternIndicesAtRoot(pattern, root, tt.patternIndex, tt.rootIndex, tt.foldCase)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("indices = %v, want %v", got, tt.want)
+			}
+			if !slices.Equal(pattern, beforePattern) || !slices.Equal(root, beforeRoot) {
+				t.Fatal("matching mutated inputs")
+			}
+		})
+	}
+}
+
+// Compare unique terminal offsets in first-discovery order with the original recursion.
+// Only short inputs reach the oracle so its exponential branching stays bounded.
+func TestPatternIndicesAtRootExhaustive(t *testing.T) {
+	var reference func([]string, []string, int, int, bool) []int
+	reference = func(pattern, root []string, pi, ri int, fold bool) []int {
+		if ri == len(root) || pi == len(pattern) {
+			return []int{pi}
+		}
+		if pattern[pi] == "**" {
+			return append(reference(pattern, root, pi+1, ri, fold), reference(pattern, root, pi, ri+1, fold)...)
+		}
+		p, r := pattern[pi], root[ri]
+		if fold {
+			p, r = strings.ToLower(p), strings.ToLower(r)
+		}
+		matched, err := path.Match(p, r)
+		if err != nil || !matched {
+			return nil
+		}
+		return reference(pattern, root, pi+1, ri+1, fold)
+	}
+	sequences := func(alphabet []string, depth int) [][]string {
+		result := [][]string{nil}
+		start := 0
+		for i := 0; i < depth; i++ {
+			end := len(result)
+			for _, prefix := range result[start:end] {
+				for _, part := range alphabet {
+					result = append(result, append(slices.Clone(prefix), part))
+				}
+			}
+			start = end
+		}
+		return result
+	}
+	patterns := sequences([]string{"a", "A", "**", "*", "[ab]", "["}, 4)
+	roots := sequences([]string{"a", "b", "**"}, 3)
+	checks := 0
+	for _, pattern := range patterns {
+		for _, root := range roots {
+			for _, fold := range []bool{false, true} {
+				var want []int
+				for _, index := range reference(pattern, root, 0, 0, fold) {
+					if !slices.Contains(want, index) {
+						want = append(want, index)
+					}
+				}
+				got := patternIndicesAtRoot(pattern, root, 0, 0, fold)
+				if !slices.Equal(got, want) {
+					t.Fatalf("indices(%q, %q, fold=%v) = %v, want %v", pattern, root, fold, got, want)
+				}
+				checks++
+			}
+		}
+	}
+	t.Logf("verified %d pattern/root/case combinations", checks)
+}
+
+const policyFixtureLimit int64 = 256
+
+func TestRepositoryPolicyCountDiscoveryAndExtraction(t *testing.T) {
+	root := buildPolicyRepository(t)
+	fileTypes := config.BuildRipgrepFileTypes(true)
+	options := WalkOptions{MaxFileSize: policyFixtureLimit}
+
+	want := []string{".env.example", "cap.txt", "nested/main.txt", "visible.txt"}
+	candidates := assertPolicyCountDiscoveryParity(t, root, fileTypes, nil, options, want)
+
+	noIgnoreWant := append(append([]string{}, want...),
+		"ancestor-ignored.txt",
+		"local-ignored.txt",
+		"nested/local-ignored.txt",
+		"repository-excluded.txt",
+		"scoped/main.txt",
+	)
+	assertPolicyCountDiscoveryParity(
+		t, root, fileTypes, nil, WalkOptions{NoIgnore: true, MaxFileSize: policyFixtureLimit}, noIgnoreWant,
+	)
+
+	scopedWant := []string{"scoped/main.txt"}
+	assertPolicyCountDiscoveryParity(t, root, fileTypes, []string{"scoped/"}, options, scopedWant)
+
+	capFile := filepath.Join(root, "cap.txt")
+	if err := os.WriteFile(capFile, append(policyFixturePrefix(), []byte(" alpha beta OUTSIDE_PREFIX")...), 0o600); err != nil {
+		t.Fatalf("grow cap fixture: %v", err)
+	}
+
+	engine := NewSearchEngine([]string{"alpha", "beta"}, nil, fileTypes, true, 1, 1000)
+	engine.StartDir = root
+	engine.MaxFileSize = policyFixtureLimit
+	engine.Strict = true
+	engine.Silent = true
+	matches, err := engine.FilterCandidates(candidates, len(candidates), time.Now())
+	if err != nil {
+		t.Fatalf("filter candidates: %v", err)
+	}
+	if len(matches) != len(candidates) {
+		t.Fatalf("filtered matches = %d, want all %d discovered candidates", len(matches), len(candidates))
+	}
+	results, err := engine.ExtractAndBuildResults(matches)
+	if err != nil {
+		t.Fatalf("extract results: %v", err)
+	}
+	if got := relativePolicyResultPaths(t, root, results); !reflect.DeepEqual(got, want) {
+		t.Fatalf("result paths = %v, want %v", got, want)
+	}
+
+	capResult := policyResultByPath(t, results, capFile)
+	if strings.Contains(capResult.CleanContent, "OUTSIDE_PREFIX") {
+		t.Fatal("clean content contains text beyond the configured prefix")
+	}
+	for _, excerpt := range capResult.RawExcerpts {
+		if strings.Contains(excerpt, "OUTSIDE_PREFIX") {
+			t.Fatalf("excerpt contains text beyond the configured prefix: %q", excerpt)
+		}
+	}
+}
+
+func buildPolicyRepository(t *testing.T) string {
+	t.Helper()
+	repository := filepath.Join(t.TempDir(), "repository")
+	root := filepath.Join(repository, "work")
+
+	writeIgnoreFixture(t, filepath.Join(repository, ".git", "info", "exclude"), "repository-excluded.txt\n")
+	writeIgnoreFixture(t, filepath.Join(repository, ".gitignore"), "work/ancestor-ignored.txt\nwork/nested/\nwork/scoped/\n")
+	writeIgnoreFixture(t, filepath.Join(root, ".ignore"), "local-ignored.txt\n")
+	writeIgnoreFixture(t, filepath.Join(root, "nested", ".ignore"), "local-ignored.txt\n")
+	if err := os.MkdirAll(filepath.Join(root, "nested", ".git"), 0o755); err != nil {
+		t.Fatalf("create nested repository: %v", err)
+	}
+
+	for _, relative := range []string{
+		".env",
+		".env.example",
+		"ancestor-ignored.txt",
+		"local-ignored.txt",
+		"nested/local-ignored.txt",
+		"nested/main.txt",
+		"node_modules/hidden.txt",
+		"repository-excluded.txt",
+		"scoped/main.txt",
+		"visible.txt",
+	} {
+		writeWalkFixture(t, root, relative, "alpha beta")
+	}
+	writeWalkFixture(t, root, "cap.txt", string(policyFixturePrefix()))
+	writeSizedDiscoveryFixture(t, root, "over-limit.txt", "alpha beta", policyFixtureLimit+1)
+	writeSizedDiscoveryFixture(t, root, "over-limit.pdf", "alpha beta", policyFixtureLimit+1)
+	return root
+}
+
+func policyFixturePrefix() []byte {
+	prefix := []byte("alpha " + strings.Repeat("x", 32) + " beta")
+	return append(prefix, []byte(strings.Repeat(" ", int(policyFixtureLimit)-len(prefix)))...)
+}
+
+func assertPolicyCountDiscoveryParity(
+	t *testing.T,
+	root string,
+	fileTypes, pathScope []string,
+	options WalkOptions,
+	want []string,
+) []string {
+	t.Helper()
+	sort.Strings(want)
+
+	count, err := GetDocumentFileCountWithOptions(fileTypes, root, pathScope, options)
+	if err != nil {
+		t.Fatalf("count candidates: %v", err)
+	}
+	candidates, err := FindFilesWithFirstWordProgressPartialWithOptions(
+		[]string{"alpha", "beta"}, fileTypes, 2, nil, root, pathScope, PartialModeOff, options,
+	)
+	if err != nil {
+		t.Fatalf("discover candidates: %v", err)
+	}
+	got := relativeCandidatePaths(t, root, candidates)
+	if count != len(candidates) {
+		t.Fatalf("count/discovery = %d/%d, want parity", count, len(candidates))
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+	return candidates
+}
+
+func relativeCandidatePaths(t *testing.T, root string, paths []string) []string {
+	t.Helper()
+	relative := make([]string, len(paths))
+	for i, path := range paths {
+		value, err := filepath.Rel(root, path)
+		if err != nil {
+			t.Fatalf("relative path for %q: %v", path, err)
+		}
+		relative[i] = filepath.ToSlash(value)
+	}
+	sort.Strings(relative)
+	return relative
+}
+
+func relativePolicyResultPaths(t *testing.T, root string, results []SearchResult) []string {
+	t.Helper()
+	paths := make([]string, len(results))
+	for i := range results {
+		paths[i] = results[i].FilePath
+	}
+	return relativeCandidatePaths(t, root, paths)
+}
+
+func policyResultByPath(t *testing.T, results []SearchResult, path string) SearchResult {
+	t.Helper()
+	for _, result := range results {
+		if result.FilePath == path {
+			return result
+		}
+	}
+	t.Fatalf("missing result %q", path)
+	return SearchResult{}
 }

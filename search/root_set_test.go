@@ -517,3 +517,40 @@ func TestPrepareStartRootsRootNamePatternsDoNotMatchRootItself(t *testing.T) {
 		})
 	}
 }
+
+func TestLinkedRootSearchPreservesLogicalPaths(t *testing.T) {
+	base := t.TempDir()
+	repository := filepath.Join(base, "repository")
+	physicalRoot := filepath.Join(repository, "search-root")
+	logicalRoot := filepath.Join(base, "logical-root")
+
+	if err := os.MkdirAll(filepath.Join(repository, ".git"), 0o755); err != nil {
+		t.Fatalf("create repository marker: %v", err)
+	}
+	writeIgnoreFixture(t, filepath.Join(repository, ".gitignore"), "ignored.txt\n")
+	writeWalkFixture(t, physicalRoot, "ignored.txt", "alpha beta")
+	writeWalkFixture(t, physicalRoot, "visible.txt", "alpha beta")
+	makeTestSymlink(t, physicalRoot, logicalRoot)
+
+	fileTypes := []string{"-g", "*.txt"}
+	options := WalkOptions{MaxFileSize: policyFixtureLimit}
+	candidates := assertPolicyCountDiscoveryParity(
+		t, logicalRoot, fileTypes, nil, options, []string{"visible.txt"},
+	)
+	if len(candidates) != 1 || candidates[0] != filepath.Join(logicalRoot, "visible.txt") {
+		t.Fatalf("linked-root candidates = %v, want logical result path", candidates)
+	}
+
+	engine := NewSearchEngine([]string{"alpha", "beta"}, nil, fileTypes, false, 1, 1000)
+	engine.StartDir = logicalRoot
+	engine.MaxFileSize = policyFixtureLimit
+	engine.Strict = true
+	engine.Silent = true
+	results, err := engine.Execute()
+	if err != nil {
+		t.Fatalf("linked-root execute: %v", err)
+	}
+	if len(results) != 1 || results[0].FilePath != filepath.Join(logicalRoot, "visible.txt") {
+		t.Fatalf("linked-root results = %+v, want logical visible.txt path", results)
+	}
+}
