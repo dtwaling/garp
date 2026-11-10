@@ -1177,7 +1177,9 @@ func (r *mailEncodingReader) Read(p []byte) (int, error) {
 	n, err := r.Reader.Read(p)
 	if n > 0 && !r.encoded {
 		text := r.tail + strings.ToLower(string(p[:n]))
-		for _, marker := range []string{"base64", "quoted-printable", "=?", "utf-16", "ucs-2", "\x00"} {
+		// Any charset declaration requires MIME interpretation. Gate even UTF-8
+		// and ASCII declarations rather than partially parsing folded parameters.
+		for _, marker := range []string{"base64", "quoted-printable", "=?", "charset", "utf-16", "ucs-2", "\x00"} {
 			if strings.Contains(text, marker) {
 				r.encoded = true
 				break
@@ -1215,6 +1217,7 @@ func encodingAwarePrefilter(filePath string, query compiledQuery, strict bool, c
 		raw := strings.ToLower(string(data))
 		escaped := strings.Contains(raw, `\'`) || strings.Contains(raw, `\u`) || strings.Contains(raw, `\bin`)
 		text, _ := (&RTFExtractor{}).ExtractText(data)
+		text = cleanSearchContent(mappedContent{text: text}, false).text
 		state := streamQueryMatches{found: make([]bool, len(query.matchers))}
 		state.observe(text, query, 0)
 		if state.satisfied(strict) {
@@ -1224,11 +1227,21 @@ func encodingAwarePrefilter(filePath string, query compiledQuery, strict bool, c
 	}
 
 	r := &mailEncodingReader{Reader: f}
-	found, complete, readErr := streamMatchesQuery(r, query, strict, maxBytes)
+	var raw strings.Builder
+	found, complete, readErr := streamMatchesQuery(io.TeeReader(r, &raw), query, strict, maxBytes)
 	if found {
 		return true, true
 	}
 	if readErr != nil || r.encoded {
+		return false, false
+	}
+	// Check the same cleaning transformations as Stage 2 before declaring a
+	// raw miss. Raw mail is not extracted body text, so a normalized hit must
+	// still go through extraction. Retain only the bounded scan and preserve
+	// the streaming early-hit path.
+	state := streamQueryMatches{found: make([]bool, len(query.matchers))}
+	state.observe(cleanSearchContent(mappedContent{text: raw.String()}, false).text, query, 0)
+	if state.satisfied(strict) {
 		return false, false
 	}
 	// Validate EOF at the exact cap rather than trusting a stale file size.

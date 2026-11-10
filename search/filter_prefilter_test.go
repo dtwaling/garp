@@ -214,7 +214,7 @@ func TestBinaryPrefilterCompatibilityWrapperIsStrict(t *testing.T) {
 
 func TestBinaryPrefilterEncodingGates(t *testing.T) {
 	for _, ext := range []string{".eml", ".mbox"} {
-		for _, marker := range []string{"BaSe64", "QUOTED-PRINTABLE", "=?", "UTF-16", "UcS-2", "\x00"} {
+		for _, marker := range []string{"BaSe64", "QUOTED-PRINTABLE", "=?", "ChArSeT=iso-8859-1", "UTF-16", "UcS-2", "\x00"} {
 			for _, offset := range []int{0, 64*1024 - 1} {
 				t.Run(fmt.Sprintf("%s/%q/offset=%d", ext, marker, offset), func(t *testing.T) {
 					content := strings.Repeat(" ", offset) + marker + " available"
@@ -246,6 +246,11 @@ func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
 		{"plain.eml", "available", "missing", false, true},
 		{"plain.mbox", "available", "missing", false, true},
 		{"plain.rtf", `{\rtf1\ansi available}`, "missing", false, true},
+		{"cleaned.rtf", `{\rtf1\ansi PDF32}`, "PDF", true, true},
+		{"cleaned.eml", "Content-Type: text/plain\r\n\r\nPDF32", "PDF", false, false},
+		{"cleaned.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/plain\n\nPDF32", "PDF", false, false},
+		{"latin1.eml", "Content-Type: text/plain; charset=iso-8859-1\r\n\r\ncaf\xe9", "café", false, false},
+		{"latin1.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/plain; charset=iso-8859-1\n\ncaf\xe9", "café", false, false},
 		{"controls.rtf", `{\rtf1\ansi su{\b}bject bo{\i}dy}`, "subject", true, true},
 		{"hex.rtf", `{\rtf1 \'61}`, "missing", false, false},
 		{"unicode.rtf", `{\rtf1 \u97}`, "missing", false, false},
@@ -266,6 +271,20 @@ func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
 			found, decided := search.BinaryStreamingPrefilterDecided(path, []string{"missing"}, 1)
 			if found || decided {
 				t.Fatalf("capped miss = (%v, %v), want (false, false)", found, decided)
+			}
+			if tc.word == "PDF" || tc.word == "café" {
+				for _, strict := range []bool{false, true} {
+					engine := search.NewSearchEngineWithWorkers([]string{tc.word}, nil, nil, false, 1, 5000, 1)
+					engine.StartDir, engine.Silent, engine.Strict = filepath.Dir(path), true, strict
+					matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+					if err != nil || len(matches) != 1 {
+						t.Fatalf("Stage 2 strict=%t: matches=%v err=%v", strict, matches, err)
+					}
+					results, err := engine.Execute()
+					if err != nil || len(results) != 1 || results[0].FilePath != path {
+						t.Fatalf("Execute strict=%t: results=%v err=%v", strict, results, err)
+					}
+				}
 			}
 		})
 	}
