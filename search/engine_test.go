@@ -772,65 +772,47 @@ func TestStage3UnreadableCandidateIsSkipped(t *testing.T) {
 	}
 }
 
-func TestExtractAndBuildResultsOpenFailureBackfill(t *testing.T) {
-	engine, matches := stage3BackfillFixture(t, ".txt")
-	if err := os.Remove(matches[0].filePath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(matches[3].filePath); err != nil {
-		t.Fatal(err)
-	}
-
-	outcome, err := engine.extractAndBuildResultsDetailed(
-		compileQuery(engine.SearchWords, engine.Partial),
-		matches,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertStage3BackfillOutcome(t, outcome, matches[1:3])
-}
-
 type failingStage3Extractor struct{}
 
 func (failingStage3Extractor) ExtractText([]byte) (string, error) {
 	return "", errors.New("registered extractor failure")
 }
 
-func TestExtractAndBuildResultsExtractorFailureBackfill(t *testing.T) {
-	engine, matches := stage3BackfillFixture(t, ".pdf")
-	engine.Registry.extractors["pdf"] = failingStage3Extractor{}
-	if err := os.Remove(matches[3].filePath); err != nil {
-		t.Fatal(err)
+func TestExtractAndBuildResultsFailureBackfill(t *testing.T) {
+	for _, tt := range []struct {
+		kind, extension string
+	}{
+		{"open", ".txt"},
+		{"extractor", ".pdf"},
+		{"zero excerpt", ".txt"},
+	} {
+		t.Run(tt.kind, func(t *testing.T) {
+			engine, matches := stage3BackfillFixture(t, tt.extension)
+			switch tt.kind {
+			case "open":
+				if err := os.Remove(matches[0].filePath); err != nil {
+					t.Fatal(err)
+				}
+			case "extractor":
+				engine.Registry.extractors["pdf"] = failingStage3Extractor{}
+			case "zero excerpt":
+				if err := os.WriteFile(matches[0].filePath, []byte("no matching content"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Remove(matches[3].filePath); err != nil {
+				t.Fatal(err)
+			}
+			outcome, err := engine.extractAndBuildResultsDetailed(
+				compileQuery(engine.SearchWords, engine.Partial),
+				matches,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertStage3BackfillOutcome(t, outcome, matches[1:3])
+		})
 	}
-
-	outcome, err := engine.extractAndBuildResultsDetailed(
-		compileQuery(engine.SearchWords, engine.Partial),
-		matches,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertStage3BackfillOutcome(t, outcome, matches[1:3])
-}
-
-func TestExtractAndBuildResultsZeroExcerptFailureBackfill(t *testing.T) {
-	engine, matches := stage3BackfillFixture(t, ".txt")
-	if err := os.WriteFile(matches[0].filePath, []byte("no matching content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(matches[3].filePath); err != nil {
-		t.Fatal(err)
-	}
-
-	outcome, err := engine.extractAndBuildResultsDetailed(
-		compileQuery(engine.SearchWords, engine.Partial),
-		matches,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertStage3BackfillOutcome(t, outcome, matches[1:3])
 }
 
 func TestExecuteDetailedMaxResults(t *testing.T) {

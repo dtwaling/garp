@@ -1491,92 +1491,47 @@ func TestDiscoveryWalkRoot(t *testing.T) {
 	}
 }
 
-func TestGetDocumentFileCount_PathScope_BackendAssembly(t *testing.T) {
+func TestGetDocumentFileCount_PathScope(t *testing.T) {
 	root := buildTestTree(t)
-	// Scope to only files under */Assembly/* (relative to root)
-	scope := []string{"*/Assembly/*"}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// Only backend/Assembly/main.cs and main.md match
-	if count != 2 {
-		t.Errorf("expected 2 files matching */Assembly/*, got %d", count)
-	}
-}
-
-func TestGetDocumentFileCount_PathScope_BackendAssemblyWindowsSeparators(t *testing.T) {
-	root := buildTestTree(t)
-	scope := []string{`backend\Assembly`}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if count != 2 {
-		t.Errorf("expected 2 files matching Windows-style backend\\Assembly, got %d", count)
-	}
-}
-
-func TestGetDocumentFileCount_PathScope_GlobstarController(t *testing.T) {
-	root := buildTestTree(t)
-	scope := []string{`app\Http\**\*Controller.php`}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("expected 1 controller file matching globstar scope, got %d", count)
-	}
-}
-
-func TestGetDocumentFileCount_PathScope_LeadingGlobstarController(t *testing.T) {
-	root := buildTestTree(t)
-	scope := []string{`**\*Controller.php`}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("expected 1 controller file matching leading globstar scope, got %d", count)
-	}
-}
-
-func TestGetDocumentFileCount_PathScope_BasenamePatternMatchesAnywhere(t *testing.T) {
-	root := buildTestTree(t)
-	scope := []string{`*Controller.php`}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("expected 1 controller file matching basename scope, got %d", count)
-	}
-}
-
-func TestGetDocumentFileCount_PathScope_GlobstarLiteralPrefix(t *testing.T) {
-	root := buildTestTree(t)
-	scope := []string{`app\Http\**\*.php`}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if count != 2 {
-		t.Errorf("expected 2 PHP files under app/Http via globstar, got %d", count)
-	}
-}
-
-func TestGetDocumentFileCount_PathScope_QuotedCommaSeparatedGlobstars(t *testing.T) {
-	root := buildTestTree(t)
-	scope, err := ValidatePathScope(`'app\Http\**\*.php,app\**\*Controller.php'`)
-	if err != nil {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected count error: %v", err)
-	}
-	if count != 2 {
-		t.Errorf("expected 2 PHP files matching quoted comma-separated globstars, got %d", count)
+	for _, tt := range []struct {
+		name     string
+		scope    []string
+		rawScope string
+		want     int
+	}{
+		{name: "BackendAssembly", scope: []string{"*/Assembly/*"}, want: 2},
+		{name: "BackendAssemblyWindowsSeparators", scope: []string{`backend\Assembly`}, want: 2},
+		{name: "GlobstarController", scope: []string{`app\Http\**\*Controller.php`}, want: 1},
+		{name: "LeadingGlobstarController", scope: []string{`**\*Controller.php`}, want: 1},
+		{name: "BasenamePatternMatchesAnywhere", scope: []string{`*Controller.php`}, want: 1},
+		{name: "GlobstarLiteralPrefix", scope: []string{`app\Http\**\*.php`}, want: 2},
+		{name: "QuotedCommaSeparatedGlobstars", rawScope: `'app\Http\**\*.php,app\**\*Controller.php'`, want: 2},
+		{name: "AbsoluteDir", scope: []string{filepath.Join(root, "tests")}, want: 3},
+		{name: "Tests", scope: []string{"tests/*"}, want: 3},
+		{name: "MultiplePatterns", scope: []string{"*/Assembly/*", "tests/*"}, want: 5},
+		{name: "NilMeansAll", want: 11},
+		{name: "EmptyMeansAll", scope: []string{}, want: 11},
+		// Directory-prefix shorthand works with and without a trailing slash.
+		{name: "TrailingSlash", scope: []string{"tests/"}, want: 3},
+		{name: "BareDir", scope: []string{"tests"}, want: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			scope := tt.scope
+			if tt.rawScope != "" {
+				var err error
+				scope, err = ValidatePathScope(tt.rawScope)
+				if err != nil {
+					t.Fatalf("unexpected validation error: %v", err)
+				}
+			}
+			count, err := GetDocumentFileCount(allFileTypes(), root, scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if count != tt.want {
+				t.Errorf("scope %q: count = %d, want %d", scope, count, tt.want)
+			}
+		})
 	}
 }
 
@@ -1636,45 +1591,6 @@ func TestGetDocumentFileCount_PathScope_WindowsCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestGetDocumentFileCount_PathScope_AbsoluteDir(t *testing.T) {
-	root := buildTestTree(t)
-	scope := []string{filepath.Join(root, "tests")}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if count != 3 {
-		t.Errorf("expected 3 files matching absolute tests path, got %d", count)
-	}
-}
-
-func TestGetDocumentFileCount_PathScope_Tests(t *testing.T) {
-	root := buildTestTree(t)
-	scope := []string{"tests/*"}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// tests/ has 3 files
-	if count != 3 {
-		t.Errorf("expected 3 files matching tests/*, got %d", count)
-	}
-}
-
-func TestGetDocumentFileCount_PathScope_MultiplePatterns(t *testing.T) {
-	root := buildTestTree(t)
-	// Backend Assembly OR tests
-	scope := []string{"*/Assembly/*", "tests/*"}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// 2 Assembly + 3 tests = 5
-	if count != 5 {
-		t.Errorf("expected 5 files for multi-pattern scope, got %d", count)
-	}
-}
-
 func TestFindFilesWithFirstWord_PathScope_Assembly(t *testing.T) {
 	root := buildTestTree(t)
 	scope := []string{"*/Assembly/*"}
@@ -1703,53 +1619,6 @@ func TestFindFilesWithFirstWord_PathScope_NoMatch(t *testing.T) {
 	}
 	if len(files) != 0 {
 		t.Errorf("expected no results for 'assembly' in tests/ scope, got %v", files)
-	}
-}
-
-func TestGetDocumentFileCount_PathScope_EmptyNilMeansAll(t *testing.T) {
-	root := buildTestTree(t)
-	// nil pathScope = no filter = all files
-	countAll, err := GetDocumentFileCount(allFileTypes(), root, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	countEmpty, err := GetDocumentFileCount(allFileTypes(), root, []string{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if countAll != countEmpty {
-		t.Errorf("nil and empty pathScope should produce same count: %d vs %d", countAll, countEmpty)
-	}
-}
-
-// TestGetDocumentFileCount_PathScope_TrailingSlash verifies that a pattern like
-// "tests/" (no explicit wildcard) matches all files under tests/ at any depth.
-// This is the directory-prefix shorthand: users shouldn't need to know that
-// filepath.Match requires "tests/*" -- "tests/" should just work.
-func TestGetDocumentFileCount_PathScope_TrailingSlash(t *testing.T) {
-	root := buildTestTree(t)
-	scope := []string{"tests/"}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// tests/ has 3 files -- same result as "tests/*"
-	if count != 3 {
-		t.Errorf("expected 3 files matching tests/ prefix, got %d", count)
-	}
-}
-
-// TestGetDocumentFileCount_PathScope_BareDir verifies that a bare directory name
-// without a trailing slash (e.g. "tests") also matches files under that directory.
-func TestGetDocumentFileCount_PathScope_BareDir(t *testing.T) {
-	root := buildTestTree(t)
-	scope := []string{"tests"}
-	count, err := GetDocumentFileCount(allFileTypes(), root, scope)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if count != 3 {
-		t.Errorf("expected 3 files matching bare dir 'tests', got %d", count)
 	}
 }
 

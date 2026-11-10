@@ -762,41 +762,36 @@ func TestCheckFileContainsRankedWords(t *testing.T) {
 	}
 }
 
-func TestStreamReadersMatchAcrossChunkBoundary(t *testing.T) {
+func TestStreamReaders(t *testing.T) {
 	const chunkSize = 64 * 1024
-	path := filepath.Join(t.TempDir(), "boundary.txt")
-	content := strings.Repeat("x", chunkSize-3) + " alpha beta"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	found, decided := StreamContainsAllWordsDecided(path, []string{"alpha", "beta"})
-	if !found || !decided {
-		t.Fatalf("all-words boundary match = (%v, %v), want (true, true)", found, decided)
-	}
-
-	found, decided = StreamContainsRankedWordsDecided(path, []string{"alpha", "beta"}, true)
-	if !found || !decided {
-		t.Fatalf("ranked boundary match = (%v, %v), want (true, true)", found, decided)
-	}
-}
-
-func TestStreamReadersStopAtDefaultTextCap(t *testing.T) {
 	const defaultTextCap = 5 << 20
-	path := filepath.Join(t.TempDir(), "post-cap.txt")
-	content := strings.Repeat(" ", defaultTextCap) + "alpha beta"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	found, decided := StreamContainsAllWordsDecided(path, []string{"alpha", "beta"})
-	if found || !decided {
-		t.Fatalf("all-words post-cap match = (%v, %v), want (false, true)", found, decided)
-	}
-
-	found, decided = StreamContainsRankedWordsDecided(path, []string{"alpha", "beta"}, true)
-	if found || !decided {
-		t.Fatalf("ranked post-cap match = (%v, %v), want (false, true)", found, decided)
+	for _, tt := range []struct {
+		name, content  string
+		found, decided bool
+	}{
+		{"MatchAcrossChunkBoundary", strings.Repeat("x", chunkSize-3) + " alpha beta", true, true},
+		{"StopAtDefaultTextCap", strings.Repeat(" ", defaultTextCap) + "alpha beta", false, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "candidate.txt")
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			words := []string{"alpha", "beta"}
+			for _, reader := range []string{"all-words", "ranked"} {
+				t.Run(reader, func(t *testing.T) {
+					var found, decided bool
+					if reader == "all-words" {
+						found, decided = StreamContainsAllWordsDecided(path, words)
+					} else {
+						found, decided = StreamContainsRankedWordsDecided(path, words, true)
+					}
+					if found != tt.found || decided != tt.decided {
+						t.Fatalf("match = (%v, %v), want (%v, %v)", found, decided, tt.found, tt.decided)
+					}
+				})
+			}
+		})
 	}
 }
 

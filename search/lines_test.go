@@ -278,59 +278,27 @@ func TestLineIndexerLineOf(t *testing.T) {
 	}
 }
 
-func TestComputeExcerptLinesSingleTerm(t *testing.T) {
-	// 'needle' lives on line 3 (1-based).
-	raw := "line one\nline two\nhere is the needle right here\nline four"
-	query := compileQuery([]string{"needle"}, PartialModeOff)
-	starts := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0}), query, 0)
-	if len(starts) != 1 {
-		t.Fatalf("expected 1 start line, got %d", len(starts))
-	}
-	if starts[0] != 3 {
-		t.Errorf("start line = %d, want 3", starts[0])
-	}
-}
-
-func TestComputeExcerptLinesMultiTermStartsAtEarliest(t *testing.T) {
-	// 'alpha' on line 2, 'omega' on line 4 -> start line is the earliest term (line 2).
-	raw := "intro\nthe alpha begins\nmiddle filler line\nthe omega ends\noutro"
-	query := compileQuery([]string{"alpha", "omega"}, PartialModeOff)
-	starts := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0, 1}), query, 5000)
-	if starts[0] != 2 {
-		t.Errorf("start line = %d, want 2", starts[0])
-	}
-}
-
-func TestComputeExcerptLinesDisambiguatesRepeats(t *testing.T) {
-	// 'config' appears on lines 1 and 5; the rare term 'payload' (line 5) should pin the
-	// cluster to the second occurrence.
-	raw := "config header here\nbody\nmore body\nfiller\nconfig with payload inside\ntail"
-	query := compileQuery([]string{"config", "payload"}, PartialModeOff)
-	starts := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0, 1}), query, 5000)
-	if starts[0] != 5 {
-		t.Errorf("start line = %d, want 5 (second config cluster)", starts[0])
-	}
-}
-
-func TestComputeExcerptLinesMultipleExcerptsInOrder(t *testing.T) {
-	// Two clusters of 'target'; excerpts should map to them in document order.
-	raw := "target near top\nx\nx\nx\nx\nx\nx\nx\nx\nx\ntarget near bottom"
-	query := compileQuery([]string{"target"}, PartialModeOff)
-	starts := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0}, []int{0}), query, 200)
-	if starts[0] != 1 {
-		t.Errorf("excerpt 0 start line = %d, want 1", starts[0])
-	}
-	if starts[1] != 11 {
-		t.Errorf("excerpt 1 start line = %d, want 11", starts[1])
-	}
-}
-
-func TestComputeExcerptLinesNoTermLeavesUnknown(t *testing.T) {
-	raw := "nothing relevant here\nstill nothing"
-	query := compileQuery([]string{"absentword"}, PartialModeOff)
-	starts := computeExcerptSpanLinesQuery(raw, lineSpans(nil), query, 0)
-	if starts[0] != 0 {
-		t.Errorf("expected unknown (0), got %d", starts[0])
+func TestComputeExcerptLines(t *testing.T) {
+	for _, tt := range []struct {
+		name, raw string
+		words     []string
+		termSets  [][]int
+		distance  int
+		want      []int
+	}{
+		{"SingleTerm", "line one\nline two\nhere is the needle right here\nline four", []string{"needle"}, [][]int{{0}}, 0, []int{3}},
+		{"MultiTermStartsAtEarliest", "intro\nthe alpha begins\nmiddle filler line\nthe omega ends\noutro", []string{"alpha", "omega"}, [][]int{{0, 1}}, 5000, []int{2}},
+		{"DisambiguatesRepeats", "config header here\nbody\nmore body\nfiller\nconfig with payload inside\ntail", []string{"config", "payload"}, [][]int{{0, 1}}, 5000, []int{5}},
+		{"MultipleExcerptsInOrder", "target near top\nx\nx\nx\nx\nx\nx\nx\nx\nx\ntarget near bottom", []string{"target"}, [][]int{{0}, {0}}, 200, []int{1, 11}},
+		{"NoTermLeavesUnknown", "nothing relevant here\nstill nothing", []string{"absentword"}, [][]int{nil}, 0, []int{0}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			query := compileQuery(tt.words, PartialModeOff)
+			starts := computeExcerptSpanLinesQuery(tt.raw, lineSpans(tt.termSets...), query, tt.distance)
+			if !slices.Equal(starts, tt.want) {
+				t.Errorf("start lines = %v, want %v", starts, tt.want)
+			}
+		})
 	}
 }
 
