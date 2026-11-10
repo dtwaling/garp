@@ -1213,19 +1213,26 @@ func encodingAwarePrefilter(filePath string, query compiledQuery, strict bool, c
 	}
 
 	if rtf {
+		var raw strings.Builder
+		found, complete, readErr := streamMatchesQuery(io.TeeReader(f, &raw), query, strict, maxBytes)
+		if found {
+			return true, true
+		}
+		if readErr != nil {
+			return false, false
+		}
 		// Transform the entire bounded prefix so control words and groups split
 		// across read boundaries behave exactly as in RTFExtractor.
-		data, readErr := io.ReadAll(io.LimitReader(f, maxBytes))
-		raw := strings.ToLower(string(data))
-		escaped := strings.Contains(raw, `\'`) || strings.Contains(raw, `\u`) || strings.Contains(raw, `\bin`)
-		text, _ := (&RTFExtractor{}).ExtractText(data)
+		lower := strings.ToLower(raw.String())
+		escaped := strings.Contains(lower, `\'`) || strings.Contains(lower, `\u`) || strings.Contains(lower, `\bin`)
+		text, _ := (&RTFExtractor{}).ExtractText([]byte(raw.String()))
 		text = cleanSearchContent(mappedContent{text: text}, false).text
 		state := streamQueryMatches{found: make([]bool, len(query.matchers))}
 		state.observe(text, query, 0)
 		if state.satisfied(strict) {
 			return true, true
 		}
-		return false, readErr == nil && !escaped && readerValidatedEOF(f)
+		return false, !escaped && (complete || readerValidatedEOF(f))
 	}
 
 	r := &mailEncodingReader{Reader: f}
@@ -1251,6 +1258,9 @@ func encodingAwarePrefilter(filePath string, query compiledQuery, strict bool, c
 	// cleanup of the raw mail would otherwise remove, such as quoted lines.
 	collapsed := whitespaceRegex.ReplaceAllString(strings.TrimSpace(raw.String()), " ")
 	state.observe(cleanSearchContent(mappedContent{text: collapsed}, false).text, query, 0)
+	// Header brackets and body comparisons must not become HTML tags spanning
+	// the body, or quote prefixes that erase tokens before OCR splitting.
+	state.observe(cleanSearchContent(mappedContent{text: strings.NewReplacer("<", " ", ">", " ").Replace(collapsed)}, false).text, query, 0)
 	if state.satisfied(strict) {
 		return false, false
 	}

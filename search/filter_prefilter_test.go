@@ -247,6 +247,13 @@ func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
 		{"plain.mbox", "available", "missing", false, true},
 		{"plain.rtf", `{\rtf1\ansi available}`, "missing", false, true},
 		{"cleaned.rtf", `{\rtf1\ansi PDF32}`, "PDF", true, true},
+		// Cleaning removes the literal token, so only the raw streaming path
+		// can accept it before the escape marker beyond the first 64 KiB.
+		{"raw-hit.rtf", `{\rtf1\ansi <available> ` + strings.Repeat(" ", 64*1024) + `\'73}`, "available", true, true},
+		{"comparison.eml", "Subject: Estimate < 100\r\n\r\nPDF32 > 50", "PDF", false, false},
+		{"comparison.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nSubject: Estimate < 100\r\n\r\nPDF32 > 50", "PDF", false, false},
+		{"address.eml", "From: Alice <alice@example.com>\r\n\r\navailable", "missing", false, true},
+		{"address.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nFrom: Alice <alice@example.com>\r\n\r\navailable", "missing", false, true},
 		{"html.eml", "Content-Type: text/html\r\n\r\n<p>R&amp;D</p>", "R&D", false, false},
 		{"html.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/html\r\n\r\n<p>R&amp;D</p>", "R&D", false, false},
 		{"collapsed.eml", "Content-Type: text/plain\r\n\r\nintro\r\n>PDF32\r\n", "PDF", false, false},
