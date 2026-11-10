@@ -1,8 +1,9 @@
-package search_test
+package search
 
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -14,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"garp/search"
+	"github.com/ledongthuc/pdf"
 )
 
 func TestMBOXExtractorRequiresValidMessages(t *testing.T) {
@@ -26,7 +27,7 @@ func TestMBOXExtractorRequiresValidMessages(t *testing.T) {
 		{"valid", envelope + "Subject: Example\n\nmessage body\n", "message body\n---\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := (&search.MBOXExtractor{}).ExtractText([]byte(tc.data))
+			got, err := (&MBOXExtractor{}).ExtractText([]byte(tc.data))
 			if got != tc.want || (err != nil) != (tc.want == "") {
 				t.Fatalf("extraction = (%q, %v), want %q with error=%t", got, err, tc.want, tc.want == "")
 			}
@@ -35,7 +36,7 @@ func TestMBOXExtractorRequiresValidMessages(t *testing.T) {
 }
 
 func TestExtractorRegistry_RegistersPDFExtractor(t *testing.T) {
-	registry := search.NewExtractorRegistry()
+	registry := NewExtractorRegistry()
 	extractor, ok := registry.GetExtractor("pdf")
 	if !ok {
 		t.Fatal("expected PDF extractor to be registered")
@@ -85,7 +86,7 @@ func TestExtractorsRejectCorruptedContainersWithoutRawByteFallback(t *testing.T)
 		}
 		for name, data := range cases {
 			t.Run(ext+"/"+name, func(t *testing.T) {
-				extractor, _ := search.NewExtractorRegistry().GetExtractor(ext)
+				extractor, _ := NewExtractorRegistry().GetExtractor(ext)
 				text, err := extractor.ExtractText(data)
 				if err == nil || text != "" {
 					t.Errorf("extraction = (%q, %v), want empty text and error", text, err)
@@ -94,7 +95,7 @@ func TestExtractorsRejectCorruptedContainersWithoutRawByteFallback(t *testing.T)
 				if err := os.WriteFile(path, data, 0o600); err != nil {
 					t.Fatal(err)
 				}
-				engine := search.NewSearchEngine([]string{marker}, nil, nil, false, 1, 1000)
+				engine := NewSearchEngine([]string{marker}, nil, nil, false, 1, 1000)
 				engine.Silent = true
 				matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
 				if err != nil {
@@ -179,8 +180,8 @@ func TestReaderAtExtractorLargeVirtualDOCXAndODT(t *testing.T) {
 			tail := append(make([]byte, 64*1024), data...)
 			size := offset + int64(len(data))
 			r := &guardedReaderAt{t: t, r: bytes.NewReader(tail), base: offset - 64*1024, end: size}
-			e, _ := search.NewExtractorRegistry().GetExtractor(ext)
-			text, err := e.(search.ReaderAtExtractor).ExtractReaderAt(r, size, 4096)
+			e, _ := NewExtractorRegistry().GetExtractor(ext)
+			text, err := e.(ReaderAtExtractor).ExtractReaderAt(r, size, 4096)
 			if err != nil || text != "virtual container hit" {
 				t.Fatalf("extraction = (%q, %v)", text, err)
 			}
@@ -201,8 +202,8 @@ func TestReaderAtExtractorMaxInt64Budget(t *testing.T) {
 				want = "maximum budget text"
 				data = readerAtZIP(t, name, "<text>"+want+"</text>", 0)
 			}
-			e, _ := search.NewExtractorRegistry().GetExtractor(ext)
-			text, err := e.(search.ReaderAtExtractor).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), math.MaxInt64)
+			e, _ := NewExtractorRegistry().GetExtractor(ext)
+			text, err := e.(ReaderAtExtractor).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), math.MaxInt64)
 			if err != nil || text != want {
 				t.Fatalf("extraction = (%q, %v), want (%q, nil)", text, err, want)
 			}
@@ -215,15 +216,15 @@ func TestReaderAtExtractorEnforcesMaxExtractedBytes(t *testing.T) {
 		t.Run(ext, func(t *testing.T) {
 			xml := "<text>" + strings.Repeat("a", 4096) + "</text>"
 			data := readerAtZIP(t, name, xml, 0)
-			e, _ := search.NewExtractorRegistry().GetExtractor(ext)
+			e, _ := NewExtractorRegistry().GetExtractor(ext)
 			for _, limit := range []int64{1, 4096, int64(len(xml)) - 1} {
-				text, err := e.(search.ReaderAtExtractor).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), limit)
-				if text != "" || !errors.Is(err, search.ErrExtractionLimit) {
+				text, err := e.(ReaderAtExtractor).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), limit)
+				if text != "" || !errors.Is(err, ErrExtractionLimit) {
 					t.Fatalf("limit %d: extraction = (%q, %v)", limit, text, err)
 				}
 			}
 			for _, limit := range []int64{int64(len(xml)), 0, -1} {
-				text, err := e.(search.ReaderAtExtractor).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), limit)
+				text, err := e.(ReaderAtExtractor).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), limit)
 				if err != nil || text != strings.Repeat("a", 4096) {
 					t.Fatalf("limit %d: text length %d, error %v", limit, len(text), err)
 				}
@@ -231,15 +232,15 @@ func TestReaderAtExtractorEnforcesMaxExtractedBytes(t *testing.T) {
 		})
 	}
 	t.Run("pdf", func(t *testing.T) {
-		text, err := (&search.PDFExtractor{}).ExtractReaderAt(strings.NewReader(minimalPDFWithText), int64(len(minimalPDFWithText)), 4)
-		if text != "" || !errors.Is(err, search.ErrExtractionLimit) {
+		text, err := (&PDFExtractor{}).ExtractReaderAt(strings.NewReader(minimalPDFWithText), int64(len(minimalPDFWithText)), 4)
+		if text != "" || !errors.Is(err, ErrExtractionLimit) {
 			t.Fatalf("extraction = (%q, %v)", text, err)
 		}
 	})
 }
 
 func TestDOCAndMSGReaderAtBoundedFallback(t *testing.T) {
-	for ext, e := range map[string]search.ReaderAtExtractor{"doc": &search.DOCExtractor{}, "msg": &search.MSGExtractor{}} {
+	for ext, e := range map[string]ReaderAtExtractor{"doc": &DOCExtractor{}, "msg": &MSGExtractor{}} {
 		t.Run(ext, func(t *testing.T) {
 			data := []byte("fallback prefix " + strings.Repeat(" ", 4096-len("fallback prefix ")))
 			r := &guardedReaderAt{t: t, r: bytes.NewReader(data), end: 4096}
@@ -257,8 +258,8 @@ func TestDOCAndMSGReaderAtBoundedFallback(t *testing.T) {
 func TestReaderAtExtractorsRejectInvalidInput(t *testing.T) {
 	for _, ext := range []string{"docx", "odt", "pdf", "doc", "msg"} {
 		t.Run(ext, func(t *testing.T) {
-			e, _ := search.NewExtractorRegistry().GetExtractor(ext)
-			ra, ok := e.(search.ReaderAtExtractor)
+			e, _ := NewExtractorRegistry().GetExtractor(ext)
+			ra, ok := e.(ReaderAtExtractor)
 			if !ok {
 				t.Fatal("missing ReaderAtExtractor capability")
 			}
@@ -343,12 +344,12 @@ func TestMSGReaderAtSkipsAttachmentsAndBoundsCumulativeStreams(t *testing.T) {
 		t.Run(fmt.Sprint(limit), func(t *testing.T) {
 			// Any attachment read is a test failure, even if later discarded.
 			r := &guardedReaderAt{t: t, r: bytes.NewReader(data), end: 19 * 512}
-			text, err := (&search.MSGExtractor{}).ExtractReaderAt(r, int64(len(data)), limit)
+			text, err := (&MSGExtractor{}).ExtractReaderAt(r, int64(len(data)), limit)
 			if limit == 8192 {
 				if err != nil || text != "subject body" {
 					t.Fatalf("extraction = (%q, %v)", text, err)
 				}
-			} else if text != "" || !errors.Is(err, search.ErrExtractionLimit) {
+			} else if text != "" || !errors.Is(err, ErrExtractionLimit) {
 				t.Fatalf("extraction = (%q, %v), want extraction limit", text, err)
 			}
 		})
@@ -404,9 +405,9 @@ func TestPDFReaderAtPageTextBudgets(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := pdfWithPageStreams(tc.streams...)
-			engine := &search.SearchEngine{}
+			engine := &SearchEngine{}
 			_, _, before := engine.GetPDFStatsDetailed()
-			got, err := (&search.PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), tc.limit)
+			got, err := (&PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), tc.limit)
 			_, _, after := engine.GetPDFStatsDetailed()
 			var wantTruncated int64
 			if tc.want == "" {
@@ -417,7 +418,7 @@ func TestPDFReaderAtPageTextBudgets(t *testing.T) {
 				t.Errorf("truncated pages delta = %d, want %d", after-before, wantTruncated)
 			}
 			if tc.want == "" {
-				if got != "" || !errors.Is(err, search.ErrExtractionLimit) {
+				if got != "" || !errors.Is(err, ErrExtractionLimit) {
 					t.Fatalf("extraction = (%q, %v), want extraction limit", got, err)
 				}
 				if !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", tc.limit)) {
@@ -451,9 +452,9 @@ func TestPDFReaderAtPlainTextFallbackBudgets(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := pdfWithPageStreams(tc.streams...)
-			engine := &search.SearchEngine{}
+			engine := &SearchEngine{}
 			_, _, before := engine.GetPDFStatsDetailed()
-			got, err := (&search.PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), tc.limit)
+			got, err := (&PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), tc.limit)
 			_, _, after := engine.GetPDFStatsDetailed()
 			var wantTruncated int64
 			if tc.want == "" {
@@ -464,7 +465,7 @@ func TestPDFReaderAtPlainTextFallbackBudgets(t *testing.T) {
 				t.Errorf("truncated pages delta = %d, want %d", after-before, wantTruncated)
 			}
 			if tc.want == "" {
-				if got != "" || !errors.Is(err, search.ErrExtractionLimit) {
+				if got != "" || !errors.Is(err, ErrExtractionLimit) {
 					t.Fatalf("extraction = (%q, %v), want extraction limit", got, err)
 				}
 			} else if err != nil || got != tc.want {
@@ -524,7 +525,7 @@ func TestMSGReaderAtSkipsNestedAllowlistedStreams(t *testing.T) {
 			put16(data[19*512+2:], 'X')
 			for _, limit := range []int64{8192, 12288} {
 				r := &forbiddenSectorReader{t: t, Reader: bytes.NewReader(data)}
-				got, err := (&search.MSGExtractor{}).ExtractReaderAt(r, int64(len(data)), limit)
+				got, err := (&MSGExtractor{}).ExtractReaderAt(r, int64(len(data)), limit)
 				if err != nil || got != "subject body" {
 					t.Fatalf("limit %d: extraction = (%q, %v)", limit, got, err)
 				}
@@ -570,3 +571,141 @@ startxref
 421
 %%EOF
 `
+
+// pdfBoundaryReader cancels the real contextReaderAt immediately before a
+// selected page-boundary probe, independently of the PDF library's read cache.
+type pdfBoundaryReader struct {
+	r              contextReaderAt
+	stop           func()
+	stopAt         int
+	probes         int
+	readsAfterStop int
+}
+
+func (r *pdfBoundaryReader) ReadAt(p []byte, off int64) (int, error) {
+	if len(p) == 0 {
+		r.probes++
+		if r.probes == r.stopAt {
+			r.stop()
+		}
+	} else if r.r.ctx.Err() != nil {
+		r.readsAfterStop++
+	}
+	return r.r.ReadAt(p, off)
+}
+
+func TestPDFReaderAtPageBoundaryCancellation(t *testing.T) {
+	const pages = 4
+	// Empty pages exercise both positioned extraction and plain-text fallback.
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 >>",
+	}
+	for i := 0; i < pages; i++ {
+		objects = append(objects, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>")
+	}
+	var b strings.Builder
+	b.WriteString("%PDF-1.4\n")
+	var offsets []int
+	for i, obj := range objects {
+		offsets = append(offsets, b.Len())
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, obj)
+	}
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f\n", len(objects)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n\n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	data := b.String()
+	for _, phase := range []struct {
+		name   string
+		stopAt int
+	}{
+		{"positioned", 2}, {"fallback", pages + 2},
+	} {
+		for _, expired := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/expired=%v", phase.name, expired), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				r := &pdfBoundaryReader{r: contextReaderAt{ctx, strings.NewReader(data)}, stopAt: phase.stopAt, stop: cancel}
+				want := context.Canceled
+				if expired {
+					want = context.DeadlineExceeded
+					r.stop = func() {
+						deadlineCtx, release := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+						defer release()
+						r.r.ctx = deadlineCtx
+					}
+				}
+				text, err := (&PDFExtractor{}).ExtractReaderAt(r, int64(len(data)), 0)
+				if text != "" || !errors.Is(err, want) {
+					t.Fatalf("extraction = (%q, %v), want empty text and %v", text, err, want)
+				}
+				if r.probes != phase.stopAt || r.readsAfterStop != 0 {
+					t.Fatalf("probes = %d, reads after cancellation = %d; want %d and 0", r.probes, r.readsAfterStop, phase.stopAt)
+				}
+			})
+		}
+	}
+	t.Run("EOF probe is harmless", func(t *testing.T) {
+		r := &pdfEOFProbeReader{ReaderAt: strings.NewReader(data)}
+		text, err := (&PDFExtractor{}).ExtractReaderAt(r, int64(len(data)), 0)
+		if text != "" || err != nil || r.probes != 2*pages {
+			t.Fatalf("extraction = (%q, %v), probes = %d; want empty, nil, %d", text, err, r.probes, 2*pages)
+		}
+	})
+}
+
+type pdfEOFProbeReader struct {
+	io.ReaderAt
+	probes int
+}
+
+func (r *pdfEOFProbeReader) ReadAt(p []byte, off int64) (int, error) {
+	if len(p) == 0 {
+		r.probes++
+		return 0, io.EOF
+	}
+	return r.ReaderAt.ReadAt(p, off)
+}
+
+func TestPDFTextItemsToString_ReconstructsGlyphSpacing(t *testing.T) {
+	items := []pdf.Text{
+		{X: 0, Y: 100, W: 6, FontSize: 12, S: "H"},
+		{X: 6, Y: 100, W: 6, FontSize: 12, S: "a"},
+		{X: 12, Y: 100, W: 6, FontSize: 12, S: "m"},
+		{X: 18, Y: 100, W: 6, FontSize: 12, S: "i"},
+		{X: 24, Y: 100, W: 6, FontSize: 12, S: "l"},
+		{X: 30, Y: 100, W: 6, FontSize: 12, S: "t"},
+		{X: 36, Y: 100, W: 6, FontSize: 12, S: "o"},
+		{X: 42, Y: 100, W: 6, FontSize: 12, S: "n"},
+		{X: 48, Y: 100, W: 6, FontSize: 12, S: "i"},
+		{X: 54, Y: 100, W: 6, FontSize: 12, S: "a"},
+		{X: 60, Y: 100, W: 6, FontSize: 12, S: "n"},
+		{X: 76, Y: 100, W: 6, FontSize: 12, S: "c"},
+		{X: 82, Y: 100, W: 6, FontSize: 12, S: "y"},
+		{X: 88, Y: 100, W: 6, FontSize: 12, S: "c"},
+		{X: 94, Y: 100, W: 6, FontSize: 12, S: "l"},
+		{X: 100, Y: 100, W: 6, FontSize: 12, S: "e"},
+		{X: 106, Y: 100, W: 6, FontSize: 12, S: "s"},
+		{X: 0, Y: 84, W: 6, FontSize: 12, S: "i"},
+		{X: 6, Y: 84, W: 6, FontSize: 12, S: "m"},
+		{X: 12, Y: 84, W: 6, FontSize: 12, S: "p"},
+		{X: 18, Y: 84, W: 6, FontSize: 12, S: "o"},
+		{X: 24, Y: 84, W: 6, FontSize: 12, S: "s"},
+		{X: 30, Y: 84, W: 6, FontSize: 12, S: "s"},
+		{X: 36, Y: 84, W: 6, FontSize: 12, S: "i"},
+		{X: 42, Y: 84, W: 6, FontSize: 12, S: "b"},
+		{X: 48, Y: 84, W: 6, FontSize: 12, S: "l"},
+		{X: 54, Y: 84, W: 6, FontSize: 12, S: "e"},
+	}
+
+	got := pdfTextItemsToString(items)
+	if !strings.Contains(got, "Hamiltonian cycles") {
+		t.Fatalf("expected word gap without letter spacing, got %q", got)
+	}
+	if !strings.Contains(got, "\nimpossible") {
+		t.Fatalf("expected line break before impossible, got %q", got)
+	}
+}
