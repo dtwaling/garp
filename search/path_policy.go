@@ -366,7 +366,14 @@ func relativeContainedPathForPlatform(root, candidate string, windows bool) (str
 	return filepath.FromSlash(candidate[len(prefix):]), true
 }
 
+func (policy *PathPolicy) isEmpty() bool {
+	return policy == nil || (len(policy.scopePositive) == 0 && len(policy.globPositive) == 0 && len(policy.negative) == 0)
+}
+
 func (policy *PathPolicy) MatchesFile(filename string) bool {
+	if policy.isEmpty() {
+		return true
+	}
 	relative, err := filepath.Rel(policy.logicalRoot, filename)
 	if err != nil {
 		return false
@@ -380,6 +387,9 @@ func (policy *PathPolicy) MatchesFile(filename string) bool {
 }
 
 func (policy *PathPolicy) MatchesPositiveGlob(filename string) bool {
+	if policy == nil || len(policy.globPositive) == 0 {
+		return false
+	}
 	relative, err := filepath.Rel(policy.logicalRoot, filename)
 	if err != nil {
 		return false
@@ -549,6 +559,9 @@ func replacePathPrefixFold(candidate, prefix string) (string, bool) {
 
 // CouldMatchDirectory reports whether descending can produce an eligible path.
 func (policy *PathPolicy) CouldMatchDirectory(dirname string) bool {
+	if policy.isEmpty() {
+		return true
+	}
 	relative, err := filepath.Rel(policy.logicalRoot, dirname)
 	if err != nil {
 		return true
