@@ -71,7 +71,11 @@ func validateWalkRoot(root string) error {
 }
 
 // isDescendantLink reports whether path is a link that a walk must skip.
-func isDescendantLink(path string) (bool, error) {
+// An omitted or irregular entry type requires the filesystem fallback.
+func isDescendantLink(path string, entryType ...os.FileMode) (bool, error) {
+	if len(entryType) > 0 && entryType[0]&os.ModeSymlink == 0 && entryType[0] != os.ModeIrregular {
+		return false, nil
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return false, err

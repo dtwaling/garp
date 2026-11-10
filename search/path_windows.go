@@ -153,7 +153,8 @@ func validateWalkRoot(root string) error {
 }
 
 // isDescendantLink reports whether path is a reparse point that a walk must skip.
-func isDescendantLink(path string) (bool, error) {
+// Entry type hints cannot rule out every Windows reparse point.
+func isDescendantLink(path string, _ ...os.FileMode) (bool, error) {
 	name, err := windows.UTF16PtrFromString(extendedLengthWindowsPath(path))
 	if err != nil {
 		return false, err

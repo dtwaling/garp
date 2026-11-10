@@ -49,6 +49,34 @@ func TestValidateUserGlobErrorIsStandalone(t *testing.T) {
 	}
 }
 
+func TestEmptyPathPolicyAllocations(t *testing.T) {
+	root := t.TempDir()
+	compiled, err := CompilePathPolicy(nil, nil, root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filename := filepath.Join(root, "nested", "file.md")
+	for _, policy := range []*PathPolicy{nil, {}, compiled} {
+		for _, check := range []struct {
+			match func(string) bool
+			want  bool
+		}{
+			{policy.MatchesFile, true},
+			{policy.CouldMatchDirectory, true},
+			{policy.MatchesPositiveGlob, false},
+		} {
+			allocs := testing.AllocsPerRun(100, func() {
+				if got := check.match(filename); got != check.want {
+					t.Fatalf("empty policy match = %t, want %t", got, check.want)
+				}
+			})
+			if allocs != 0 {
+				t.Errorf("empty policy allocated %g times, want zero", allocs)
+			}
+		}
+	}
+}
+
 func TestCompilePathPolicyMatching(t *testing.T) {
 	root := t.TempDir()
 	globs := []UserGlob{

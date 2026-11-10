@@ -17,6 +17,23 @@ import (
 	"garp/search"
 )
 
+func TestMBOXExtractorRequiresValidMessages(t *testing.T) {
+	const envelope = "From sender@example.com Mon Jan 1 00:00:00 2024\n"
+	for _, tc := range []struct{ name, data, want string }{
+		{"empty", "", ""},
+		{"non-mbox", "raw unparsed bytes", ""},
+		{"invalid MIME", envelope + "invalid header\n\nraw body", ""},
+		{"valid", envelope + "Subject: Example\n\nmessage body\n", "message body\n---\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := (&search.MBOXExtractor{}).ExtractText([]byte(tc.data))
+			if got != tc.want || (err != nil) != (tc.want == "") {
+				t.Fatalf("extraction = (%q, %v), want %q with error=%t", got, err, tc.want, tc.want == "")
+			}
+		})
+	}
+}
+
 func TestExtractorRegistry_RegistersPDFExtractor(t *testing.T) {
 	registry := search.NewExtractorRegistry()
 	extractor, ok := registry.GetExtractor("pdf")
@@ -387,7 +404,18 @@ func TestPDFReaderAtPageTextBudgets(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := pdfWithPageStreams(tc.streams...)
+			engine := &search.SearchEngine{}
+			_, _, before := engine.GetPDFStatsDetailed()
 			got, err := (&search.PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), tc.limit)
+			_, _, after := engine.GetPDFStatsDetailed()
+			var wantTruncated int64
+			if tc.want == "" {
+				// Each completed nonempty fixture page consumes five bytes.
+				wantTruncated = int64(len(tc.streams)) - tc.limit/5
+			}
+			if after-before != wantTruncated {
+				t.Errorf("truncated pages delta = %d, want %d", after-before, wantTruncated)
+			}
 			if tc.want == "" {
 				if got != "" || !errors.Is(err, search.ErrExtractionLimit) {
 					t.Fatalf("extraction = (%q, %v), want extraction limit", got, err)
@@ -423,7 +451,18 @@ func TestPDFReaderAtPlainTextFallbackBudgets(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := pdfWithPageStreams(tc.streams...)
+			engine := &search.SearchEngine{}
+			_, _, before := engine.GetPDFStatsDetailed()
 			got, err := (&search.PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), tc.limit)
+			_, _, after := engine.GetPDFStatsDetailed()
+			var wantTruncated int64
+			if tc.want == "" {
+				// Each completed nonempty fixture page consumes five bytes.
+				wantTruncated = int64(len(tc.streams)) - tc.limit/5
+			}
+			if after-before != wantTruncated {
+				t.Errorf("truncated pages delta = %d, want %d", after-before, wantTruncated)
+			}
 			if tc.want == "" {
 				if got != "" || !errors.Is(err, search.ErrExtractionLimit) {
 					t.Fatalf("extraction = (%q, %v), want extraction limit", got, err)

@@ -70,8 +70,9 @@ func decideTraversalDirectory(
 	logicalPath, physicalPath, name string,
 	depth int,
 	chain ignoreChain,
+	entryType ...os.FileMode,
 ) (ignoreChain, bool) {
-	linked, linkErr := isDescendantLink(physicalPath)
+	linked, linkErr := isDescendantLink(physicalPath, entryType...)
 	if linkErr != nil || linked {
 		return ignoreChain{}, false
 	}
@@ -185,6 +186,7 @@ func walkPreparedCandidates(
 					entry.Name(),
 					depth,
 					chain,
+					entry.Type(),
 				)
 				if !descend {
 					continue
@@ -195,11 +197,8 @@ func walkPreparedCandidates(
 				continue
 			}
 
-			linked, linkErr := isDescendantLink(physicalPath)
-			if linkErr != nil || linked {
-				continue
-			}
-			if entry.Type() != 0 {
+			entryType := entry.Type()
+			if entryType != 0 && entryType != os.ModeIrregular {
 				continue
 			}
 			typeEligible := matcher.allows(logicalPath)
@@ -214,6 +213,10 @@ func walkPreparedCandidates(
 				continue
 			}
 			if !options.NoIgnore && ignoredByRules(chain.rules, physicalPath, false) {
+				continue
+			}
+			linked, linkErr := isDescendantLink(physicalPath, entryType)
+			if linkErr != nil || linked {
 				continue
 			}
 

@@ -208,6 +208,24 @@ func TestCandidateWalkSkipsDescendantLinks(t *testing.T) {
 	}
 }
 
+func TestDescendantLinkEntryTypeHints(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	for _, hint := range [][]os.FileMode{nil, {0}, {os.ModeDir}, {os.ModeIrregular}, {os.ModeSymlink}} {
+		_, err := isDescendantLink(missing, hint...)
+		wantErr := runtime.GOOS == "windows" || len(hint) == 0 || hint[0] == os.ModeIrregular || hint[0] == os.ModeSymlink
+		if (err != nil) != wantErr {
+			t.Errorf("hint %v: error = %v, want error %t", hint, err, wantErr)
+		}
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	makeTestSymlink(t, missing, link)
+	for _, hint := range [][]os.FileMode{nil, {os.ModeIrregular}, {os.ModeSymlink}} {
+		if linked, err := isDescendantLink(link, hint...); err != nil || !linked {
+			t.Errorf("link with hint %v: linked = %t, error = %v", hint, linked, err)
+		}
+	}
+}
+
 func TestCandidateWalkSkipsDeletedDescendant(t *testing.T) {
 	root := t.TempDir()
 	writeWalkFixture(t, root, "a.md", "anchor")
