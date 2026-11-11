@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-// These fixtures contain encoded terms invisible to raw-byte matching. Reuse the real
-// compound-file fixture so MSG exercises its UTF-16LE subject and body streams.
+// These fixtures contain terms that need decoding or extraction. Reuse the real
+// compound-file layout for ANSI and UTF-16LE DOC and MSG streams.
 func encodedBinaryFixtures() map[string][]byte {
 	encoded := base64.StdEncoding.EncodeToString([]byte("<html><body>subject body</body></html>"))
 	eml := "MIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + encoded + "\r\n"
@@ -25,6 +25,9 @@ func encodedBinaryFixtures() map[string][]byte {
 
 		"encoded.mbox":      []byte("From sender@example.com Mon Jan 1 00:00:00 2024\n" + eml),
 		"unicode.msg":       readerAtMSG(),
+		"ansi.msg":          ansiMSG(),
+		"eight-bit.doc":     docWithWordStream([]byte("subject body")),
+		"utf16.doc":         docWithWordStream(utf16LE("subject body")),
 		"control-words.rtf": []byte(`{\rtf1\ansi su{\b}bject bo{\i}dy}`),
 	}
 }
