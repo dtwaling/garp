@@ -576,18 +576,27 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		}
 
 		// Helper: prefer Unicode (001F), then ANSI (001E), then binary 0102 (for HTML)
-		findStream := func(keys ...string) ([]byte, bool) {
+		findStream := func(keys ...string) (string, []byte, bool) {
 			for _, k := range keys {
 				if v, ok := streams[k]; ok && len(v) > 0 {
-					return v, true
+					return k, v, true
 				}
 			}
-			return nil, false
+			return "", nil, false
 		}
-		// Helper: decode text from MSG stream, UTF-16 aware with ASCII fallback
-		decodeMSGText := func(b []byte) string {
-			if s, ok := tryDecodeUTF16BestEffort(b); ok {
-				return strings.TrimSpace(s)
+		// MAPI string types determine encoding; only binary properties need detection.
+		decodeMSGText := func(name string, b []byte) string {
+			switch {
+			case strings.HasSuffix(name, "001F"):
+				r := transform.NewReader(bytes.NewReader(b), unicode.UTF16(unicode.LittleEndian, unicode.UseBOM).NewDecoder())
+				s, _ := io.ReadAll(r)
+				return strings.TrimSpace(string(s))
+			case strings.HasSuffix(name, "001E"):
+				// ANSI properties must never be interpreted as UTF-16.
+			default:
+				if s, ok := tryDecodeUTF16BestEffort(b); ok {
+					return strings.TrimSpace(s)
+				}
 			}
 			s := whitespaceRegex.ReplaceAllString(string(b), " ")
 			return strings.TrimSpace(s)
@@ -596,17 +605,17 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		var subject, body string
 
 		// PR_SUBJECT: 0037 (Unicode 001F; ANSI 001E)
-		if b, ok := findStream("__substg1.0_0037001F", "__substg1.0_0037001E"); ok {
-			subject = decodeMSGText(b)
+		if name, b, ok := findStream("__substg1.0_0037001F", "__substg1.0_0037001E"); ok {
+			subject = decodeMSGText(name, b)
 		}
 		// PR_BODY: 1000 (Unicode 001F; ANSI 001E)
-		if b, ok := findStream("__substg1.0_1000001F", "__substg1.0_1000001E"); ok {
-			body = decodeMSGText(b)
+		if name, b, ok := findStream("__substg1.0_1000001F", "__substg1.0_1000001E"); ok {
+			body = decodeMSGText(name, b)
 		}
 		// PR_HTML: 1013 (Unicode 001F; ANSI 001E; sometimes 0102 binary); use as fallback for body
 		if body == "" {
-			if b, ok := findStream("__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102"); ok {
-				html := decodeMSGText(b)
+			if name, b, ok := findStream("__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102"); ok {
+				html := decodeMSGText(name, b)
 				if html == "" {
 					html = string(b)
 				}

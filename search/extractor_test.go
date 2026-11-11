@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/ledongthuc/pdf"
 )
@@ -336,6 +337,59 @@ func readerAtMSG() []byte {
 		}
 	}
 	return data
+}
+
+// utf16LE encodes s as BOM-less UTF-16LE.
+func utf16LE(s string) []byte {
+	var b []byte
+	for _, u := range utf16.Encode([]rune(s)) {
+		b = binary.LittleEndian.AppendUint16(b, u)
+	}
+	return b
+}
+
+// cfbWithRootStreams reuses the readerAtMSG layout, renaming its two
+// 4096-byte root streams and zero-filling them after each payload.
+func cfbWithRootStreams(names [2]string, payloads [2][]byte) []byte {
+	data := readerAtMSG()
+	for i, name := range names {
+		d := data[1024+(i+1)*128 : 1024+(i+2)*128]
+		clear(d[:64])
+		for j, c := range name {
+			binary.LittleEndian.PutUint16(d[j*2:], uint16(c))
+		}
+		binary.LittleEndian.PutUint16(d[64:], uint16((len(name)+1)*2))
+		stream := data[(3+8*i)*512 : (11+8*i)*512]
+		clear(stream)
+		copy(stream, payloads[i])
+	}
+	return data
+}
+
+// ansiMSG holds space-padded ANSI subject and body streams.
+func ansiMSG() []byte {
+	return cfbWithRootStreams([2]string{"__substg1.0_0037001E", "__substg1.0_1000001E"},
+		[2][]byte{[]byte("subject" + strings.Repeat(" ", 4089)), []byte("body" + strings.Repeat(" ", 4092))})
+}
+
+func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"ANSI 001E", ansiMSG(), "subject body"},
+		{"Unicode 001F without BOM", cfbWithRootStreams(
+			[2]string{"__substg1.0_0037001F", "__substg1.0_1000001F"},
+			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := (&MSGExtractor{}).ExtractText(tc.data)
+			if err != nil || !strings.Contains(got, tc.want) {
+				t.Fatalf("extraction = (%q, %v), want containing %q", got, err, tc.want)
+			}
+		})
+	}
 }
 
 func TestMSGReaderAtSkipsAttachmentsAndBoundsCumulativeStreams(t *testing.T) {
