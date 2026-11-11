@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/richardlehane/mscfb"
 
@@ -1263,6 +1264,13 @@ func encodingAwarePrefilter(filePath string, query compiledQuery, strict bool, c
 	state.observe(cleanSearchContent(mappedContent{text: strings.NewReplacer("<", " ", ">", " ").Replace(collapsed)}, false).text, query, 0)
 	if state.satisfied(strict) {
 		return false, false
+	}
+	// Extraction joins the subject and body without intervening mail headers.
+	// A phrase can span that join even when every raw-text variant misses it.
+	for _, term := range query.terms {
+		if strings.ContainsFunc(term, unicode.IsSpace) {
+			return false, false
+		}
 	}
 	// Validate EOF at the exact cap rather than trusting a stale file size.
 	return false, complete || readerValidatedEOF(f)
