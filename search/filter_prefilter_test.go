@@ -1000,6 +1000,24 @@ func cleanedAdmissionFixtures(t *testing.T) map[string]string {
 	return fixtures
 }
 
+func TestDiscoverySmallFileAllocation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "small.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("ordinary prose. ", 128)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	admission, provable := prefilterAdmissionQuery(compileQuery([]string{"absent"}, PartialModeOff))
+	result := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if discoveryAdmitsTextFile(path, admission, provable, int64(maxFileSizeBytes)) {
+				b.Fatal("unexpected admission")
+			}
+		}
+	})
+	if got := result.AllocedBytesPerOp(); got >= 64*1024 {
+		t.Fatalf("2 KB admission allocates %d bytes; want less than 64 KiB", got)
+	}
+}
+
 func TestPrefiltersAdmitEveryCleanedMatch(t *testing.T) {
 	if len(literalAuditPhrase) != 137 {
 		t.Fatal("literal phrase must exercise the wildcard byte limit")

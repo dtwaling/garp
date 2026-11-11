@@ -192,7 +192,6 @@ func spacingFree(src []byte, prev uint8, armed bool) bool {
 type cleanerSpacingReader struct {
 	r         io.Reader
 	raw       int64
-	buf       [64 * 1024]byte
 	output    []byte
 	ready     []byte
 	err       error
@@ -201,6 +200,8 @@ type cleanerSpacingReader struct {
 	pendingC2 bool
 }
 
+// Read fills p directly from the source; spacing-free reads pass through with
+// no copy. Only reads that need insertions are expanded into s.output.
 func (s *cleanerSpacingReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -209,16 +210,16 @@ func (s *cleanerSpacingReader) Read(p []byte) (int, error) {
 		if s.err != nil {
 			return 0, s.err
 		}
-		n, err := s.r.Read(s.buf[:])
+		n, err := s.r.Read(p)
 		s.raw += int64(n)
 		s.err = err
-		src := s.buf[:n]
+		src := p[:n]
 		if !s.pendingC2 && spacingFree(src, s.prev, s.armed) {
 			if n > 0 {
 				k := spacingKinds[src[n-1]]
 				s.prev, s.armed = k&^spacingComma, k == spacingComma
+				return n, nil
 			}
-			s.ready = src
 		} else {
 			if cap(s.output) < 2*n+2 {
 				s.output = make([]byte, 0, 2*n+2)

@@ -504,10 +504,24 @@ func discoveryAdmitsTextFile(path string, admission compiledQuery, provable bool
 	if !config.IsCodeFile(path) {
 		r = &cleanerSpacingReader{r: r}
 	}
-	hit := make([]bool, len(admission.matchers))
+	scan := discoveryScanner{chunk: int(min(st.Size()+1, discoveryChunkSize))}
+	return scan.admits(r, admission)
+}
+
+const discoveryChunkSize = 64 * 1024
+
+// discoveryScanner reuses one file-sized (at most chunk-sized) window.
+type discoveryScanner struct {
+	chunk  int
+	window []byte
+}
+
+// admits reports whether every matcher of q hits r, or r fails to read.
+func (s *discoveryScanner) admits(r io.Reader, q compiledQuery) bool {
+	hit := make([]bool, len(q.matchers))
 	remaining := len(hit)
 	observe := func(data []byte, from int) bool {
-		for i, matcher := range admission.matchers {
+		for i, matcher := range q.matchers {
 			if !hit[i] && discoveryMatchIndex(data, matcher, from) >= 0 {
 				hit[i] = true
 				remaining--
@@ -515,23 +529,20 @@ func discoveryAdmitsTextFile(path string, admission compiledQuery, provable bool
 		}
 		return remaining == 0
 	}
-	const chunkSize = 64 * 1024
-	if st.Size() <= chunkSize {
-		data, readErr := io.ReadAll(r)
-		return observe(data, 0) || readErr != nil
+	overlap := streamQueryOverlap(q)
+	if len(s.window) < overlap+s.chunk {
+		s.window = make([]byte, overlap+s.chunk)
 	}
-	overlap := streamQueryOverlap(admission)
-	prev := make([]byte, 0, overlap)
-	buf := make([]byte, chunkSize)
+	kept := 0
 	var total int64
 	for {
-		n, readErr := r.Read(buf)
+		n, readErr := r.Read(s.window[kept:])
 		if n > 0 {
-			combined := append(prev, buf[:n]...)
-			if observe(combined, discoveryChunkMatchStart(total, len(prev))) {
+			data := s.window[:kept+n]
+			if observe(data, discoveryChunkMatchStart(total, kept)) {
 				return true
 			}
-			prev = append(prev[:0], combined[max(0, len(combined)-overlap):]...)
+			kept = copy(s.window, data[max(0, len(data)-overlap):])
 			total += int64(n)
 		}
 		if readErr == io.EOF {
@@ -1032,8 +1043,8 @@ func streamMatchesQuery(r io.Reader, query compiledQuery, strict bool, maxBytes 
 	state := streamQueryMatches{found: make([]bool, len(query.matchers)), owners: query.owners, terms: len(query.terms)}
 	const chunkSize = 64 * 1024
 	overlap := streamQueryOverlap(query)
-	prev := make([]byte, 0, overlap)
-	buf := make([]byte, chunkSize)
+	window := make([]byte, overlap+chunkSize)
+	kept := 0
 	var total int64
 	for {
 		maybePaceForMemory()
@@ -1044,19 +1055,15 @@ func streamMatchesQuery(r io.Reader, query compiledQuery, strict bool, maxBytes 
 		if rem := maxBytes - total; rem < int64(toRead) {
 			toRead = int(rem)
 		}
-		n, readErr := r.Read(buf[:toRead])
+		n, readErr := r.Read(window[kept : kept+toRead])
 		if n > 0 {
-			combined := append(prev, buf[:n]...)
-			from := discoveryChunkMatchStart(total, len(prev))
-			state.observe(string(combined), query, from)
+			data := window[:kept+n]
+			from := discoveryChunkMatchStart(total, kept)
+			state.observe(string(data), query, from)
 			if state.satisfied(strict) {
 				return true, true, nil
 			}
-			if len(combined) > overlap {
-				prev = append(prev[:0], combined[len(combined)-overlap:]...)
-			} else {
-				prev = append(prev[:0], combined...)
-			}
+			kept = copy(window, data[max(0, len(data)-overlap):])
 			total += int64(n)
 		}
 		if readErr == io.EOF {
