@@ -2,7 +2,7 @@
 
 # :: garp ::
 
-![Version](https://img.shields.io/badge/version-0.9-blue?labelColor=0052cc)
+![Version](https://img.shields.io/badge/version-0.10.0-blue?labelColor=0052cc)
 ![License](https://img.shields.io/github/license/dtwaling/garp?color=4338ca&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-linux-4338ca?logo=linux&logoColor=white&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-macos-4338ca?logo=apple&logoColor=white&labelColor=3730a3)
@@ -454,7 +454,7 @@ produces `bin\garp.exe` using the same release flags as the Makefile (`-trimpath
 stripped symbol table + DWARF, embedded version):
 
 ```powershell
-go build -trimpath -ldflags "-s -w -X garp/app.version=0.9" -o bin\garp.exe .
+go build -trimpath -ldflags "-s -w -X garp/app.version=0.10.0" -o bin\garp.exe .
 go test ./...                                              # run tests
 go vet ./...                                               # vet
 ```
@@ -465,7 +465,7 @@ embedded version) and is committed alongside the Linux build at `bin/garp.exe`.
 
 ```bash
 GOOS=windows GOARCH=amd64 go build -trimpath \
-  -ldflags "-s -w -X garp/app.version=0.9" -o bin/garp.exe .
+  -ldflags "-s -w -X garp/app.version=0.10.0" -o bin/garp.exe .
 ```
 
 ## TUI navigation

@@ -24,7 +24,7 @@ import (
 	"garp/search"
 )
 
-var version = "0.9.2"
+var version = "0.10.0"
 
 type infoRequest uint8
 
