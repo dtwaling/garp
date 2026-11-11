@@ -565,11 +565,14 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				if s, ok := tryDecodeUTF16BestEffort(b); ok {
 					return strings.TrimSpace(s)
 				}
-				// Preserve 8-bit HTML markup for tag stripping. Also retain the
-				// UTF-16LE reading for invalid UTF-8 or NUL-containing streams:
+				// Retain both readings for invalid UTF-8 or NUL-containing streams:
 				// non-Latin UTF-16LE can be valid UTF-8, but its HTML tags have NULs.
+				// Strip each reading's tags before combining, while markup is intact.
+				// Leave entities encoded for the final HTML pass to decode once.
 				if !utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0 {
-					return strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(b)+"\n"+utf16LEReading(b), " "))
+					text := htmlTagRegex.ReplaceAllString(string(b), " ") + "\n" +
+						htmlTagRegex.ReplaceAllString(utf16LEReadingWithMarkup(b, true), " ")
+					return strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
 				}
 			}
 			s := whitespaceRegex.ReplaceAllString(string(b), " ")
@@ -630,6 +633,11 @@ func salvagePrintableASCII(b []byte, binary bool) string {
 // utf16LEReading retains the legacy UTF-16LE view without binary controls or
 // angle brackets that could cause the HTML cleaner to erase searchable text.
 func utf16LEReading(b []byte) string {
+	return utf16LEReadingWithMarkup(b, false)
+}
+
+// utf16LEReadingWithMarkup optionally preserves angle brackets for HTML stripping.
+func utf16LEReadingWithMarkup(b []byte, keepMarkup bool) string {
 	units := make([]uint16, len(b)/2)
 	for i := range units {
 		units[i] = uint16(b[2*i]) | uint16(b[2*i+1])<<8
@@ -637,7 +645,7 @@ func utf16LEReading(b []byte) string {
 	var out strings.Builder
 	pendingSpace := false
 	for _, r := range utf16.Decode(units) {
-		if r <= 0x20 || r == 0x7f || r == utf8.RuneError || r == '<' || r == '>' {
+		if r <= 0x20 || r == 0x7f || r == utf8.RuneError || (!keepMarkup && (r == '<' || r == '>')) {
 			pendingSpace = out.Len() > 0
 			continue
 		}

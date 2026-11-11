@@ -386,7 +386,13 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема", ""},
 		{"binary HTML without BOM and predominantly non-Latin body", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{utf16LE("<html><body>" + strings.Repeat("東京都の報告書", 30) + "</body></html>"), nil}), "東京都の報告書", ""},
+			[2][]byte{utf16LE(`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal"},
+		{"binary CP1252 HTML preserves entity-encoded brackets", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("<html><body>Caf\xe9 <p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
+		{"binary non-Latin UTF-16LE HTML preserves entity-encoded brackets", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{utf16LE("<html><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "<p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
 		{"binary HTML without BOM and predominantly Cyrillic body", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{utf16LE("<html><body>" + strings.Repeat("Отчёт о продажах", 30) + "</body></html>"), nil}), "Отчёт о продажах", ""},
