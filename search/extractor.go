@@ -654,10 +654,11 @@ func decodeLegacyStreamText(b []byte, binary bool) string {
 	return strings.TrimSpace(salvagePrintableASCII(b, binary) + "\n" + utf16LEReading(b))
 }
 
-// tryDecodeUTF16BestEffort attempts BOM-aware UTF-16 decoding, then heuristic LE/BE.
+// tryDecodeUTF16BestEffort requires a BOM or a dominant NUL lane before decoding.
+// UseBOM alone never rejects missing BOMs, so it cannot detect UTF-16.
 func tryDecodeUTF16BestEffort(b []byte) (string, bool) {
-	// Prefer BOM-aware decode (handles LE/BE automatically if BOM present)
-	{
+	// UseBOM honors either byte order, but only actual BOMs justify this path.
+	if len(b) >= 2 && ((b[0] == 0xff && b[1] == 0xfe) || (b[0] == 0xfe && b[1] == 0xff)) {
 		r := transform.NewReader(bytes.NewReader(b), unicode.UTF16(unicode.LittleEndian, unicode.UseBOM).NewDecoder())
 		s, err := io.ReadAll(r)
 		if err == nil {
@@ -695,34 +696,33 @@ func tryDecodeUTF16BestEffort(b []byte) (string, bool) {
 	return "", false
 }
 
+func utf16ZeroLanes(b []byte) (even, odd int) {
+	for i, c := range b {
+		if c == 0 {
+			if i%2 == 0 {
+				even++
+			} else {
+				odd++
+			}
+		}
+	}
+	return even, odd
+}
+
 func isLikelyUTF16LE(b []byte) bool {
 	if len(b) < 4 {
 		return false
 	}
-	zeros := 0
-	slots := 0
-	for i := 1; i < len(b); i += 2 {
-		slots++
-		if b[i] == 0x00 {
-			zeros++
-		}
-	}
-	return slots > 0 && float64(zeros) >= 0.30*float64(slots)
+	even, odd := utf16ZeroLanes(b)
+	return float64(odd) >= 0.30*float64(len(b)/2) && odd > 4*even
 }
 
 func isLikelyUTF16BE(b []byte) bool {
 	if len(b) < 4 {
 		return false
 	}
-	zeros := 0
-	slots := 0
-	for i := 0; i < len(b); i += 2 {
-		slots++
-		if b[i] == 0x00 {
-			zeros++
-		}
-	}
-	return slots > 0 && float64(zeros) >= 0.30*float64(slots)
+	even, odd := utf16ZeroLanes(b)
+	return float64(even) >= 0.30*float64(len(b)/2) && even > 4*odd
 }
 
 // DOCXExtractor extracts text from .docx files (Office Open XML)

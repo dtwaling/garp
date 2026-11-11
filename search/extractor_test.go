@@ -379,6 +379,7 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 		want string
 	}{
 		{"ANSI 001E", ansiMSG(), "subject body"},
+		{"non-CFB 8-bit fallback", []byte("arithmetic exception, numeric overflow"), "arithmetic exception, numeric overflow"},
 		{"Unicode 001F without BOM", cfbWithRootStreams(
 			[2]string{"__substg1.0_0037001F", "__substg1.0_1000001F"},
 			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема"},
@@ -409,6 +410,7 @@ func TestDOCExtractorReadsEightBitAndUTF16LEStreams(t *testing.T) {
 		want string
 	}{
 		{"UTF-16LE ASCII", utf16LE("subject body"), "subject body"},
+		{"8-bit", []byte("subject body"), "subject body"},
 		{"UTF-16LE Cyrillic", utf16LE("Привет мир документ"), "Привет мир документ"},
 		{"UTF-16LE Latin-1", utf16LE("Résumé für Ärzte"), "Résumé für Ärzte"},
 		{"UTF-16LE CJK", utf16LE("東京都の報告書"), "東京都の報告書"},
@@ -417,6 +419,29 @@ func TestDOCExtractorReadsEightBitAndUTF16LEStreams(t *testing.T) {
 			got, err := (&DOCExtractor{}).ExtractText(docWithWordStream(tc.text))
 			if err != nil || !strings.Contains(got, tc.want) || strings.ContainsAny(got, "<>") {
 				t.Fatalf("extraction = (%q, %v), want containing %q without angle brackets", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestTryDecodeUTF16BestEffortRequiresBOMOrDominantNULLane(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want string
+		ok   bool
+	}{
+		{"BOM LE", append([]byte{0xff, 0xfe}, utf16LE("hi there")...), "hi there", true},
+		{"BOM BE", []byte{0xfe, 0xff, 0, 'h', 0, 'i'}, "hi", true},
+		{"BOM-less LE", utf16LE("hello world"), "hello world", true},
+		{"BOM-less BE", []byte{0, 'h', 0, 'e', 0, 'l', 0, 'l', 0, 'o'}, "hello", true},
+		{"8-bit text", []byte("arithmetic exception"), "", false},
+		{"zero-padded 8-bit", []byte(strings.Repeat("\x00", 64) + "subject body" + strings.Repeat("\x00", 64)), "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := tryDecodeUTF16BestEffort(tc.data)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("decode = (%q, %t), want (%q, %t)", got, ok, tc.want, tc.ok)
 			}
 		})
 	}
