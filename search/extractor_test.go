@@ -374,20 +374,33 @@ func ansiMSG() []byte {
 
 func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		data []byte
-		want string
+		name    string
+		data    []byte
+		want    string
+		notWant string
 	}{
-		{"ANSI 001E", ansiMSG(), "subject body"},
-		{"non-CFB 8-bit fallback", []byte("arithmetic exception, numeric overflow"), "arithmetic exception, numeric overflow"},
+		{"ANSI 001E", ansiMSG(), "subject body", ""},
+		{"non-CFB 8-bit fallback", []byte("arithmetic exception, numeric overflow"), "arithmetic exception, numeric overflow", ""},
 		{"Unicode 001F without BOM", cfbWithRootStreams(
 			[2]string{"__substg1.0_0037001F", "__substg1.0_1000001F"},
-			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема"},
+			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема", ""},
+		{"binary HTML without BOM and predominantly non-Latin body", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{utf16LE("<html><body>" + strings.Repeat("東京都の報告書", 30) + "</body></html>"), nil}), "東京都の報告書", ""},
+		{"binary HTML without BOM and predominantly Cyrillic body", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{utf16LE("<html><body>" + strings.Repeat("Отчёт о продажах", 30) + "</body></html>"), nil}), "Отчёт о продажах", ""},
+		{"binary UTF-8 HTML preserves non-ASCII text and strips attributes", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte(`<html><body><p class="MsoNormal">café 東京都の報告書 quarterly</p></body></html>`), nil}), "café 東京都の報告書 quarterly", "MsoNormal"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := (&MSGExtractor{}).ExtractText(tc.data)
 			if err != nil || !strings.Contains(got, tc.want) {
-				t.Fatalf("extraction = (%q, %v), want containing %q", got, err, tc.want)
+				t.Errorf("extraction = (%q, %v), want containing %q", got, err, tc.want)
+			}
+			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
+				t.Errorf("extraction = %q, must not contain %q", got, tc.notWant)
 			}
 		})
 	}
@@ -435,6 +448,7 @@ func TestTryDecodeUTF16BestEffortRequiresBOMOrDominantNULLane(t *testing.T) {
 		{"BOM BE", []byte{0xfe, 0xff, 0, 'h', 0, 'i'}, "hi", true},
 		{"BOM-less LE", utf16LE("hello world"), "hello world", true},
 		{"BOM-less BE", []byte{0, 'h', 0, 'e', 0, 'l', 0, 'l', 0, 'o'}, "hello", true},
+		{"binary-prefixed bracketed LE", append([]byte{1, 2}, utf16LE("<"+strings.Repeat("subject body ", 30)+">")...), "ȁ<" + strings.Repeat("subject body ", 30) + ">", true},
 		{"8-bit text", []byte("arithmetic exception"), "", false},
 		{"zero-padded 8-bit", []byte(strings.Repeat("\x00", 64) + "subject body" + strings.Repeat("\x00", 64)), "", false},
 	} {
@@ -442,6 +456,19 @@ func TestTryDecodeUTF16BestEffortRequiresBOMOrDominantNULLane(t *testing.T) {
 			got, ok := tryDecodeUTF16BestEffort(tc.data)
 			if got != tc.want || ok != tc.ok {
 				t.Fatalf("decode = (%q, %t), want (%q, %t)", got, ok, tc.want, tc.ok)
+			}
+			if ok {
+				if got := decodeLegacyStreamText(tc.data, false); got != tc.want {
+					t.Errorf("nonbinary legacy decode = %q, want %q", got, tc.want)
+				}
+				want := strings.TrimSpace(whitespaceRegex.ReplaceAllString(strings.NewReplacer("<", " ", ">", " ").Replace(tc.want), " "))
+				got := decodeLegacyStreamText(tc.data, true)
+				if got != want || strings.ContainsAny(got, "<>") {
+					t.Errorf("binary legacy decode = %q, want %q without angle brackets", got, want)
+				}
+				if cleaned := cleanStage3Content(got, false).text; cleaned != want {
+					t.Errorf("Stage 3 cleaned text = %q, want %q", cleaned, want)
+				}
 			}
 		})
 	}

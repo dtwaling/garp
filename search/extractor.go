@@ -565,6 +565,12 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				if s, ok := tryDecodeUTF16BestEffort(b); ok {
 					return strings.TrimSpace(s)
 				}
+				// Preserve 8-bit HTML markup for tag stripping. Also retain the
+				// UTF-16LE reading for invalid UTF-8 or NUL-containing streams:
+				// non-Latin UTF-16LE can be valid UTF-8, but its HTML tags have NULs.
+				if !utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0 {
+					return strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(b)+"\n"+utf16LEReading(b), " "))
+				}
 			}
 			s := whitespaceRegex.ReplaceAllString(string(b), " ")
 			return strings.TrimSpace(s)
@@ -649,6 +655,9 @@ func utf16LEReading(b []byte) string {
 // alternative for distinguishing mixed 8-bit and UTF-16LE text from binary noise.
 func decodeLegacyStreamText(b []byte, binary bool) string {
 	if s, ok := tryDecodeUTF16BestEffort(b); ok {
+		if binary {
+			s = strings.NewReplacer("<", " ", ">", " ").Replace(s)
+		}
 		return strings.TrimSpace(whitespaceRegex.ReplaceAllString(s, " "))
 	}
 	return strings.TrimSpace(salvagePrintableASCII(b, binary) + "\n" + utf16LEReading(b))
