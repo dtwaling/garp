@@ -2,6 +2,7 @@ package search
 
 import (
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"sort"
@@ -39,10 +40,10 @@ var (
 	quoteLineStartRegex = regexp.MustCompile(`(?m)^\s*>+\s*`)
 	quoteMidRegex       = regexp.MustCompile(`\s*>+\s*`)
 
-	// Precompiled regexes for CleanContent - CRITICAL: these were being compiled on EVERY call
-	// letterDigitRegex injects a space between an uppercase letter and a digit to fix OCR artifacts
-	// like "Account10" -> "Account 10" or "PDF32" -> "PDF 32". Restricted to uppercase-start to
-	// avoid mangling code identifiers such as float32, int64, np.float32.
+	// Split uppercase/digit transitions: PDF32 -> PDF 32, 2026Report -> 2026 Report.
+	// Lowercase/digit pairs (Account10, float32, int64) deliberately stay intact.
+	// cleanerSpacingReader mirrors these transitions and comma spacing below;
+	// the regexes and streaming state machine must change together.
 	letterDigitRegex  = regexp.MustCompile(`([A-Z])([0-9])`)
 	digitLetterRegex  = regexp.MustCompile(`([0-9])([A-Z])`)
 	commaMissingSpace = regexp.MustCompile(`,([^\s])`)
@@ -77,7 +78,7 @@ func CleanContent(content string) string {
 // "if a < b then" all contain angle brackets the document cleaner would treat as tags and delete.
 // It only normalizes control characters and collapses whitespace, so matching and excerpts stay
 // faithful to the source. The OCR-oriented digit/space fixups in CleanContent are also skipped
-// because they mangle identifiers (e.g. "Int32" -> "Int 32").
+// because they mangle identifiers (e.g. "SHA256" -> "SHA 256").
 func CleanContentCode(content string) string {
 	return cleanSearchContent(mappedContent{text: content}, true).text
 }
@@ -97,7 +98,7 @@ func cleanStage3Content(raw string, isCode bool) mappedContent {
 // A nil offset slice avoids building correspondence that analysis never uses.
 func cleanSearchContent(m mappedContent, isCode bool) mappedContent {
 	if !isCode {
-		m = m.replace(cssRegex, "").replace(jsRegex, "")
+		m = m.replace(cssRegex, " ").replace(jsRegex, " ")
 		m = m.replace(htmlTagRegex, " ").replace(htmlEntityRegex, " ")
 		m = m.replace(junkSymbolsRegex, "").replace(emailQuotingRegex, "")
 		m = m.replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")
@@ -151,6 +152,129 @@ func normalizeMappedWhitespace(m mappedContent) mappedContent {
 		i += size
 	}
 	return mappedContent{text.String(), offsets}
+}
+
+const (
+	spacingUpper = 1
+	spacingDigit = 2
+	spacingComma = 4
+)
+
+var spacingKinds = func() (k [256]uint8) {
+	for b := 'A'; b <= 'Z'; b++ {
+		k[b] = spacingUpper
+	}
+	for b := '0'; b <= '9'; b++ {
+		k[b] = spacingDigit
+	}
+	k[','] = spacingComma
+	return
+}()
+
+// spacingFree permits pass-through without allocating a transformed buffer.
+func spacingFree(src []byte, prev uint8, armed bool) bool {
+	if armed {
+		prev = spacingComma
+	}
+	for _, b := range src {
+		k := spacingKinds[b]
+		if prev|k == spacingUpper|spacingDigit || (prev == spacingComma && b > 0x20 && b != 0x7f) {
+			return false
+		}
+		prev = k
+	}
+	return true
+}
+
+// cleanerSpacingReader inserts the cleaner's uppercase/digit and comma spaces
+// without stripping markup or collapsing whitespace. raw counts input bytes,
+// not the expanded output. State survives both input and output read boundaries.
+type cleanerSpacingReader struct {
+	r         io.Reader
+	raw       int64
+	buf       [64 * 1024]byte
+	output    []byte
+	ready     []byte
+	err       error
+	prev      uint8
+	armed     bool
+	pendingC2 bool
+}
+
+func (s *cleanerSpacingReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for len(s.ready) == 0 {
+		if s.err != nil {
+			return 0, s.err
+		}
+		n, err := s.r.Read(s.buf[:])
+		s.raw += int64(n)
+		s.err = err
+		src := s.buf[:n]
+		if !s.pendingC2 && spacingFree(src, s.prev, s.armed) {
+			if n > 0 {
+				k := spacingKinds[src[n-1]]
+				s.prev, s.armed = k&^spacingComma, k == spacingComma
+			}
+			s.ready = src
+		} else {
+			if cap(s.output) < 2*n+2 {
+				s.output = make([]byte, 0, 2*n+2)
+			}
+			out := s.output[:0]
+			prev, pending := s.prev, s.pendingC2
+			if s.armed {
+				prev = spacingComma
+			}
+			if pending && n > 0 {
+				if src[0] < 0x80 || src[0] > 0x9f {
+					out = append(out, ' ')
+				}
+				out = append(out, 0xc2)
+				pending = false
+			}
+			start := 0
+			for i, b := range src {
+				k := spacingKinds[b]
+				insert := prev|k == spacingUpper|spacingDigit
+				if prev == spacingComma && b > 0x20 && b != 0x7f {
+					// The comma regexp consumes its following rune, so a
+					// consumed comma must not arm another insertion.
+					insert = true
+					if b == 0xc2 {
+						if i+1 == n {
+							out = append(out, src[start:i]...)
+							start, pending, prev = n, true, 0
+							break
+						}
+						insert = src[i+1] < 0x80 || src[i+1] > 0x9f
+					}
+					k &^= spacingComma
+				}
+				if insert {
+					out = append(out, src[start:i]...)
+					out = append(out, ' ')
+					start = i
+				}
+				prev = k
+			}
+			out = append(out, src[start:]...)
+			if pending && err != nil {
+				out = append(out, ' ', 0xc2)
+				pending = false
+			}
+			s.prev, s.armed, s.pendingC2 = prev&^spacingComma, prev == spacingComma, pending
+			s.output, s.ready = out, out
+		}
+		if n == 0 && err == nil {
+			return 0, nil
+		}
+	}
+	n := copy(p, s.ready)
+	s.ready = s.ready[n:]
+	return n, nil
 }
 
 // excerptSpan is one emitted chunk: its final text plus the [left, right)

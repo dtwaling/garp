@@ -3,13 +3,17 @@ package search
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -1195,6 +1199,16 @@ func TestFileAllWordsCleaningConsistency(t *testing.T) {
 	}
 }
 
+func TestCleanContentKeepsTokensAroundStrippedBlocks(t *testing.T) {
+	for _, tag := range []string{"style", "script"} {
+		t.Run(tag, func(t *testing.T) {
+			if got := CleanContent("foo<" + tag + ">x</" + tag + ">bar"); got != "foo bar" {
+				t.Fatalf("got %q, want foo bar", got)
+			}
+		})
+	}
+}
+
 func TestCleaningStageParity(t *testing.T) {
 	for _, raw := range []string{"header\n> alpha beta hidden\nvisible\n", "\n-----\nvisible", "<style>hidden</style>\n<script>hidden</script>\n<b>A1,2B</b> &amp;\tend", "\u00a0\x00é\u0085\tX\xff\u2003", "", " \n\t"} {
 		for _, code := range []bool{false, true} {
@@ -1222,6 +1236,54 @@ func TestMappedWhitespaceAllocationGrowth(t *testing.T) {
 	small, large := allocs(10), allocs(1000)
 	if large-small > 2 {
 		t.Fatalf("whitespace allocations scale per run: small=%.0f large=%.0f", small, large)
+	}
+}
+
+func TestCleanerSpacingReaderReproducesCleanSearchContent(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	alphabet := []string{"A", "B", "1", "2", "x", ",", ",,", " ", "\t", "\n", "\x00", "\x7f", "é", "\xc2\x85", "\xc2\xa0", "\xc2", "\x85"}
+	cases := []string{"", ",\xc2", ",\xc2\x85A1", ",,x", "A1B2", strings.Repeat("x", 65535) + ",\xc2\x85A1"}
+	for range 2000 {
+		var raw strings.Builder
+		for n := rng.Intn(80); n > 0; n-- {
+			raw.WriteString(alphabet[rng.Intn(len(alphabet))])
+		}
+		cases = append(cases, raw.String())
+	}
+	for _, raw := range cases {
+		want := CleanContent(raw)
+		for _, wrap := range []func(io.Reader) io.Reader{func(r io.Reader) io.Reader { return r }, iotest.OneByteReader, iotest.HalfReader} {
+			for size := 1; size <= 8; size++ {
+				r := &cleanerSpacingReader{r: wrap(strings.NewReader(raw))}
+				var out bytes.Buffer
+				buf := make([]byte, size)
+				for {
+					n, err := r.Read(buf)
+					out.Write(buf[:n])
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				got := strings.TrimFunc(normalizeMappedWhitespace(mappedContent{text: out.String()}).text, unicode.IsSpace)
+				if got != want || r.raw != int64(len(raw)) {
+					t.Fatalf("raw=%q size=%d: got %q (%d bytes), want %q (%d bytes)", raw, size, got, r.raw, want, len(raw))
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkCleanerSpacingReader(b *testing.B) {
+	raw := strings.Repeat("Please review PDF32 and 2026Report balance details, 1,000 items.\n", 20000)
+	b.SetBytes(int64(len(raw)))
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := io.Copy(io.Discard, &cleanerSpacingReader{r: strings.NewReader(raw)}); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
