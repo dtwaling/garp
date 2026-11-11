@@ -2,8 +2,10 @@ package search
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -460,6 +462,9 @@ func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, w
 }
 
 func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []string, walkRoot string, pathScope []string, options WalkOptions) ([]string, error) {
+	admission, provable := prefilterAdmissionQuery(compiledQuery{
+		terms: []string{matcher.term}, matchers: []termMatcher{matcher}, maxDetectionBytes: matcher.detectionBytes,
+	})
 	matches := make([]string, 0, 128)
 	err := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
 		if IsBinaryFormat(path) {
@@ -468,71 +473,9 @@ func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []s
 			return nil
 		}
 
-		// Stream up to maxBytes looking for the first word
-		const chunkSize = 64 * 1024
-		maxBytes := options.TextMaxBytes()
-		overlap := discoveryMatcherOverlap(matcher)
-
-		f, st, openErr := openRegularSearchFile(path)
-		if openErr != nil {
-			return nil
-		}
-		_ = adviseSequential(f)
-
-		// Early path for small files: read whole file at once, avoid chunk loop
-		if st.Size() <= chunkSize {
-			data, _ := io.ReadAll(io.LimitReader(f, maxBytes))
-			if discoveryMatchIndex(data, matcher, 0) >= 0 {
-				matches = append(matches, path)
-			}
-			_ = adviseDontNeed(f)
-			_ = f.Close()
-			return nil
-		}
-
-		var total int64
-		prev := make([]byte, 0, overlap)
-		buf := make([]byte, chunkSize)
-		found := false
-		for {
-			if total >= maxBytes {
-				break
-			}
-			toRead := chunkSize
-			if rem := maxBytes - total; rem < int64(toRead) {
-				toRead = int(rem)
-			}
-			n, rErr := f.Read(buf[:toRead])
-			if n > 0 {
-				combined := append(prev, buf[:n]...)
-				from := discoveryChunkMatchStart(total, len(prev))
-				if discoveryMatchIndex(combined, matcher, from) >= 0 {
-					found = true
-				}
-				if n >= overlap {
-					prev = append(prev[:0], buf[n-overlap:n]...)
-				} else {
-					if len(combined) >= overlap {
-						prev = append(prev[:0], combined[len(combined)-overlap:]...)
-					} else {
-						prev = append(prev[:0], combined...)
-					}
-				}
-				total += int64(n)
-			}
-			if rErr == io.EOF {
-				break
-			}
-			if rErr != nil {
-				break
-			}
-		}
-
-		if found {
+		if discoveryAdmitsTextFile(path, admission, provable, options.TextMaxBytes()) {
 			matches = append(matches, path)
 		}
-		_ = adviseDontNeed(f)
-		_ = f.Close()
 		return nil
 	})
 	if err != nil {
@@ -542,6 +485,62 @@ func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []s
 		return nil, nil
 	}
 	return matches, nil
+}
+
+// discoveryAdmitsTextFile applies the cleaned-text admission proof to Stage 1.
+// Its query contains only the primary term's necessary matchers.
+func discoveryAdmitsTextFile(path string, admission compiledQuery, provable bool, maxBytes int64) bool {
+	f, st, err := openRegularSearchFile(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if !provable {
+		return true
+	}
+	_ = adviseSequential(f)
+	defer adviseDontNeed(f)
+	r := io.Reader(io.LimitReader(f, maxBytes))
+	if !config.IsCodeFile(path) {
+		r = &cleanerSpacingReader{r: r}
+	}
+	hit := make([]bool, len(admission.matchers))
+	remaining := len(hit)
+	observe := func(data []byte, from int) bool {
+		for i, matcher := range admission.matchers {
+			if !hit[i] && discoveryMatchIndex(data, matcher, from) >= 0 {
+				hit[i] = true
+				remaining--
+			}
+		}
+		return remaining == 0
+	}
+	const chunkSize = 64 * 1024
+	if st.Size() <= chunkSize {
+		data, readErr := io.ReadAll(r)
+		return observe(data, 0) || readErr != nil
+	}
+	overlap := streamQueryOverlap(admission)
+	prev := make([]byte, 0, overlap)
+	buf := make([]byte, chunkSize)
+	var total int64
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			combined := append(prev, buf[:n]...)
+			if observe(combined, discoveryChunkMatchStart(total, len(prev))) {
+				return true
+			}
+			prev = append(prev[:0], combined[max(0, len(combined)-overlap):]...)
+			total += int64(n)
+		}
+		if readErr == io.EOF {
+			return false
+		}
+		if readErr != nil {
+			return true
+		}
+	}
 }
 
 func discoveryMatcherOverlap(matcher termMatcher) int {
@@ -754,6 +753,7 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 		maxMatchBytes:     primaryMatcher.maxMatchBytes,
 		maxDetectionBytes: primaryMatcher.detectionBytes,
 	}
+	admission, provable := prefilterAdmissionQuery(primaryQuery)
 
 	// Results and synchronization
 	matches := make([]string, 0, 128)
@@ -776,76 +776,11 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			const chunkSize = 64 * 1024
 			maxBytes := options.TextMaxBytes()
-			overlap := discoveryMatcherOverlap(primaryMatcher)
 
 			for p := range paths {
 				maybePaceForMemory()
-
-				f, st, openErr := openRegularSearchFile(p)
-				if openErr != nil {
-					continue
-				}
-				_ = adviseSequential(f)
-
-				// Early path for small files: read whole file at once, avoid chunk loop
-				if st.Size() <= chunkSize {
-					data, _ := io.ReadAll(io.LimitReader(f, maxBytes))
-					_ = adviseDontNeed(f)
-					_ = f.Close()
-
-					if discoveryMatchIndex(data, primaryMatcher, 0) >= 0 {
-						mu.Lock()
-						matches = append(matches, p)
-						mu.Unlock()
-					}
-					continue
-				}
-
-				var readTotal int64
-				prev := make([]byte, 0, overlap)
-				buf := make([]byte, chunkSize)
-				found := false
-
-				for {
-					if readTotal >= maxBytes {
-						break
-					}
-					toRead := chunkSize
-					if rem := maxBytes - readTotal; rem < int64(toRead) {
-						toRead = int(rem)
-					}
-					n, rErr := f.Read(buf[:toRead])
-					if n > 0 {
-						combined := append(prev, buf[:n]...)
-						from := discoveryChunkMatchStart(readTotal, len(prev))
-						if discoveryMatchIndex(combined, primaryMatcher, from) >= 0 {
-							found = true
-						}
-						if n >= overlap {
-							prev = append(prev[:0], buf[n-overlap:n]...)
-						} else {
-							if len(combined) >= overlap {
-								prev = append(prev[:0], combined[len(combined)-overlap:]...)
-							} else {
-								prev = append(prev[:0], combined...)
-							}
-						}
-						readTotal += int64(n)
-					}
-					if rErr == io.EOF {
-						break
-					}
-					if rErr != nil {
-						break
-					}
-				}
-
-				_ = adviseDontNeed(f)
-				_ = f.Close()
-
-				if found {
+				if discoveryAdmitsTextFile(p, admission, provable, maxBytes) {
 					mu.Lock()
 					matches = append(matches, p)
 					mu.Unlock()
@@ -924,22 +859,7 @@ func streamContainsAllWordsDecidedPartial(filePath string, words []string, parti
 }
 
 func streamContainsAllWordsDecidedQuery(filePath string, query compiledQuery, maxBytes int64) (found bool, decided bool) {
-	if len(query.matchers) == 0 {
-		return true, true
-	}
-	if maxBytes <= 0 {
-		maxBytes = defaultTextMaxBytes
-	}
-	f, _, err := openRegularSearchFile(filePath)
-	if err != nil {
-		return false, false
-	}
-	_ = adviseSequential(f)
-	defer f.Close()
-
-	found, complete, readErr := streamMatchesQuery(f, query, true, maxBytes)
-	_ = adviseDontNeed(f)
-	return decideStreamQueryResult(found, complete, readErr, true)
+	return streamContainsRankedWordsDecidedQuery(filePath, query, true, maxBytes)
 }
 
 func StreamContainsAllWords(filePath string, words []string) bool {
@@ -981,7 +901,7 @@ func streamContainsRankedWordsDecidedQuery(filePath string, query compiledQuery,
 	_ = adviseSequential(f)
 	defer f.Close()
 
-	found, complete, readErr := streamMatchesQuery(f, query, strict, maxBytes)
+	found, complete, readErr := streamMatchesCleanedQuery(f, query, strict, maxBytes, config.IsCodeFile(filePath))
 	_ = adviseDontNeed(f)
 	return decideStreamQueryResult(found, complete, readErr, true)
 }
@@ -1023,7 +943,7 @@ func streamContainsQueryDecidedWithCap(filePath string, query compiledQuery, str
 		completeAtLimit = false
 	}
 
-	found, complete, readErr := streamMatchesQuery(f, query, strict, maxBytes)
+	found, complete, readErr := streamMatchesCleanedQuery(f, query, strict, maxBytes, config.IsCodeFile(filePath))
 	_ = adviseDontNeed(f)
 	return decideStreamQueryResult(found, complete, readErr, completeAtLimit)
 }
@@ -1048,7 +968,9 @@ func readerValidatedEOF(r io.Reader) bool {
 }
 
 type streamQueryMatches struct {
-	found []bool
+	found  []bool
+	owners []int
+	terms  int
 }
 
 func (m *streamQueryMatches) observe(text string, query compiledQuery, from int) {
@@ -1062,6 +984,16 @@ func (m *streamQueryMatches) observe(text string, query compiledQuery, from int)
 }
 
 func (m *streamQueryMatches) satisfied(strict bool) bool {
+	if m.owners != nil {
+		grouped := streamQueryMatches{found: make([]bool, m.terms)}
+		for i := range grouped.found {
+			grouped.found[i] = true
+		}
+		for i, owner := range m.owners {
+			grouped.found[owner] = grouped.found[owner] && m.found[i]
+		}
+		return grouped.satisfied(strict)
+	}
 	if len(m.found) == 0 {
 		return true
 	}
@@ -1097,7 +1029,7 @@ func streamMatchesQuery(r io.Reader, query compiledQuery, strict bool, maxBytes 
 	if len(query.matchers) == 0 {
 		return true, true, nil
 	}
-	state := streamQueryMatches{found: make([]bool, len(query.matchers))}
+	state := streamQueryMatches{found: make([]bool, len(query.matchers)), owners: query.owners, terms: len(query.terms)}
 	const chunkSize = 64 * 1024
 	overlap := streamQueryOverlap(query)
 	prev := make([]byte, 0, overlap)
@@ -1134,6 +1066,66 @@ func streamMatchesQuery(r io.Reader, query compiledQuery, strict bool, maxBytes 
 			return false, false, readErr
 		}
 	}
+}
+
+// prefilterAdmissionQuery requires every usable phrase piece to occur, without
+// requiring adjacency in raw markup. Unusable pieces cannot prove absence.
+func prefilterAdmissionQuery(q compiledQuery) (compiledQuery, bool) {
+	hasPhrase := false
+	for _, term := range q.terms {
+		hasPhrase = hasPhrase || strings.Contains(term, " ")
+	}
+	if !hasPhrase {
+		return q, true
+	}
+	aq := compiledQuery{terms: q.terms, owners: make([]int, 0, len(q.matchers))}
+	for i, p := range q.matchers {
+		start := len(aq.matchers)
+		if !strings.Contains(p.term, " ") {
+			aq.matchers = append(aq.matchers, p)
+		} else {
+			for _, piece := range strings.Split(p.term, " ") {
+				// An invalid wildcard parent matches literal '*' and '?'.
+				// Recompiling such pieces as wildcards can lose real matches.
+				if piece == "" || !p.validWildcard && strings.ContainsAny(piece, "*?") {
+					continue
+				}
+				m := compileTermMatcherWithOptions(piece, PartialModeContains, QueryOptions{CaseSensitive: !p.caseInsensitive})
+				if m.mode == PartialModeContains {
+					aq.matchers = append(aq.matchers, m)
+				}
+			}
+		}
+		if len(aq.matchers) == start {
+			return compiledQuery{}, false
+		}
+		for _, m := range aq.matchers[start:] {
+			aq.owners = append(aq.owners, i)
+			aq.maxDetectionBytes = max(aq.maxDetectionBytes, m.detectionBytes)
+		}
+	}
+	return aq, true
+}
+
+var errUnprovableMiss = errors.New("prefilter miss cannot prove a cleaned-text miss")
+
+// streamMatchesCleanedQuery permits a conclusive miss only when the bounded
+// stream cannot satisfy prefilterAdmissionQuery after cleanerSpacingReader
+// (non-code). Cleaning never joins raw tokens: spaceless matches survive the
+// spacing replay, and phrase matches imply every usable piece is present.
+// Thus an authoritative cleaned-text match cannot be a decided prefilter miss.
+// Stage 1 admits a text file unless that same proof succeeds.
+func streamMatchesCleanedQuery(r io.Reader, query compiledQuery, strict bool, maxBytes int64, isCode bool) (found, complete bool, err error) {
+	aq, ok := prefilterAdmissionQuery(query)
+	if !ok {
+		return false, false, errUnprovableMiss
+	}
+	if isCode {
+		return streamMatchesQuery(r, aq, strict, maxBytes)
+	}
+	sr := &cleanerSpacingReader{r: io.LimitReader(r, maxBytes)}
+	found, complete, err = streamMatchesQuery(sr, aq, strict, math.MaxInt64)
+	return found, complete && sr.raw < maxBytes, err
 }
 
 // BinaryStreamingPrefilterDecided performs a bounded streaming prefilter for select binary types
@@ -1337,7 +1329,7 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 		if maxBytes <= 0 {
 			maxBytes = 5 * 1024 * 1024
 		}
-		found, complete, readErr := streamMatchesQuery(rc, query, strict, maxBytes)
+		found, complete, readErr := streamMatchesCleanedQuery(rc, query, strict, maxBytes, false)
 		validatedAtLimit := false
 		if !found && !complete && readErr == nil &&
 			uint64(maxBytes) >= xmlFile.UncompressedSize64 {

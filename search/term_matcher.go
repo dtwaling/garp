@@ -44,6 +44,10 @@ type compiledQuery struct {
 	matchers          []termMatcher
 	maxMatchBytes     int
 	maxDetectionBytes int
+	// owners is nil except in prefilter admission queries, where matchers[i]
+	// must hit together with all matchers sharing its owner to admit
+	// terms[owners[i]]. Never pass these queries to ranking or excerpt code.
+	owners []int
 }
 
 // QueryOptions defines immutable matching behavior for a compiled query.
