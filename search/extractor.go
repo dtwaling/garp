@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/emersion/go-mbox"
 	"github.com/jhillyerd/enmime"
@@ -260,16 +262,7 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		if readErr != nil {
 			return "", readErr
 		}
-		buf := make([]rune, 0, len(data))
-		for _, b := range data {
-			if b == 0x09 || b == 0x0a || b == 0x0d || (b >= 0x20 && b <= 0x7e) {
-				buf = append(buf, rune(b))
-			} else {
-				buf = append(buf, ' ')
-			}
-		}
-		txt := strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(buf), " "))
-		return txt, nil
+		return salvagePrintableASCII(data, false), nil
 	}
 
 	var out strings.Builder
@@ -299,24 +292,7 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			continue
 		}
 
-		var text string
-		if s, ok := tryDecodeUTF16BestEffort(b); ok {
-			text = s
-		} else {
-			// ASCII salvage
-			buf := make([]rune, 0, len(b))
-			for _, bb := range b {
-				if bb == 0x09 || bb == 0x0a || bb == 0x0d || (bb >= 0x20 && bb <= 0x7e) {
-					buf = append(buf, rune(bb))
-				} else {
-					buf = append(buf, ' ')
-				}
-			}
-			text = string(buf)
-		}
-
-		// Normalize and append
-		text = strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
+		text := decodeLegacyStreamText(b, true)
 		if text != "" {
 			if out.Len() > 0 {
 				out.WriteString("\n")
@@ -332,15 +308,7 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		if readErr != nil {
 			return "", readErr
 		}
-		buf := make([]rune, 0, len(data))
-		for _, b := range data {
-			if b == 0x09 || b == 0x0a || b == 0x0d || (b >= 0x20 && b <= 0x7e) {
-				buf = append(buf, rune(b))
-			} else {
-				buf = append(buf, ' ')
-			}
-		}
-		result = strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(buf), " "))
+		result = salvagePrintableASCII(data, true)
 	}
 	return result, nil
 }
@@ -576,18 +544,36 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		}
 
 		// Helper: prefer Unicode (001F), then ANSI (001E), then binary 0102 (for HTML)
-		findStream := func(keys ...string) ([]byte, bool) {
+		findStream := func(keys ...string) (string, []byte, bool) {
 			for _, k := range keys {
 				if v, ok := streams[k]; ok && len(v) > 0 {
-					return v, true
+					return k, v, true
 				}
 			}
-			return nil, false
+			return "", nil, false
 		}
-		// Helper: decode text from MSG stream, UTF-16 aware with ASCII fallback
-		decodeMSGText := func(b []byte) string {
-			if s, ok := tryDecodeUTF16BestEffort(b); ok {
-				return strings.TrimSpace(s)
+		// MAPI string types determine encoding; only binary properties need detection.
+		decodeMSGText := func(name string, b []byte) string {
+			switch {
+			case strings.HasSuffix(name, "001F"):
+				r := transform.NewReader(bytes.NewReader(b), unicode.UTF16(unicode.LittleEndian, unicode.UseBOM).NewDecoder())
+				s, _ := io.ReadAll(r)
+				return strings.TrimSpace(string(s))
+			case strings.HasSuffix(name, "001E"):
+				// ANSI properties must never be interpreted as UTF-16.
+			default:
+				if s, ok := tryDecodeUTF16BestEffort(b); ok {
+					return strings.TrimSpace(s)
+				}
+				// Retain both readings for invalid UTF-8 or NUL-containing streams:
+				// non-Latin UTF-16LE can be valid UTF-8, but its HTML tags have NULs.
+				// Strip each reading's tags before combining, while markup is intact.
+				// Leave entities encoded for the final HTML pass to decode once.
+				if !utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0 {
+					text := stripReadingMarkup(string(b)) + "\n" +
+						stripReadingMarkup(utf16LEReadingWithMarkup(b, true))
+					return strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
+				}
 			}
 			s := whitespaceRegex.ReplaceAllString(string(b), " ")
 			return strings.TrimSpace(s)
@@ -596,17 +582,17 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		var subject, body string
 
 		// PR_SUBJECT: 0037 (Unicode 001F; ANSI 001E)
-		if b, ok := findStream("__substg1.0_0037001F", "__substg1.0_0037001E"); ok {
-			subject = decodeMSGText(b)
+		if name, b, ok := findStream("__substg1.0_0037001F", "__substg1.0_0037001E"); ok {
+			subject = decodeMSGText(name, b)
 		}
 		// PR_BODY: 1000 (Unicode 001F; ANSI 001E)
-		if b, ok := findStream("__substg1.0_1000001F", "__substg1.0_1000001E"); ok {
-			body = decodeMSGText(b)
+		if name, b, ok := findStream("__substg1.0_1000001F", "__substg1.0_1000001E"); ok {
+			body = decodeMSGText(name, b)
 		}
 		// PR_HTML: 1013 (Unicode 001F; ANSI 001E; sometimes 0102 binary); use as fallback for body
 		if body == "" {
-			if b, ok := findStream("__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102"); ok {
-				html := decodeMSGText(b)
+			if name, b, ok := findStream("__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102"); ok {
+				html := decodeMSGText(name, b)
 				if html == "" {
 					html = string(b)
 				}
@@ -621,31 +607,88 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		}
 	}
 
-	// Fallback: bounded best-effort UTF-16, then ASCII salvage.
+	// Fallback: bounded shared legacy-stream decoding.
 	fallbackMax := min(limit, 2*1024*1024)
 	data, readErr := io.ReadAll(io.NewSectionReader(r, 0, min(size, fallbackMax)))
 	if readErr != nil {
 		return "", readErr
 	}
-	if s, ok := tryDecodeUTF16BestEffort(data); ok {
-		return strings.TrimSpace(s), nil
-	}
-	buf := make([]rune, 0, len(data))
-	for _, b := range data {
-		if b == 0x09 || b == 0x0a || b == 0x0d || (b >= 0x20 && b <= 0x7e) {
-			buf = append(buf, rune(b))
-		} else {
-			buf = append(buf, ' ')
-		}
-	}
-	out := whitespaceRegex.ReplaceAllString(string(buf), " ")
-	return strings.TrimSpace(out), nil
+	return decodeLegacyStreamText(data, false), nil
 }
 
-// tryDecodeUTF16BestEffort attempts BOM-aware UTF-16 decoding, then heuristic LE/BE.
+// stripReadingMarkup removes style/script contents, tags and stray brackets before readings are joined.
+// Entities stay encoded for the downstream HTML pass to decode once.
+func stripReadingMarkup(s string) string {
+	s = cssRegex.ReplaceAllString(s, " ")
+	s = jsRegex.ReplaceAllString(s, " ")
+	s = htmlTagRegex.ReplaceAllString(s, " ")
+	return strings.NewReplacer("<", " ", ">", " ").Replace(s)
+}
+
+// salvagePrintableASCII collapses non-printable bytes to spaces. Binary streams
+// also blank stray angle brackets so the Stage 3 HTML cleaner cannot erase text.
+func salvagePrintableASCII(b []byte, binary bool) string {
+	out := make([]byte, 0, len(b))
+	for _, c := range b {
+		if c >= 0x21 && c <= 0x7e && !(binary && (c == '<' || c == '>')) {
+			out = append(out, c)
+		} else if len(out) > 0 && out[len(out)-1] != ' ' {
+			out = append(out, ' ')
+		}
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// utf16LEReading retains the legacy UTF-16LE view without binary controls or
+// angle brackets that could cause the HTML cleaner to erase searchable text.
+func utf16LEReading(b []byte) string {
+	return utf16LEReadingWithMarkup(b, false)
+}
+
+// utf16LEReadingWithMarkup optionally preserves angle brackets for HTML stripping.
+func utf16LEReadingWithMarkup(b []byte, keepMarkup bool) string {
+	units := make([]uint16, len(b)/2)
+	for i := range units {
+		units[i] = uint16(b[2*i]) | uint16(b[2*i+1])<<8
+	}
+	var out strings.Builder
+	pendingSpace := false
+	for _, r := range utf16.Decode(units) {
+		if r <= 0x20 || r == 0x7f || r == utf8.RuneError || (!keepMarkup && (r == '<' || r == '>')) {
+			pendingSpace = out.Len() > 0
+			continue
+		}
+		if pendingSpace {
+			out.WriteByte(' ')
+			pendingSpace = false
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
+// decodeLegacyStreamText is the shared Stage 1/2/3 legacy-stream rule. Without
+// encoding evidence, retain both readings; Word's piece table is the exact
+// alternative for distinguishing mixed 8-bit and UTF-16LE text from binary noise.
+func decodeLegacyStreamText(b []byte, binary bool) string {
+	if s, ok := tryDecodeUTF16BestEffort(b); ok {
+		if binary {
+			s = strings.NewReplacer("<", " ", ">", " ").Replace(s)
+		}
+		return strings.TrimSpace(whitespaceRegex.ReplaceAllString(s, " "))
+	}
+	if !binary {
+		return strings.TrimSpace(stripReadingMarkup(salvagePrintableASCII(b, false)) + "\n" +
+			stripReadingMarkup(utf16LEReadingWithMarkup(b, true)))
+	}
+	return strings.TrimSpace(salvagePrintableASCII(b, binary) + "\n" + utf16LEReading(b))
+}
+
+// tryDecodeUTF16BestEffort requires a BOM or a dominant NUL lane before decoding.
+// UseBOM alone never rejects missing BOMs, so it cannot detect UTF-16.
 func tryDecodeUTF16BestEffort(b []byte) (string, bool) {
-	// Prefer BOM-aware decode (handles LE/BE automatically if BOM present)
-	{
+	// UseBOM honors either byte order, but only actual BOMs justify this path.
+	if len(b) >= 2 && ((b[0] == 0xff && b[1] == 0xfe) || (b[0] == 0xfe && b[1] == 0xff)) {
 		r := transform.NewReader(bytes.NewReader(b), unicode.UTF16(unicode.LittleEndian, unicode.UseBOM).NewDecoder())
 		s, err := io.ReadAll(r)
 		if err == nil {
@@ -683,34 +726,33 @@ func tryDecodeUTF16BestEffort(b []byte) (string, bool) {
 	return "", false
 }
 
+func utf16ZeroLanes(b []byte) (even, odd int) {
+	for i, c := range b {
+		if c == 0 {
+			if i%2 == 0 {
+				even++
+			} else {
+				odd++
+			}
+		}
+	}
+	return even, odd
+}
+
 func isLikelyUTF16LE(b []byte) bool {
 	if len(b) < 4 {
 		return false
 	}
-	zeros := 0
-	slots := 0
-	for i := 1; i < len(b); i += 2 {
-		slots++
-		if b[i] == 0x00 {
-			zeros++
-		}
-	}
-	return slots > 0 && float64(zeros) >= 0.30*float64(slots)
+	even, odd := utf16ZeroLanes(b)
+	return float64(odd) >= 0.30*float64(len(b)/2) && odd > 4*even
 }
 
 func isLikelyUTF16BE(b []byte) bool {
 	if len(b) < 4 {
 		return false
 	}
-	zeros := 0
-	slots := 0
-	for i := 0; i < len(b); i += 2 {
-		slots++
-		if b[i] == 0x00 {
-			zeros++
-		}
-	}
-	return slots > 0 && float64(zeros) >= 0.30*float64(slots)
+	even, odd := utf16ZeroLanes(b)
+	return float64(even) >= 0.30*float64(len(b)/2) && even > 4*odd
 }
 
 // DOCXExtractor extracts text from .docx files (Office Open XML)

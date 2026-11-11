@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/ledongthuc/pdf"
 )
@@ -336,6 +337,159 @@ func readerAtMSG() []byte {
 		}
 	}
 	return data
+}
+
+// utf16LE encodes s as BOM-less UTF-16LE.
+func utf16LE(s string) []byte {
+	var b []byte
+	for _, u := range utf16.Encode([]rune(s)) {
+		b = binary.LittleEndian.AppendUint16(b, u)
+	}
+	return b
+}
+
+// cfbWithRootStreams reuses the readerAtMSG layout, renaming its two
+// 4096-byte root streams and zero-filling them after each payload.
+func cfbWithRootStreams(names [2]string, payloads [2][]byte) []byte {
+	data := readerAtMSG()
+	for i, name := range names {
+		d := data[1024+(i+1)*128 : 1024+(i+2)*128]
+		clear(d[:64])
+		for j, c := range name {
+			binary.LittleEndian.PutUint16(d[j*2:], uint16(c))
+		}
+		binary.LittleEndian.PutUint16(d[64:], uint16((len(name)+1)*2))
+		stream := data[(3+8*i)*512 : (11+8*i)*512]
+		clear(stream)
+		copy(stream, payloads[i])
+	}
+	return data
+}
+
+// ansiMSG holds space-padded ANSI subject and body streams.
+func ansiMSG() []byte {
+	return cfbWithRootStreams([2]string{"__substg1.0_0037001E", "__substg1.0_1000001E"},
+		[2][]byte{[]byte("subject" + strings.Repeat(" ", 4089)), []byte("body" + strings.Repeat(" ", 4092))})
+}
+
+func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
+	hiddenHTML := utf16LE("<html><style>cssneedle</style><script>jsneedle()</script><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</body></html>")
+	for _, tc := range []struct {
+		name    string
+		data    []byte
+		want    string
+		notWant string
+	}{
+		{"ANSI 001E", ansiMSG(), "subject body", ""},
+		{"non-CFB 8-bit fallback", []byte("arithmetic exception, numeric overflow"), "arithmetic exception, numeric overflow", ""},
+		{"binary UTF-16LE HTML drops hidden blocks", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{hiddenHTML, nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle"},
+		{"non-CFB UTF-16LE HTML drops hidden blocks", hiddenHTML, "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle"},
+		{"Unicode 001F without BOM", cfbWithRootStreams(
+			[2]string{"__substg1.0_0037001F", "__substg1.0_1000001F"},
+			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема", ""},
+		{"binary HTML without BOM and predominantly non-Latin body", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{utf16LE(`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal"},
+		{"binary UTF-16LE HTML isolates stray brackets between readings", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{utf16LE("<html><body><p>report > limit</p>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "\u503c"), nil}), "report limit \u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", ""},
+		{"non-CFB UTF-16LE HTML strips attributes", utf16LE(
+			`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal"},
+		{"binary CP1252 HTML preserves entity-encoded brackets", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("<html><body>Caf\xe9 <p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
+		{"binary non-Latin UTF-16LE HTML preserves entity-encoded brackets", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{utf16LE("<html><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "<p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
+		{"binary HTML without BOM and predominantly Cyrillic body", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{utf16LE("<html><body>" + strings.Repeat("Отчёт о продажах", 30) + "</body></html>"), nil}), "Отчёт о продажах", ""},
+		{"binary UTF-8 HTML preserves non-ASCII text and strips attributes", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte(`<html><body><p class="MsoNormal">café 東京都の報告書 quarterly</p></body></html>`), nil}), "café 東京都の報告書 quarterly", "MsoNormal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := (&MSGExtractor{}).ExtractText(tc.data)
+			if err != nil || !strings.Contains(got, tc.want) {
+				t.Errorf("extraction = (%q, %v), want containing %q", got, err, tc.want)
+			}
+			for _, unwanted := range strings.Fields(tc.notWant) {
+				if strings.Contains(got, unwanted) {
+					t.Errorf("extraction = %q, must not contain %q", got, unwanted)
+				}
+			}
+		})
+	}
+}
+
+// docWithWordStream places text inside a zero-padded WordDocument stream
+// between binary noise that includes stray '<' and '>' bytes.
+func docWithWordStream(text []byte) []byte {
+	stream := make([]byte, 4096)
+	copy(stream[1024:], "\x01<\x02")
+	copy(stream[1536:], text)
+	copy(stream[3072:], "\x05>\x06")
+	return cfbWithRootStreams([2]string{"WordDocument", "1Table"}, [2][]byte{stream, nil})
+}
+
+func TestDOCExtractorReadsEightBitAndUTF16LEStreams(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text []byte
+		want string
+	}{
+		{"UTF-16LE ASCII", utf16LE("subject body"), "subject body"},
+		{"8-bit", []byte("subject body"), "subject body"},
+		{"UTF-16LE Cyrillic", utf16LE("Привет мир документ"), "Привет мир документ"},
+		{"UTF-16LE Latin-1", utf16LE("Résumé für Ärzte"), "Résumé für Ärzte"},
+		{"UTF-16LE CJK", utf16LE("東京都の報告書"), "東京都の報告書"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := (&DOCExtractor{}).ExtractText(docWithWordStream(tc.text))
+			if err != nil || !strings.Contains(got, tc.want) || strings.ContainsAny(got, "<>") {
+				t.Fatalf("extraction = (%q, %v), want containing %q without angle brackets", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestTryDecodeUTF16BestEffortRequiresBOMOrDominantNULLane(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want string
+		ok   bool
+	}{
+		{"BOM LE", append([]byte{0xff, 0xfe}, utf16LE("hi there")...), "hi there", true},
+		{"BOM BE", []byte{0xfe, 0xff, 0, 'h', 0, 'i'}, "hi", true},
+		{"BOM-less LE", utf16LE("hello world"), "hello world", true},
+		{"BOM-less BE", []byte{0, 'h', 0, 'e', 0, 'l', 0, 'l', 0, 'o'}, "hello", true},
+		{"binary-prefixed bracketed LE", append([]byte{1, 2}, utf16LE("<"+strings.Repeat("subject body ", 30)+">")...), "ȁ<" + strings.Repeat("subject body ", 30) + ">", true},
+		{"8-bit text", []byte("arithmetic exception"), "", false},
+		{"zero-padded 8-bit", []byte(strings.Repeat("\x00", 64) + "subject body" + strings.Repeat("\x00", 64)), "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := tryDecodeUTF16BestEffort(tc.data)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("decode = (%q, %t), want (%q, %t)", got, ok, tc.want, tc.ok)
+			}
+			if ok {
+				if got := decodeLegacyStreamText(tc.data, false); got != tc.want {
+					t.Errorf("nonbinary legacy decode = %q, want %q", got, tc.want)
+				}
+				want := strings.TrimSpace(whitespaceRegex.ReplaceAllString(strings.NewReplacer("<", " ", ">", " ").Replace(tc.want), " "))
+				got := decodeLegacyStreamText(tc.data, true)
+				if got != want || strings.ContainsAny(got, "<>") {
+					t.Errorf("binary legacy decode = %q, want %q without angle brackets", got, want)
+				}
+				if cleaned := cleanStage3Content(got, false).text; cleaned != want {
+					t.Errorf("Stage 3 cleaned text = %q, want %q", cleaned, want)
+				}
+			}
+		})
+	}
 }
 
 func TestMSGReaderAtSkipsAttachmentsAndBoundsCumulativeStreams(t *testing.T) {
