@@ -392,6 +392,36 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 	}
 }
 
+// docWithWordStream places text inside a zero-padded WordDocument stream
+// between binary noise that includes stray '<' and '>' bytes.
+func docWithWordStream(text []byte) []byte {
+	stream := make([]byte, 4096)
+	copy(stream[1024:], "\x01<\x02")
+	copy(stream[1536:], text)
+	copy(stream[3072:], "\x05>\x06")
+	return cfbWithRootStreams([2]string{"WordDocument", "1Table"}, [2][]byte{stream, nil})
+}
+
+func TestDOCExtractorReadsEightBitAndUTF16LEStreams(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text []byte
+		want string
+	}{
+		{"UTF-16LE ASCII", utf16LE("subject body"), "subject body"},
+		{"UTF-16LE Cyrillic", utf16LE("Привет мир документ"), "Привет мир документ"},
+		{"UTF-16LE Latin-1", utf16LE("Résumé für Ärzte"), "Résumé für Ärzte"},
+		{"UTF-16LE CJK", utf16LE("東京都の報告書"), "東京都の報告書"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := (&DOCExtractor{}).ExtractText(docWithWordStream(tc.text))
+			if err != nil || !strings.Contains(got, tc.want) || strings.ContainsAny(got, "<>") {
+				t.Fatalf("extraction = (%q, %v), want containing %q without angle brackets", got, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestMSGReaderAtSkipsAttachmentsAndBoundsCumulativeStreams(t *testing.T) {
 	data := readerAtMSG()
 	for _, limit := range []int64{8192, 8191, 4096, 4095} {

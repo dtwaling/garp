@@ -1345,7 +1345,7 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 	case ".doc":
 		// Conservative OLE (.doc) prefilter:
 		// - Open the compound file and stream a few likely text-bearing streams (WordDocument, 1Table, 0Table)
-		// - Salvage text best-effort (UTF-16 if possible, else ASCII with whitespace normalization)
+		// - Decode text with the same legacy-stream rule as Stage 3 extraction
 		// - If all words are conclusively found within a capped budget: (true, true)
 		// - Otherwise: (false, false) — undecided (never mark as conclusively absent)
 		f, _, err := openRegularSearchFile(filePath)
@@ -1400,24 +1400,7 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 				continue
 			}
 
-			// Best-effort text salvage
-			var text string
-			if s, ok := tryDecodeUTF16BestEffort(data); ok {
-				text = s
-			} else {
-				buf := make([]rune, 0, len(data))
-				for _, b := range data {
-					if b == 0x09 || b == 0x0a || b == 0x0d || (b >= 0x20 && b <= 0x7e) {
-						buf = append(buf, rune(b))
-					} else {
-						buf = append(buf, ' ')
-					}
-				}
-				// Use precompiled whitespaceRegex from cleaner.go
-				text = strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(buf), " "))
-			}
-
-			state.observe(text, query, 0)
+			state.observe(decodeLegacyStreamText(data, true), query, 0)
 			if state.satisfied(strict) {
 				return true, true
 			}

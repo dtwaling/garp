@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/emersion/go-mbox"
 	"github.com/jhillyerd/enmime"
@@ -260,16 +262,7 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		if readErr != nil {
 			return "", readErr
 		}
-		buf := make([]rune, 0, len(data))
-		for _, b := range data {
-			if b == 0x09 || b == 0x0a || b == 0x0d || (b >= 0x20 && b <= 0x7e) {
-				buf = append(buf, rune(b))
-			} else {
-				buf = append(buf, ' ')
-			}
-		}
-		txt := strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(buf), " "))
-		return txt, nil
+		return salvagePrintableASCII(data, false), nil
 	}
 
 	var out strings.Builder
@@ -299,24 +292,7 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			continue
 		}
 
-		var text string
-		if s, ok := tryDecodeUTF16BestEffort(b); ok {
-			text = s
-		} else {
-			// ASCII salvage
-			buf := make([]rune, 0, len(b))
-			for _, bb := range b {
-				if bb == 0x09 || bb == 0x0a || bb == 0x0d || (bb >= 0x20 && bb <= 0x7e) {
-					buf = append(buf, rune(bb))
-				} else {
-					buf = append(buf, ' ')
-				}
-			}
-			text = string(buf)
-		}
-
-		// Normalize and append
-		text = strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
+		text := decodeLegacyStreamText(b, true)
 		if text != "" {
 			if out.Len() > 0 {
 				out.WriteString("\n")
@@ -332,15 +308,7 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		if readErr != nil {
 			return "", readErr
 		}
-		buf := make([]rune, 0, len(data))
-		for _, b := range data {
-			if b == 0x09 || b == 0x0a || b == 0x0d || (b >= 0x20 && b <= 0x7e) {
-				buf = append(buf, rune(b))
-			} else {
-				buf = append(buf, ' ')
-			}
-		}
-		result = strings.TrimSpace(whitespaceRegex.ReplaceAllString(string(buf), " "))
+		result = salvagePrintableASCII(data, true)
 	}
 	return result, nil
 }
@@ -630,25 +598,60 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		}
 	}
 
-	// Fallback: bounded best-effort UTF-16, then ASCII salvage.
+	// Fallback: bounded shared legacy-stream decoding.
 	fallbackMax := min(limit, 2*1024*1024)
 	data, readErr := io.ReadAll(io.NewSectionReader(r, 0, min(size, fallbackMax)))
 	if readErr != nil {
 		return "", readErr
 	}
-	if s, ok := tryDecodeUTF16BestEffort(data); ok {
-		return strings.TrimSpace(s), nil
-	}
-	buf := make([]rune, 0, len(data))
-	for _, b := range data {
-		if b == 0x09 || b == 0x0a || b == 0x0d || (b >= 0x20 && b <= 0x7e) {
-			buf = append(buf, rune(b))
-		} else {
-			buf = append(buf, ' ')
+	return decodeLegacyStreamText(data, false), nil
+}
+
+// salvagePrintableASCII collapses non-printable bytes to spaces. Binary streams
+// also blank stray angle brackets so the Stage 3 HTML cleaner cannot erase text.
+func salvagePrintableASCII(b []byte, binary bool) string {
+	out := make([]byte, 0, len(b))
+	for _, c := range b {
+		if c >= 0x21 && c <= 0x7e && !(binary && (c == '<' || c == '>')) {
+			out = append(out, c)
+		} else if len(out) > 0 && out[len(out)-1] != ' ' {
+			out = append(out, ' ')
 		}
 	}
-	out := whitespaceRegex.ReplaceAllString(string(buf), " ")
-	return strings.TrimSpace(out), nil
+	return strings.TrimSpace(string(out))
+}
+
+// utf16LEReading retains the legacy UTF-16LE view without binary controls or
+// angle brackets that could cause the HTML cleaner to erase searchable text.
+func utf16LEReading(b []byte) string {
+	units := make([]uint16, len(b)/2)
+	for i := range units {
+		units[i] = uint16(b[2*i]) | uint16(b[2*i+1])<<8
+	}
+	var out strings.Builder
+	pendingSpace := false
+	for _, r := range utf16.Decode(units) {
+		if r <= 0x20 || r == 0x7f || r == utf8.RuneError || r == '<' || r == '>' {
+			pendingSpace = out.Len() > 0
+			continue
+		}
+		if pendingSpace {
+			out.WriteByte(' ')
+			pendingSpace = false
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
+// decodeLegacyStreamText is the shared Stage 1/2/3 legacy-stream rule. Without
+// encoding evidence, retain both readings; Word's piece table is the exact
+// alternative for distinguishing mixed 8-bit and UTF-16LE text from binary noise.
+func decodeLegacyStreamText(b []byte, binary bool) string {
+	if s, ok := tryDecodeUTF16BestEffort(b); ok {
+		return strings.TrimSpace(whitespaceRegex.ReplaceAllString(s, " "))
+	}
+	return strings.TrimSpace(salvagePrintableASCII(b, binary) + "\n" + utf16LEReading(b))
 }
 
 // tryDecodeUTF16BestEffort attempts BOM-aware UTF-16 decoding, then heuristic LE/BE.
