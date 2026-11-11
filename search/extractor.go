@@ -570,8 +570,8 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				// Strip each reading's tags before combining, while markup is intact.
 				// Leave entities encoded for the final HTML pass to decode once.
 				if !utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0 {
-					text := htmlTagRegex.ReplaceAllString(string(b), " ") + "\n" +
-						htmlTagRegex.ReplaceAllString(utf16LEReadingWithMarkup(b, true), " ")
+					text := stripReadingMarkup(string(b)) + "\n" +
+						stripReadingMarkup(utf16LEReadingWithMarkup(b, true))
 					return strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
 				}
 			}
@@ -614,6 +614,13 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		return "", readErr
 	}
 	return decodeLegacyStreamText(data, false), nil
+}
+
+// stripReadingMarkup removes tags and stray brackets before readings are joined.
+// Entities stay encoded for the downstream HTML pass to decode once.
+func stripReadingMarkup(s string) string {
+	s = htmlTagRegex.ReplaceAllString(s, " ")
+	return strings.NewReplacer("<", " ", ">", " ").Replace(s)
 }
 
 // salvagePrintableASCII collapses non-printable bytes to spaces. Binary streams
@@ -667,6 +674,10 @@ func decodeLegacyStreamText(b []byte, binary bool) string {
 			s = strings.NewReplacer("<", " ", ">", " ").Replace(s)
 		}
 		return strings.TrimSpace(whitespaceRegex.ReplaceAllString(s, " "))
+	}
+	if !binary {
+		return strings.TrimSpace(stripReadingMarkup(salvagePrintableASCII(b, false)) + "\n" +
+			stripReadingMarkup(utf16LEReadingWithMarkup(b, true)))
 	}
 	return strings.TrimSpace(salvagePrintableASCII(b, binary) + "\n" + utf16LEReading(b))
 }

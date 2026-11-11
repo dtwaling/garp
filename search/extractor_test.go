@@ -387,6 +387,11 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 		{"binary HTML without BOM and predominantly non-Latin body", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{utf16LE(`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal"},
+		{"binary UTF-16LE HTML isolates stray brackets between readings", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{utf16LE("<html><body><p>report > limit</p>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "\u503c"), nil}), "report limit \u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", ""},
+		{"non-CFB UTF-16LE HTML strips attributes", utf16LE(
+			`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal"},
 		{"binary CP1252 HTML preserves entity-encoded brackets", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{[]byte("<html><body>Caf\xe9 <p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
