@@ -465,6 +465,7 @@ func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []s
 	admission, provable := prefilterAdmissionQuery(compiledQuery{
 		terms: []string{matcher.term}, matchers: []termMatcher{matcher}, maxDetectionBytes: matcher.detectionBytes,
 	})
+	gate := prefilterRawGate(admission)
 	matches := make([]string, 0, 128)
 	err := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
 		if IsBinaryFormat(path) {
@@ -473,7 +474,7 @@ func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []s
 			return nil
 		}
 
-		if discoveryAdmitsTextFile(path, admission, provable, options.TextMaxBytes()) {
+		if discoveryAdmitsTextFile(path, admission, gate, provable, options.TextMaxBytes()) {
 			matches = append(matches, path)
 		}
 		return nil
@@ -488,8 +489,10 @@ func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []s
 }
 
 // discoveryAdmitsTextFile applies the cleaned-text admission proof to Stage 1.
-// Its query contains only the primary term's necessary matchers.
-func discoveryAdmitsTextFile(path string, admission compiledQuery, provable bool, maxBytes int64) bool {
+// Its query contains only the primary term's necessary matchers. For non-code
+// files a boundary-free raw gate scan runs first; only a gate hit pays for the
+// exact pass through cleanerSpacingReader.
+func discoveryAdmitsTextFile(path string, admission, gate compiledQuery, provable bool, maxBytes int64) bool {
 	f, st, err := openRegularSearchFile(path)
 	if err != nil {
 		return false
@@ -500,17 +503,25 @@ func discoveryAdmitsTextFile(path string, admission compiledQuery, provable bool
 	}
 	_ = adviseSequential(f)
 	defer adviseDontNeed(f)
-	r := io.Reader(io.LimitReader(f, maxBytes))
-	if !config.IsCodeFile(path) {
-		r = &cleanerSpacingReader{r: r}
-	}
 	scan := discoveryScanner{chunk: int(min(st.Size()+1, discoveryChunkSize))}
-	return scan.admits(r, admission)
+	if config.IsCodeFile(path) {
+		return scan.admits(io.LimitReader(f, maxBytes), admission)
+	}
+	if gate.matchers != nil {
+		if !scan.admits(io.LimitReader(f, maxBytes), gate) {
+			return false
+		}
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return true
+		}
+	}
+	return scan.admits(&cleanerSpacingReader{r: io.LimitReader(f, maxBytes)}, admission)
 }
 
 const discoveryChunkSize = 64 * 1024
 
-// discoveryScanner reuses one file-sized (at most chunk-sized) window.
+// discoveryScanner reuses one file-sized (at most chunk-sized) window across
+// the gate and exact passes.
 type discoveryScanner struct {
 	chunk  int
 	window []byte
@@ -776,6 +787,7 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 		maxDetectionBytes: primaryMatcher.detectionBytes,
 	}
 	admission, provable := prefilterAdmissionQuery(primaryQuery)
+	gate := prefilterRawGate(admission)
 
 	// Results and synchronization
 	matches := make([]string, 0, 128)
@@ -802,7 +814,7 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 
 			for p := range paths {
 				maybePaceForMemory()
-				if discoveryAdmitsTextFile(p, admission, provable, maxBytes) {
+				if discoveryAdmitsTextFile(p, admission, gate, provable, maxBytes) {
 					mu.Lock()
 					matches = append(matches, p)
 					mu.Unlock()
@@ -1125,6 +1137,45 @@ func prefilterAdmissionQuery(q compiledQuery) (compiledQuery, bool) {
 	return aq, true
 }
 
+// prefilterRawGate relaxes every admission matcher to boundary-free Contains
+// mode. A spaceless cleaned match is a contiguous raw substring that contains
+// a gate match, so a raw gate miss proves a cleaned miss. Its matchers are nil
+// when a term cannot be relaxed (2 bytes or fewer, or an invalid wildcard).
+func prefilterRawGate(q compiledQuery) compiledQuery {
+	gate := compiledQuery{terms: q.terms, owners: q.owners, matchers: make([]termMatcher, len(q.matchers))}
+	for i, m := range q.matchers {
+		if m.mode != PartialModeContains {
+			m = compileTermMatcherWithOptions(m.term, PartialModeContains, QueryOptions{CaseSensitive: !m.caseInsensitive})
+			if m.mode != PartialModeContains {
+				return compiledQuery{}
+			}
+		}
+		gate.matchers[i] = m
+		gate.maxDetectionBytes = max(gate.maxDetectionBytes, m.detectionBytes)
+	}
+	return gate
+}
+
+// cleanedQueryRawMiss reports a conclusive cleaned-text miss proven by a raw
+// gate scan of a fresh reader, so callers can skip the spacing replay.
+func cleanedQueryRawMiss(open func() (io.ReadCloser, error), query compiledQuery, strict bool, maxBytes int64) bool {
+	aq, ok := prefilterAdmissionQuery(query)
+	if !ok {
+		return false
+	}
+	gate := prefilterRawGate(aq)
+	if gate.matchers == nil {
+		return false
+	}
+	rc, err := open()
+	if err != nil {
+		return false
+	}
+	defer rc.Close()
+	found, complete, err := streamMatchesQuery(rc, gate, strict, maxBytes)
+	return !found && complete && err == nil
+}
+
 var errUnprovableMiss = errors.New("prefilter miss cannot prove a cleaned-text miss")
 
 // streamMatchesCleanedQuery permits a conclusive miss only when the bounded
@@ -1333,6 +1384,14 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 			return false, false
 		}
 
+		maxBytes := capBytes
+		if maxBytes <= 0 {
+			maxBytes = 5 * 1024 * 1024
+		}
+		if cleanedQueryRawMiss(xmlFile.Open, query, strict, maxBytes) {
+			return false, true
+		}
+
 		rc, err := xmlFile.Open()
 		if err != nil {
 			return false, false
@@ -1343,10 +1402,6 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 			return true, true
 		}
 
-		maxBytes := capBytes
-		if maxBytes <= 0 {
-			maxBytes = 5 * 1024 * 1024
-		}
 		found, complete, readErr := streamMatchesCleanedQuery(rc, query, strict, maxBytes, false)
 		validatedAtLimit := false
 		if !found && !complete && readErr == nil &&

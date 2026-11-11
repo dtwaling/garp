@@ -968,7 +968,7 @@ func cleanedAdmissionFixtures(t *testing.T) map[string]string {
 	t.Helper()
 	dir := t.TempDir()
 	text := "Please review PDF32 for 2026Report balance\ndetails, foo<script>x</script>bar R&amp;D\n" +
-		literalAuditPhrase + " again\nx a*b c*d e*f g*h i*j y\n"
+		literalAuditPhrase + " again\nx a*b c*d e*f g*h i*j y\n ? \n"
 	fixtures := make(map[string]string)
 	for _, ext := range []string{"txt", "md", "html", "go", "docx", "odt", "eml", "mbox", "rtf", "doc"} {
 		path := filepath.Join(dir, "sample."+ext)
@@ -1005,10 +1005,12 @@ func TestDiscoverySmallFileAllocation(t *testing.T) {
 	if err := os.WriteFile(path, []byte(strings.Repeat("ordinary prose. ", 128)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	admission, provable := prefilterAdmissionQuery(compileQuery([]string{"absent"}, PartialModeOff))
+	// A short term bypasses the raw gate, so this also guards the spacing reader.
+	admission, provable := prefilterAdmissionQuery(compileQuery([]string{"zz"}, PartialModeOff))
+	gate := prefilterRawGate(admission)
 	result := testing.Benchmark(func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			if discoveryAdmitsTextFile(path, admission, provable, int64(maxFileSizeBytes)) {
+			if discoveryAdmitsTextFile(path, admission, gate, provable, int64(maxFileSizeBytes)) {
 				b.Fatal("unexpected admission")
 			}
 		}
@@ -1048,6 +1050,7 @@ func TestPrefiltersAdmitEveryCleanedMatch(t *testing.T) {
 				{[]string{"pdf"}, PartialModeOff, QueryOptions{}},
 				{[]string{"report"}, PartialModeOff, QueryOptions{}},
 				{[]string{"32"}, PartialModeOff, QueryOptions{}},
+				{[]string{"?"}, PartialModeContains, QueryOptions{}},
 				{[]string{"PDF"}, PartialModeOff, QueryOptions{CaseSensitive: true}},
 				{[]string{"balance details"}, PartialModeOff, QueryOptions{}},
 				{[]string{"pdf 32"}, PartialModeOff, QueryOptions{}},
@@ -1063,8 +1066,11 @@ func TestPrefiltersAdmitEveryCleanedMatch(t *testing.T) {
 				for _, strict := range []bool{false, true} {
 					t.Run(fmt.Sprintf("%s/strict=%v", strings.Join(tc.terms, "+"), strict), func(t *testing.T) {
 						query := compileQueryWithOptions(tc.terms, tc.mode, tc.opts)
+						if len(tc.terms[0]) <= 2 && prefilterRawGate(query).matchers != nil {
+							t.Fatal("short or literal wildcard term must not have a raw gate")
+						}
 						_, matches := analyzeRankedText(cleaned, query, 5000, strict)
-						if (tc.terms[0] == literalAuditPhrase || tc.terms[0] == "a*b c*d e*f g*h i*j") && !matches {
+						if (tc.terms[0] == literalAuditPhrase || tc.terms[0] == "a*b c*d e*f g*h i*j" || tc.terms[0] == "?") && !matches {
 							t.Fatal("literal phrase fixture must match authoritative text")
 						}
 						if !matches {
@@ -1097,7 +1103,7 @@ func TestPrefiltersStayDecisiveOnOrdinaryMisses(t *testing.T) {
 		if ext == "doc" {
 			continue
 		}
-		for _, terms := range [][]string{{"zzqqx"}, {"review zzqqx"}, {"review", "zzqqx"}} {
+		for _, terms := range [][]string{{"zzqqx"}, {"review zzqqx"}, {"review", "zzqqx"}, {"pdf3"}, {"repor"}, {"zz"}, {"z?"}} {
 			t.Run(ext+"/"+strings.Join(terms, "+"), func(t *testing.T) {
 				if len(terms) == 1 && strings.Contains(terms[0], " ") && (ext == "eml" || ext == "mbox") {
 					return
