@@ -626,7 +626,18 @@ func asciiPlainTermIndexCI(buf []byte, matcher termMatcher, from int) int {
 	}
 
 	limit := len(buf) - len(term)
+	first, firstFolded := term[0], term[0]
+	if matcher.caseInsensitive {
+		first = asciiLower(first)
+		firstFolded = first
+		if first >= 'a' && first <= 'z' {
+			firstFolded = first ^ 0x20
+		}
+	}
 	for start := from; start <= limit; start++ {
+		if b := buf[start]; b != first && b != firstFolded {
+			continue
+		}
 		if matcher.leadingBound && start > 0 && isWordByte(buf[start-1]) &&
 			(matcher.strictBoundary || matcher.mode != PartialModePrefix || buf[start-1] != '_') {
 			continue
