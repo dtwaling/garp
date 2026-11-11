@@ -373,6 +373,7 @@ func ansiMSG() []byte {
 }
 
 func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
+	hiddenHTML := utf16LE("<html><style>cssneedle</style><script>jsneedle()</script><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</body></html>")
 	for _, tc := range []struct {
 		name    string
 		data    []byte
@@ -381,6 +382,10 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 	}{
 		{"ANSI 001E", ansiMSG(), "subject body", ""},
 		{"non-CFB 8-bit fallback", []byte("arithmetic exception, numeric overflow"), "arithmetic exception, numeric overflow", ""},
+		{"binary UTF-16LE HTML drops hidden blocks", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{hiddenHTML, nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle"},
+		{"non-CFB UTF-16LE HTML drops hidden blocks", hiddenHTML, "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle"},
 		{"Unicode 001F without BOM", cfbWithRootStreams(
 			[2]string{"__substg1.0_0037001F", "__substg1.0_1000001F"},
 			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема", ""},
@@ -410,8 +415,10 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 			if err != nil || !strings.Contains(got, tc.want) {
 				t.Errorf("extraction = (%q, %v), want containing %q", got, err, tc.want)
 			}
-			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
-				t.Errorf("extraction = %q, must not contain %q", got, tc.notWant)
+			for _, unwanted := range strings.Fields(tc.notWant) {
+				if strings.Contains(got, unwanted) {
+					t.Errorf("extraction = %q, must not contain %q", got, unwanted)
+				}
 			}
 		})
 	}

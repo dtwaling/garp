@@ -616,9 +616,11 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 	return decodeLegacyStreamText(data, false), nil
 }
 
-// stripReadingMarkup removes tags and stray brackets before readings are joined.
+// stripReadingMarkup removes style/script contents, tags and stray brackets before readings are joined.
 // Entities stay encoded for the downstream HTML pass to decode once.
 func stripReadingMarkup(s string) string {
+	s = cssRegex.ReplaceAllString(s, " ")
+	s = jsRegex.ReplaceAllString(s, " ")
 	s = htmlTagRegex.ReplaceAllString(s, " ")
 	return strings.NewReplacer("<", " ", ">", " ").Replace(s)
 }
