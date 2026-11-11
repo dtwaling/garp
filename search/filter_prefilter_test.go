@@ -22,8 +22,10 @@ func encodedBinaryFixtures() map[string][]byte {
 	return map[string][]byte{
 		"base64.eml":           []byte(eml),
 		"quoted-printable.eml": []byte("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nsu=\r\nbject bo=64y\r\n"),
+		"encoded-subject.eml":  []byte("Subject: =?UTF-8?B?c3ViamVjdA==?=\r\n\r\nbody\r\n"),
 
 		"encoded.mbox":      []byte("From sender@example.com Mon Jan 1 00:00:00 2024\n" + eml),
+		"subject.mbox":      []byte("From sender@example.com Mon Jan 1 00:00:00 2024\nSubject: other\n\nfiller\nFrom sender@example.com Mon Jan 1 00:00:00 2024\nSubject: subject\n\nbody\n"),
 		"unicode.msg":       readerAtMSG(),
 		"ansi.msg":          ansiMSG(),
 		"eight-bit.doc":     docWithWordStream([]byte("subject body")),
@@ -33,30 +35,45 @@ func encodedBinaryFixtures() map[string][]byte {
 }
 
 func TestEncodedBinarySearchPipeline(t *testing.T) {
-	for name, data := range encodedBinaryFixtures() {
-		t.Run(name, func(t *testing.T) {
-			root := t.TempDir()
-			path := filepath.Join(root, name)
-			if err := os.WriteFile(path, data, 0o600); err != nil {
-				t.Fatal(err)
+	mail := "Subject: Alpha\r\nFrom: sender@example.com\r\n\r\nBeta\r\n"
+	joinedMail := map[string][]byte{
+		"subject-body.eml":  []byte(mail),
+		"subject-body.mbox": []byte("From sender@example.com Mon Jan 1 00:00:00 2024\n" + mail),
+		"later-message.mbox": []byte("From sender@example.com Mon Jan 1 00:00:00 2024\nSubject: other\n\nfiller\n" +
+			"From sender@example.com Mon Jan 1 00:00:00 2024\n" + mail),
+	}
+	for _, tc := range []struct {
+		name           string
+		words, exclude []string
+		partial        PartialMode
+		want           int
+		fixtures       map[string][]byte
+	}{
+		{name: "subject", words: []string{"subject"}, want: 1},
+		{name: "body", words: []string{"body"}, want: 1},
+		{name: "case insensitive", words: []string{"SUBJECT", "BODY"}, want: 1},
+		{name: "wildcards", words: []string{"subj*", "bo?y"}, want: 1},
+		{name: "partial", words: []string{"subj", "bod"}, partial: PartialModePrefix, want: 1},
+		{name: "absent primary", words: []string{"unfindableterm"}},
+		{name: "absent secondary", words: []string{"subject", "unfindableterm"}},
+		{name: "decoded exclusion", words: []string{"subject"}, exclude: []string{"body"}},
+		{name: "subject exclusion", words: []string{"body"}, exclude: []string{"subject"}},
+		{name: "subject body phrase", words: []string{"alpha beta"}, want: 1, fixtures: joinedMail},
+		{name: "secondary subject body phrase", words: []string{"alpha", "alpha beta"}, want: 1, fixtures: joinedMail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixtures := tc.fixtures
+			if fixtures == nil {
+				fixtures = encodedBinaryFixtures()
 			}
-			for _, tc := range []struct {
-				name           string
-				words, exclude []string
-				partial        PartialMode
-				want           int
-			}{
-				{name: "subject", words: []string{"subject"}, want: 1},
-				{name: "body", words: []string{"body"}, want: 1},
-				{name: "case insensitive", words: []string{"SUBJECT", "BODY"}, want: 1},
-				{name: "wildcards", words: []string{"subj*", "bo?y"}, want: 1},
-				{name: "partial", words: []string{"subj", "bod"}, partial: PartialModePrefix, want: 1},
-				{name: "absent primary", words: []string{"unfindableterm"}},
-				{name: "absent secondary", words: []string{"subject", "unfindableterm"}},
-				{name: "decoded exclusion", words: []string{"subject"}, exclude: []string{"body"}},
-			} {
+			for name, data := range fixtures {
+				root := t.TempDir()
+				path := filepath.Join(root, name)
+				if err := os.WriteFile(path, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
 				for _, strict := range []bool{false, true} {
-					t.Run(fmt.Sprintf("%s/strict=%t", tc.name, strict), func(t *testing.T) {
+					t.Run(fmt.Sprintf("%s/strict=%t", name, strict), func(t *testing.T) {
 						engine := NewSearchEngineWithWorkers(tc.words, tc.exclude, nil, false, 1, 5000, 1)
 						engine.StartDir, engine.Silent = root, true
 						engine.Strict, engine.Partial, engine.Distance = strict, tc.partial, 10000
@@ -251,6 +268,13 @@ func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
 	}{
 		{"plain.eml", "available", "missing", false, true},
 		{"plain.mbox", "available", "missing", false, true},
+		{"phrase.eml", "Subject: Alpha\r\nFrom: sender@example.com\r\n\r\nBeta\r\n", "alpha beta", false, false},
+		{"phrase.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nSubject: Alpha\r\nFrom: sender@example.com\r\n\r\nBeta\r\n", "alpha beta", false, false},
+		{"tab-phrase.eml", "available", "alpha	beta", false, false},
+		{"unicode-space-phrase.mbox", "available", "alpha\u00a0beta", false, false},
+		{"raw-phrase.eml", "Subject: Alpha Beta\r\n\r\n", "alpha beta", true, true},
+		{"raw-phrase.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nSubject: Alpha Beta\r\n\r\n", "alpha beta", true, true},
+		{"phrase.rtf", `{\rtf1\ansi available}`, "alpha beta", false, true},
 		{"plain.rtf", `{\rtf1\ansi available}`, "missing", false, true},
 		{"cleaned.rtf", `{\rtf1\ansi PDF32}`, "PDF", true, true},
 		// Cleaning removes the literal token, so only the raw streaming path
