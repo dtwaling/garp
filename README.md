@@ -2,7 +2,7 @@
 
 # :: garp ::
 
-![Version](https://img.shields.io/badge/version-0.9-blue?labelColor=0052cc)
+![Version](https://img.shields.io/badge/version-0.10.0-blue?labelColor=0052cc)
 ![License](https://img.shields.io/github/license/dtwaling/garp?color=4338ca&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-linux-4338ca?logo=linux&logoColor=white&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-macos-4338ca?logo=apple&logoColor=white&labelColor=3730a3)
@@ -196,6 +196,11 @@ Use `--partial=contains` for raw substring matching when internal matches are
 useful: `deploy` also matches `redeploy` and `autodeploy`. Contains mode is broad,
 so prefer prefix mode for technical terms and code identifiers when possible.
 
+Both `prefix` and `contains` require terms of at least 3 characters for partial
+matching: the short-term guardrail (`len(term) <= 2`) keeps shorter terms in
+whole-word mode to prevent noisy substring explosion. The implementation measures
+length in bytes. Explicit inline wildcards such as `al*` still work for short terms.
+
 Use `*` and `?` inside an individual query term for inline wildcard matching.
 For example, `ms-*-api` matches `ms-option-api`, `ms-?-api` matches
 `ms-a-api`, and `*OptionApi*` matches `defaultMsOptionApiOrigin`. `?` matches
@@ -334,6 +339,12 @@ before parsing stdout as JSON.
 
 ### Bounded-overlap excerpts
 
+When matched terms are further apart than the excerpt display budget
+(`span > budget`), garp builds a multipart excerpt from per-term context windows.
+It orders these windows by source position, merges overlapping windows, and joins
+the remaining parts with `" ... "` (space, three ASCII dots, space). The joiner
+marks omitted text; the excerpt need not be one contiguous source passage.
+
 `--max-excerpts` controls how many excerpts garp can return for each matching file.
 The default is one and the maximum is 50. When more than one excerpt is requested,
 garp uses skip-ahead selection: after capturing a chunk, it evaluates the next chunk
@@ -443,7 +454,7 @@ produces `bin\garp.exe` using the same release flags as the Makefile (`-trimpath
 stripped symbol table + DWARF, embedded version):
 
 ```powershell
-go build -trimpath -ldflags "-s -w -X garp/app.version=0.9" -o bin\garp.exe .
+go build -trimpath -ldflags "-s -w -X garp/app.version=0.10.0" -o bin\garp.exe .
 go test ./...                                              # run tests
 go vet ./...                                               # vet
 ```
@@ -454,7 +465,7 @@ embedded version) and is committed alongside the Linux build at `bin/garp.exe`.
 
 ```bash
 GOOS=windows GOARCH=amd64 go build -trimpath \
-  -ldflags "-s -w -X garp/app.version=0.9" -o bin/garp.exe .
+  -ldflags "-s -w -X garp/app.version=0.10.0" -o bin/garp.exe .
 ```
 
 ## TUI navigation
