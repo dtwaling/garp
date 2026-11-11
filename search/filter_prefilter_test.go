@@ -22,8 +22,10 @@ func encodedBinaryFixtures() map[string][]byte {
 	return map[string][]byte{
 		"base64.eml":           []byte(eml),
 		"quoted-printable.eml": []byte("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nsu=\r\nbject bo=64y\r\n"),
+		"encoded-subject.eml":  []byte("Subject: =?UTF-8?B?c3ViamVjdA==?=\r\n\r\nbody\r\n"),
 
 		"encoded.mbox":      []byte("From sender@example.com Mon Jan 1 00:00:00 2024\n" + eml),
+		"subject.mbox":      []byte("From sender@example.com Mon Jan 1 00:00:00 2024\nSubject: other\n\nfiller\nFrom sender@example.com Mon Jan 1 00:00:00 2024\nSubject: subject\n\nbody\n"),
 		"unicode.msg":       readerAtMSG(),
 		"ansi.msg":          ansiMSG(),
 		"eight-bit.doc":     docWithWordStream([]byte("subject body")),
@@ -54,6 +56,7 @@ func TestEncodedBinarySearchPipeline(t *testing.T) {
 				{name: "absent primary", words: []string{"unfindableterm"}},
 				{name: "absent secondary", words: []string{"subject", "unfindableterm"}},
 				{name: "decoded exclusion", words: []string{"subject"}, exclude: []string{"body"}},
+				{name: "subject exclusion", words: []string{"body"}, exclude: []string{"subject"}},
 			} {
 				for _, strict := range []bool{false, true} {
 					t.Run(fmt.Sprintf("%s/strict=%t", tc.name, strict), func(t *testing.T) {

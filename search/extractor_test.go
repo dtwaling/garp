@@ -25,12 +25,32 @@ func TestMBOXExtractorRequiresValidMessages(t *testing.T) {
 		{"empty", "", ""},
 		{"non-mbox", "raw unparsed bytes", ""},
 		{"invalid MIME", envelope + "invalid header\n\nraw body", ""},
-		{"valid", envelope + "Subject: Example\n\nmessage body\n", "message body\n---\n"},
+		{"valid", envelope + "Subject: Example\n\nmessage body\n", "Example message body\n---\n"},
+		{"multiple", envelope + "Subject: First\n\none\n" + envelope + "Subject: Second\n\ntwo\n", "First one\n---\nSecond two\n---\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := (&MBOXExtractor{}).ExtractText([]byte(tc.data))
 			if got != tc.want || (err != nil) != (tc.want == "") {
 				t.Fatalf("extraction = (%q, %v), want %q with error=%t", got, err, tc.want, tc.want == "")
+			}
+		})
+	}
+}
+
+func TestEMLExtractorPrependsDecodedSubject(t *testing.T) {
+	for _, tc := range []struct{ name, data, want string }{
+		{"plain", "Subject: Plain subject\r\n\r\nbody text", "Plain subject body text"},
+		{"rfc2047", "Subject: =?UTF-8?B?Y2Fmw6kgc3ViamVjdA==?=\r\n\r\nbody", "café subject body"},
+		{"folded", "Subject: folded\r\n subject\r\n\r\nbody", "folded subject body"},
+		{"missing", "Content-Type: text/plain\r\n\r\nbody", "body"},
+		{"subject only", "Subject: only\r\n\r\n", "only"},
+		{"html only", "Subject: html\r\nContent-Type: text/html\r\n\r\n<p>body</p>", "html body"},
+		{"brackets", "Subject: > Re: <tag> 1 < 2\r\n\r\nbody > end", "Re: tag 1 2 body > end"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := (&EMLExtractor{}).ExtractText([]byte(tc.data))
+			if err != nil || got != tc.want {
+				t.Fatalf("extraction = (%q, %v), want (%q, nil)", got, err, tc.want)
 			}
 		})
 	}

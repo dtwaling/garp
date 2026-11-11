@@ -167,11 +167,17 @@ func (e *EMLExtractor) ExtractText(data []byte) (string, error) {
 		text = stripHTMLTags(env.HTML)
 	}
 
-	// Clean up excessive whitespace
-	text = strings.TrimSpace(text)
-	text = whitespaceRegex.ReplaceAllString(text, " ")
+	return mailSearchText(env.GetHeader("Subject"), text), nil
+}
 
-	return text, nil
+var mailSubjectBracketReplacer = strings.NewReplacer("<", " ", ">", " ")
+
+// mailSearchText prepends the decoded subject to the body and collapses whitespace.
+// Subject brackets are blanked so HTML and quote cleanup cannot erase mail text.
+func mailSearchText(subject, body string) string {
+	subject = mailSubjectBracketReplacer.Replace(subject)
+	text := strings.TrimSpace(strings.TrimSpace(subject) + "\n\n" + strings.TrimSpace(body))
+	return whitespaceRegex.ReplaceAllString(text, " ")
 }
 
 // stripHTMLTags removes HTML tags from text (simple implementation)
@@ -601,9 +607,7 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		}
 
 		if subject != "" || body != "" {
-			out := strings.TrimSpace(strings.TrimSpace(subject) + "\n\n" + strings.TrimSpace(body))
-			out = whitespaceRegex.ReplaceAllString(out, " ")
-			return out, nil
+			return mailSearchText(subject, body), nil
 		}
 	}
 
