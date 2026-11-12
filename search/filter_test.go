@@ -846,11 +846,11 @@ func TestStage2ReadCap(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		found, err := checkFileContainsExcludeWords(filename, []string{"forbidden"}, limit)
+		searchText, err := readStage2SearchText(filename, limit)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if found {
+		if CheckTextContainsExcludeWords(searchText, []string{"forbidden"}) {
 			t.Fatal("exclusion check matched a term after the cap")
 		}
 	})

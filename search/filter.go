@@ -1562,33 +1562,6 @@ func checkFileRankedAnalysisQuery(filePath string, query compiledQuery, distance
 	return analysis, cleaned, true, nil
 }
 
-// CheckFileContainsExcludeWords checks if a file contains any exclude words
-func CheckFileContainsExcludeWords(filePath string, excludeWords []string) (bool, error) {
-	return checkFileContainsExcludeWords(filePath, excludeWords, defaultTextMaxBytes)
-}
-
-func checkFileContainsExcludeWords(filePath string, excludeWords []string, maxBytes int64) (bool, error) {
-	return checkFileContainsExcludeWordsWithOptions(filePath, excludeWords, maxBytes, QueryOptions{})
-}
-
-func checkFileContainsExcludeWordsWithOptions(filePath string, excludeWords []string, maxBytes int64, options QueryOptions) (bool, error) {
-	if len(excludeWords) == 0 {
-		return false, nil
-	}
-
-	content, _, err := readTextPrefix(filePath, maxBytes)
-	if err != nil {
-		return false, err
-	}
-	for _, word := range excludeWords {
-		if containsLiteralExcludeWord(content, word, options.CaseSensitive) {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
 func readStage2SearchText(filePath string, maxBytes int64) (string, error) {
 	if maxBytes <= 0 {
 		maxBytes = defaultTextMaxBytes

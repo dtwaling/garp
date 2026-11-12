@@ -229,7 +229,8 @@ future custom scanner.
 
 Terms supplied after `--not` are always whole-word exclusions, regardless of
 `--partial` or inline globs. This prevents a broad partial query from accidentally
-filtering unrelated results.
+filtering unrelated results. Word exclusions check the same cleaned Stage 2 text
+as positive search terms.
 
 ### --json output shape
 
