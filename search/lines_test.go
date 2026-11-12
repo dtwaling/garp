@@ -696,7 +696,43 @@ func TestExcerptLineAnchorsMayRepeatOnSingleLine(t *testing.T) {
 }
 
 func TestStage3MappedCleaning(t *testing.T) {
-	raw := "<style>hidden</style>\n<script>hidden</script>\n> hidden\n-----\n<b>é</b> A1,2B\tend\xff\n"
+	for _, tc := range []struct{ block, prefix string }{
+		{`<?audit secret < 80% ?>`, ""},
+		{`<?audit secret?>`, ""},
+		{`<?audit secret>`, ""},
+		{`<?a>one<?b>two<?c?>three `, "one two three "},
+		{`<p>Hi<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" /><o:p></o:p></p><p>budget visible</p><?php echo 1 ?>last `, "Hi budget visible last "},
+		{`<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" />`, ""},
+		{`<?no closer at all `, "<?no closer at all "},
+		{`<?php if ($a > 1) ?>`, ""},
+		{`<img src="secret" alt="load </b> value">`, ""},
+		{`<script>secret</script foo>`, ""},
+		{`<script>secret</script >`, ""},
+		{`<script/>`, ""},
+		{`<title>a <!-- b</title>`, "a <!-- b "},
+		{`<textarea>a <!-- b</textarea>`, "a <!-- b "},
+		{`<title>heading</title>`, "heading "},
+		{`<script>const s = "<!--";</script>`, ""},
+		{`<style>a::after {content: "<!--"}</style>`, ""},
+		{`<SCRIPT title="a>b">"<![CDATA["</SCRIPT>`, ""},
+		{`<!DOCTYPE secret [<!-- don't -->]>`, ""},
+		{`<script>hidden</script><style>hidden</style>`, ""},
+	} {
+		raw := tc.block + "\nalpha\n<!-- footer -->tail"
+		for _, mapped := range []mappedContent{cleanStage3Content(raw, false), documentCorrespondence(raw, true), documentCorrespondence(raw, false)} {
+			if got := strings.Join(strings.Fields(mapped.text), " "); got != tc.prefix+"alpha tail" {
+				t.Fatalf("%q: mapped text = %q", tc.block, got)
+			}
+			for _, term := range []string{"alpha", "tail"} {
+				if got := mapped.offsets[strings.Index(mapped.text, term)]; got != strings.Index(raw, term) {
+					t.Fatalf("%q: %s offset = %d", tc.block, term, got)
+				}
+			}
+		}
+	}
+	raw := "<!-- hidden <b>\n<![CDATA[ hidden -->\n<![CDATA[<!-- hidden\n]]>\n" +
+		"<!DOCTYPE root [\n<!ENTITY note 'hidden ] < >'>\n]>\n" +
+		"<style>hidden</style>\n<script>hidden</script>\n> hidden\n-----\n<b>é</b> A1,2B\x09end\xff\n"
 	for _, isCode := range []bool{false, true} {
 		mapped := cleanStage3Content(raw, isCode)
 		want := "é A 1, 2 B end\xff"
@@ -757,11 +793,33 @@ func TestStage3RawAnchorForCreatedOCRMatch(t *testing.T) {
 }
 
 func TestStage3LegacyFallbackStrippedAndExhausted(t *testing.T) {
-	raw := "<style>needle</style>\n<script>needle</script>\n> needle\n-----\nneedle\nneedle\n"
 	query := compileQuery([]string{"needle"}, PartialModeOff)
 	spans := lineSpans([]int{0}, []int{0}, []int{0})
-	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{5, 6, 0}) {
-		t.Fatalf("legacy anchors=%v, want [5 6 0]", got)
+	for _, tc := range []struct {
+		raw  string
+		want []int
+	}{
+		{"<style>needle</style>\n<script>needle</script>\n> needle\n-----\nneedle\nneedle\n", []int{5, 6, 0}},
+		{"<img src=\"needle\" alt=\"load <80%\">\nneedle\nneedle", []int{2, 3, 0}},
+		{"<!-- needle < 80%\ninternal note -->needle\nneedle", []int{2, 3, 0}},
+		{"<!-- open\n<b>needle</b>\nneedle", []int{2, 3, 0}},
+		{"<![CDATA[open\n<b>needle</b>\nneedle", []int{2, 3, 0}},
+		{"<!a [\n<b>needle</b>\nneedle", []int{2, 3, 0}},
+		{"<!DOCTYPE x [\n<b>needle</b>\nneedle", []int{2, 3, 0}},
+		{"<script>const s = \"<!-- needle\";</script>\nneedle\n<!-- footer -->needle", []int{2, 3, 0}},
+		{"<style>a {content: '<!-- needle'}</style>\nneedle\n<!-- footer -->needle", []int{2, 3, 0}},
+	} {
+		if got := computeExcerptSpanLinesQuery(tc.raw, spans, query, 200); !slices.Equal(got, tc.want) {
+			t.Errorf("raw=%q: legacy anchors=%v, want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestStage3LegacyFallbackKeepsTextBetweenStrayBrackets(t *testing.T) {
+	raw := "If <80% free\nneedle\nuntil >90%\nneedle\n"
+	query := compileQuery([]string{"needle"}, PartialModeOff)
+	if got := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0}, []int{0}), query, 200); !slices.Equal(got, []int{2, 4}) {
+		t.Fatalf("legacy anchors=%v, want [2 4]", got)
 	}
 }
 

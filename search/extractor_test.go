@@ -56,6 +56,93 @@ func TestEMLExtractorPrependsDecodedSubject(t *testing.T) {
 	}
 }
 
+func TestMarkupExtractorsStripQuotedTagsAndDeclarations(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{`<p class="x">alpha</p>`, "alpha"},
+		{`<a title="a<b">alpha</a>`, "alpha"},
+		{`<div data-x="a>b">alpha</div>`, "alpha"},
+		{`<p class="x>alpha</p>`, "alpha"},
+		{`<img alt=O'Brien>Name<p>It's ok</p>`, "Name It's ok"},
+		{`<img alt=O'Brien title="a>b">alpha`, "alpha"},
+		{`<img alt=O'Brien title='a<b'>alpha`, "alpha"},
+		{`<p class="x>alpha</p><p class="y">beta</p>`, "alpha beta"},
+		{`<p class='x>alpha</p><p class='y'>beta</p>`, "alpha beta"},
+		{`<p class="x>alpha</p>" >tail`, "tail"}, // Balanced attribute, not malformed recovery.
+		{`<p class="x>alpha</p> >tail`, "alpha >tail"},
+		{`<p class='x>alpha</p>tail`, "alpha tail"},
+		{`<img src="secret" alt="load </b> value">alpha`, "alpha"},
+		{`<img src='secret' alt='load </b> value'>alpha`, "alpha"},
+		{`<?audit secret < 80% ?>alpha`, "alpha"},
+		{`<?audit secret </x ?>alpha`, "alpha"},
+		{`<?audit secret?>alpha`, "alpha"},
+		{"<?audit secret <\n80% ?>alpha", "alpha"},
+		{`<?audit secret`, "<?audit secret"},
+		{`<?audit secret>alpha`, "alpha"},
+		{`<?a>one<?b>two<?c?>three`, "one two three"},
+		{`<p>Hi<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" /><o:p></o:p></p><p>budget visible</p><?php echo 1 ?>tail`, "Hi budget visible tail"},
+		{`<?audit secret>alpha<b>x</b>?>tail`, "alpha x ?>tail"},
+		{`<?audit > < 80% ?>alpha`, "alpha"},
+		{`<?audit < nested ?>alpha`, "alpha"},
+		{`<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" />budget`, "budget"},
+		{`<?no closer at all`, "<?no closer at all"},
+		{`<?php if ($a > 1) ?>alpha`, "alpha"},
+		{`<?audit < nested>alpha`, "alpha"},
+		{"<?audit secret\nvalue>alpha", "alpha"},
+		{"<?audit secret>alpha\n?>tail", "tail"},
+		{"<?audit secret>alpha\n<b>x</b>?>tail", "alpha x ?>tail"},
+		{`<?audit secret>alpha<br>?>tail`, "alpha ?>tail"},
+		{`<?audit secret>alpha</p>?>tail`, "alpha ?>tail"},
+		{`<?audit secret>alpha<!-- c -->?>tail`, "alpha ?>tail"},
+		{`<?first>alpha <?second>tail <?unclosed`, "alpha tail <?unclosed"},
+		{`<title>a <!-- b</title>alpha<!-- x -->tail`, "a <!-- b alpha tail"},
+		{`<textarea>a <!-- b</textarea>alpha<!-- x -->tail`, "a <!-- b alpha tail"},
+		{`<title>heading</title>alpha`, "heading alpha"},
+		{`<script>secret</script foo>alpha`, "alpha"},
+		{`<script>secret</script >alpha`, "alpha"},
+		{`<script>secret</script/>alpha`, "alpha"},
+		{`<style>secret</style foo>alpha`, "alpha"},
+		{`<script/>alpha<script>secret</script>tail`, "alpha tail"},
+		{`<style type="text/css"/>alpha<style>secret</style>tail`, "alpha tail"},
+		{`<img src="secret" alt="load <80%">alpha`, "alpha"},
+		{"<img src=\"secret\" alt=\n\"load <80%\">alpha", "alpha"},
+		{"<img src='secret' alt=\r\n	\f 'load <80%'>alpha", "alpha"},
+		{`<img src="secret" alt="load </ 80%">alpha`, "alpha"},
+		{`<img src="secret" alt="<<">alpha`, "alpha"},
+		{`<img src='secret' alt='<< / </'>alpha`, "alpha"},
+		{`<!DOCTYPE secret [<!-- don't -->]><secret>alpha</secret>`, "alpha"},
+		{`<img alt="<!--">alpha<!-- footer -->tail`, "alpha tail"},
+		{`<!-- <script> -->alpha<script>hidden</script>tail`, "alpha tail"},
+		{`<![CDATA[<style>]]>alpha<style>hidden</style>tail`, "alpha tail"},
+		{`<script>"<style>"</script>alpha<style>hidden</style>tail`, "alpha tail"},
+		{`<SCRIPT title="a>b">"<!--"</SCRIPT>alpha<!-- footer -->tail`, "alpha tail"},
+		{`<scripture>alpha</scripture>tail`, "alpha tail"},
+		{"<img src='secret'\nalt='load <80% >20%'>alpha", "alpha"},
+		{"<img alt=\"load <80%\n>20%\">alpha", "alpha"},
+		{"<!-- secret < 80%\ninternal note -->alpha", "alpha"},
+		{"<!-- secret\ninternal note -->alpha", "alpha"},
+		{"<![CDATA[secret < 80%\ninternal > note]]>alpha", "alpha"},
+		{"<!DOCTYPE root [\n<!ENTITY note 'secret < 80% >20%'>\n]>alpha", "alpha"},
+		{`<!DOCTYPE root [<!ENTITY note "[ ] ' > <">]>alpha`, "alpha"},
+		{"<!a [\n<b>alpha</b>\nbeta", "<!a [ alpha beta"},
+		{"<!DOCTYPE x [\n<b>alpha</b>\nbeta", "<!DOCTYPE x [ alpha beta"},
+	} {
+		for _, extractor := range []Extractor{&HTMLExtractor{}, &XMLExtractor{}} {
+			got, err := extractor.ExtractText([]byte(tc.raw))
+			if err != nil || strings.Join(strings.Fields(got), " ") != tc.want {
+				t.Errorf("%T(%q) = (%q, %v), want %q", extractor, tc.raw, got, err, tc.want)
+			}
+		}
+		if got := strings.Join(strings.Fields(stripHTMLTags(tc.raw)), " "); got != tc.want {
+			t.Errorf("stripHTMLTags(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+		// Legacy reading cleanup additionally blanks stray angle brackets.
+		want := strings.Join(strings.Fields(strings.NewReplacer("<", " ", ">", " ").Replace(tc.want)), " ")
+		if got := strings.Join(strings.Fields(stripReadingMarkup(tc.raw)), " "); got != want {
+			t.Errorf("stripReadingMarkup(%q) = %q, want %q", tc.raw, got, want)
+		}
+	}
+}
+
 func TestExtractorRegistry_RegistersPDFExtractor(t *testing.T) {
 	registry := NewExtractorRegistry()
 	extractor, ok := registry.GetExtractor("pdf")
@@ -423,9 +510,21 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 		{"binary non-Latin UTF-16LE HTML preserves entity-encoded brackets", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{utf16LE("<html><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "<p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
+		{"binary CP1252 HTML strips multi-line tags and keeps text between stray comparison brackets", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("<html><body>Caf\xe9 <p class=MsoNormal\nstyle='color:red'>load <80% keeps\nwarm cache until >90%</p></body></html>"), nil}), "keeps warm cache until", "MsoNormal"},
 		{"binary HTML without BOM and predominantly Cyrillic body", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{utf16LE("<html><body>" + strings.Repeat("Отчёт о продажах", 30) + "</body></html>"), nil}), "Отчёт о продажах", ""},
+		{"binary CP1252 HTML strips quoted attributes after newline", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\n\"load <80%\">alpha"), nil}), "alpha", "secret"},
+		{"binary CP1252 HTML strips angle sequences in attributes", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"<< </ 80%\">alpha"), nil}), "alpha", "secret"},
+		{"binary CP1252 HTML strips ordinary attributes", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"load\">alpha"), nil}), "alpha", "secret"},
 		{"binary UTF-8 HTML preserves non-ASCII text and strips attributes", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{[]byte(`<html><body><p class="MsoNormal">café 東京都の報告書 quarterly</p></body></html>`), nil}), "café 東京都の報告書 quarterly", "MsoNormal"},

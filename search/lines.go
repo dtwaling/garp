@@ -118,8 +118,10 @@ func documentCorrespondence(raw string, clean bool) mappedContent {
 		m.offsets[i] = i
 	}
 	strip := func(control string) {
-		m = m.replace(cssRegex, "").replace(jsRegex, "")
-		m = m.replace(htmlTagRegex, " ").replace(htmlEntityRegex, " ")
+		// Share instruction delimiters and raw-text precedence with Stage 2/3;
+		// the element-only regexp below keeps the prose newline boundary.
+		m = stripDelimitedMarkup(m, " ", markupTagPattern{})
+		m = m.replace(textTagRegex, " ").replace(htmlEntityRegex, " ")
 		m = m.replace(controlCharRegex, control).replace(junkSymbolsRegex, "")
 		m = m.replace(emailQuotingRegex, "").replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")
 	}

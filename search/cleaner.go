@@ -14,9 +14,299 @@ import (
 // unconstrainedDistance disables the excerpt proximity bound for legacy helpers.
 const unconstrainedDistance = -1
 
+// markupDeclarationSpans returns complete <!letter ...> spans in reverse order.
+// Scan suffixes once, not once per opener: end is the declaration endpoint from
+// here; subset is its endpoint when inside [...]. Zero means unterminated.
+// Quoted continuations resume immediately after the next matching quote, so
+// quotes can contain <, >, brackets and newlines without rescanning any suffix.
+// Each byte takes constant work, including failed subsets/quotes: O(N) time.
+func markupDeclarationSpans(raw string) []matchRange {
+	if !strings.Contains(raw, "<!") {
+		return nil
+	}
+	var spans []matchRange
+	var end, subset int
+	var quotedEnd, quotedSubset [2]int
+	var comments [2]struct{ close, end, subset int }
+	for i := len(raw) - 1; i >= 0; i-- {
+		// Save the continuation after the nearest complete comment. Its quotes,
+		// brackets and angle brackets are opaque to the declaration grammar.
+		if i >= 2 && raw[i-2:i+1] == "-->" {
+			comments[1] = comments[0]
+			comments[0].close, comments[0].end, comments[0].subset = i-2, end, subset
+		}
+		if strings.HasPrefix(raw[i:], "<!--") {
+			comment := comments[0]
+			if comment.close < i+4 {
+				// <!--> overlaps a closer; only the next closer can end it.
+				comment = comments[1]
+			}
+			if comment.close >= i+4 {
+				end, subset = comment.end, comment.subset
+				continue
+			}
+		}
+		switch raw[i] {
+		case '"', '\'':
+			kind := 0
+			if raw[i] == '\'' {
+				kind = 1
+			}
+			end, quotedEnd[kind] = quotedEnd[kind], end
+			subset, quotedSubset[kind] = quotedSubset[kind], subset
+		case ']':
+			subset = end
+		case '[':
+			end = subset
+		case '>':
+			end = i + 1
+		case '<':
+			if end != 0 && i+2 < len(raw) && raw[i+1] == '!' &&
+				(raw[i+2] >= 'A' && raw[i+2] <= 'Z' || raw[i+2] >= 'a' && raw[i+2] <= 'z') {
+				spans = append(spans, matchRange{start: i, end: end})
+			}
+			end = 0
+		}
+	}
+	return spans
+}
+
+// markupTagEnds computes every candidate endpoint, including overlapping tags.
+// FindAll cannot do this: a quote beginning inside a comment can hide a real tag
+// after the comment. Suffix continuations take constant work per byte, even for
+// failed quotes. Balanced values after = and HTML whitespace take precedence;
+// otherwise recover at the first >. Consumed attribute openers cannot supply a
+// closing quote to an earlier unmatched value. Closing tags inside balanced
+// values are opaque, just like other angle brackets.
+func markupTagEnds(raw string) []int {
+	if !strings.Contains(raw, "<") {
+		return nil
+	}
+	ends := make([]int, len(raw))
+	var end, valueEnd, valueKind int
+	var quotedEnd [2]int
+	for i := len(raw) - 1; i >= 0; i-- {
+		nextValue := 0
+		switch raw[i] {
+		case ' ', '	', '\r', '\n', '\f':
+			nextValue = valueEnd
+		case '"', '\'':
+			kind := 0
+			if raw[i] == '\'' {
+				kind = 1
+			}
+			nextValue, quotedEnd[kind] = quotedEnd[kind], end
+			valueKind = kind
+		case '=':
+			if valueEnd != 0 {
+				end = valueEnd
+				quotedEnd[valueKind] = 0
+			}
+		case '>':
+			end = i + 1
+		case '<':
+			if i+1 < len(raw) && (isMarkupLetter(raw[i+1]) || raw[i+1] == '/') {
+				ends[i] = end
+			}
+			end = 0
+		}
+		valueEnd = nextValue
+	}
+	return ends
+}
+
+// markupTagPattern keeps the extractors' replacement surface while sharing the
+// linear context scan with the offset-aware document cleaner.
+type markupTagPattern struct {
+	tags    bool
+	rawText string // nonempty selects only this raw-text element, for legacy readings
+}
+
+func (p markupTagPattern) ReplaceAllString(raw, replacement string) string {
+	return stripDelimitedMarkup(mappedContent{text: raw}, replacement, p).text
+}
+
+// stripDelimitedMarkup visits openers in source order, skipping each complete
+// span. A failed closer search disables that delimiter for the remaining tail.
+// Successful searches cover disjoint spans; each delimiter fails at most once
+// per tail (per line for prose instructions): total O(N), even for opener floods.
+// Declaration endpoints are precomputed once by the same linear-time rule.
+// Tags protect their attributes; complete raw-text blocks protect their bodies.
+// Source-order precedence also prevents a tag inside a comment from opening a
+// raw-text block. Each precomputed span/closer is visited at most once.
+func stripDelimitedMarkup(m mappedContent, replacement string, pattern markupTagPattern) mappedContent {
+	if !strings.Contains(m.text, "<") {
+		return m
+	}
+	declarations := markupDeclarationSpans(m.text)
+	tags := markupTagEnds(m.text)
+	closers := rawTextCloseRegex.FindAllStringSubmatchIndex(m.text, -1)
+	var rawCloses [4][]matchRange
+	for _, loc := range closers {
+		if end := tags[loc[0]]; end != 0 {
+			kind := markupRawTextKind(m.text[loc[2]:loc[3]])
+			rawCloses[kind] = append(rawCloses[kind], matchRange{loc[0], end})
+		}
+	}
+	var text strings.Builder
+	var offsets []int
+	copyRange := func(start, end int) {
+		text.WriteString(m.text[start:end])
+		if m.offsets != nil {
+			offsets = append(offsets, m.offsets[start:end]...)
+		}
+	}
+	writeReplacement := func(anchor int) {
+		text.WriteString(replacement)
+		if m.offsets != nil {
+			for range len(replacement) {
+				offsets = append(offsets, m.offsets[anchor])
+			}
+		}
+	}
+	var exhausted [3]bool // comment, CDATA, instruction's first >
+	prose := !pattern.tags && pattern.rawText == ""
+	last, lineEnd := 0, 0
+	for i := 0; i < len(m.text); i++ {
+		if m.text[i] != '<' {
+			continue
+		}
+		for len(declarations) > 0 && declarations[len(declarations)-1].start < i {
+			declarations = declarations[:len(declarations)-1]
+		}
+		end := 0
+		var body matchRange
+		remove := pattern.rawText == ""
+		if len(declarations) > 0 && declarations[len(declarations)-1].start == i {
+			end = declarations[len(declarations)-1].end
+		} else if tags[i] != 0 {
+			tagEnd := tags[i]
+			end, remove = tagEnd, pattern.tags
+			nameEnd := i + 1
+			for nameEnd < tagEnd && isMarkupLetter(m.text[nameEnd]) {
+				nameEnd++
+			}
+			name := m.text[i+1 : nameEnd]
+			kind := markupRawTextKind(name)
+			if kind >= 0 && nameEnd < tagEnd && strings.ContainsRune(" 	\r\n\f/>", rune(m.text[nameEnd])) &&
+				m.text[tagEnd-2] != '/' {
+				for len(rawCloses[kind]) > 0 && rawCloses[kind][0].start < tagEnd {
+					rawCloses[kind] = rawCloses[kind][1:]
+				}
+				if len(rawCloses[kind]) > 0 {
+					close := rawCloses[kind][0]
+					end = close.end
+					if kind < 2 {
+						remove = pattern.rawText == "" || strings.EqualFold(name, pattern.rawText)
+					} else {
+						// RCDATA is visible text, but its delimiters are not markup.
+						body = matchRange{tagEnd, close.start}
+					}
+				}
+			}
+		} else {
+			kind, opener, closer := 0, "<!--", "-->"
+			if !strings.HasPrefix(m.text[i:], opener) {
+				kind, opener, closer = 1, "<![CDATA[", "]]>"
+				if !strings.HasPrefix(m.text[i:], opener) {
+					kind, opener, closer = 2, "<?", ">"
+					if !strings.HasPrefix(m.text[i:], opener) {
+						continue
+					}
+				}
+			}
+			limit := len(m.text)
+			if kind == 2 && prose {
+				if i >= lineEnd {
+					exhausted[kind] = false
+					lineEnd = len(m.text)
+					if n := strings.IndexAny(m.text[i:], "\r\n"); n >= 0 {
+						lineEnd = i + n
+					}
+				}
+				limit = lineEnd
+			}
+			end = -1
+			if !exhausted[kind] {
+				end = strings.Index(m.text[i+len(opener):limit], closer)
+				exhausted[kind] = end < 0
+			}
+			if end < 0 {
+				continue
+			}
+			end += i + len(opener) + len(closer)
+			if kind == 2 && m.text[end-2] != '?' {
+				// Prefer ?> after a bare > only before the next markup opener.
+				// Each later <? is itself a boundary, so lookahead windows are
+				// disjoint. Failed first-> searches are memoized above: O(N).
+				for j := end; j+1 < limit; j++ {
+					next := m.text[j+1]
+					if m.text[j] == '<' && (isMarkupLetter(next) || next == '/' || next == '!' || next == '?') {
+						break
+					}
+					if m.text[j] == '?' && next == '>' {
+						end = j + 2
+						break
+					}
+				}
+			}
+		}
+		if !remove {
+			i = end - 1
+			continue
+		}
+		copyRange(last, i)
+		writeReplacement(i)
+		if body.end != 0 {
+			copyRange(body.start, body.end)
+			writeReplacement(body.end)
+		}
+		last, i = end, end-1
+	}
+	if last == 0 {
+		return m
+	}
+	copyRange(last, len(m.text))
+	return mappedContent{text.String(), offsets}
+}
+
+func isMarkupLetter(b byte) bool {
+	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
+}
+
+func markupRawTextKind(name string) int {
+	switch strings.ToLower(name) {
+	case "style":
+		return 0
+	case "script":
+		return 1
+	case "title":
+		return 2
+	case "textarea":
+		return 3
+	}
+	return -1
+}
+
 var (
-	// HTML/XML tags
-	htmlTagRegex = regexp.MustCompile(`<[^>]*>`)
+	// Known markup -- the extractors' HTML/XML. Element tags open with a letter
+	// or / and may span lines. Quotes start attribute values only after =, not
+	// in O'Brien. Prefer balanced values; malformed markup falls back to the
+	// first > without consuming the next tag. Balanced values protect closing
+	// elements. The delimiter scanner handles comments, CDATA, declarations and
+	// <? instructions across lines. After the first >, prefer a later ?> only
+	// before the next markup opener (< followed by an ASCII letter, /, ! or ?);
+	// otherwise close at the first >. A first ?> always closes immediately.
+	htmlTagRegex = markupTagPattern{tags: true}
+
+	// Text that may be prose -- every non-code document. Element and processing-
+	// instruction tags, including quoted values, must close on their own line,
+	// so <80%, <--, heredocs (<<EOF), multi-line <placeholder ...> prose and
+	// unbalanced quotes cannot erase later lines. Only <!...> may span lines.
+	// Unlike known markup, prose does not use a malformed-attribute fallback.
+	// Instructions use the shared delimiter scanner, not this element regexp.
+	// cleanSearchContent and documentCorrespondence share both rules.
+	textTagRegex = regexp.MustCompile(`<[A-Za-z/](?:"[^"\r\n]*"|'[^'\r\n]*'|[^<>"'\r\n])*>`)
 
 	// HTML entities
 	htmlEntityRegex = regexp.MustCompile(`&[a-zA-Z0-9#]*;`)
@@ -24,9 +314,12 @@ var (
 	// Email headers (case insensitive)
 	emailHeaderRegex = regexp.MustCompile(`(?i)^(Content-Type|Content-Transfer-Encoding|MIME-Version|Date|From|To|Subject|Message-ID|Return-Path|Received|X-[^:]*|Authentication-Results):`)
 
-	// CSS/JavaScript blocks (separate patterns since Go doesn't support backreferences)
-	cssRegex = regexp.MustCompile(`(?s)<style[^>]*>.*?</style>`)
-	jsRegex  = regexp.MustCompile(`(?s)<script[^>]*>.*?</script>`)
+	// Keep the legacy reading-cleanup call surface, but use the same context
+	// precedence as the cleaner instead of matching blocks inside comments or
+	// inside the other kind of raw-text element.
+	cssRegex          = markupTagPattern{rawText: "style"}
+	jsRegex           = markupTagPattern{rawText: "script"}
+	rawTextCloseRegex = regexp.MustCompile(`(?i)</(style|script|title|textarea)[	\n\f\r />]`)
 
 	// Control characters and excessive whitespace
 	controlCharRegex = regexp.MustCompile(`[\x00-\x1f\x7f-\x9f]`)
@@ -98,8 +391,8 @@ func cleanStage3Content(raw string, isCode bool) mappedContent {
 // A nil offset slice avoids building correspondence that analysis never uses.
 func cleanSearchContent(m mappedContent, isCode bool) mappedContent {
 	if !isCode {
-		m = m.replace(cssRegex, " ").replace(jsRegex, " ")
-		m = m.replace(htmlTagRegex, " ").replace(htmlEntityRegex, " ")
+		m = stripDelimitedMarkup(m, " ", markupTagPattern{})
+		m = m.replace(textTagRegex, " ").replace(htmlEntityRegex, " ")
 		m = m.replace(junkSymbolsRegex, "").replace(emailQuotingRegex, "")
 		m = m.replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")
 	}

@@ -1209,12 +1209,255 @@ func TestCleanContentKeepsTokensAroundStrippedBlocks(t *testing.T) {
 	}
 }
 
+func TestCleanContentStripsOnlyTagSyntax(t *testing.T) {
+	// Plain text must not reserve per-byte endpoint storage, at either size.
+	for _, size := range []int{1 << 20, 5 << 20} {
+		raw := strings.Repeat("x", size)
+		if ends := markupTagEnds(raw); cap(ends) != 0 {
+			t.Fatalf("%d plain bytes reserved %d endpoints", size, cap(ends))
+		}
+		allocs := testing.AllocsPerRun(3, func() {
+			if len(markupDeclarationSpans(raw)) != 0 || stripDelimitedMarkup(mappedContent{text: raw}, " ", htmlTagRegex).text != raw {
+				t.Fatal("plain text changed")
+			}
+		})
+		if allocs > 1 {
+			t.Fatalf("%d plain bytes: %g markup allocations", size, allocs)
+		}
+	}
+	for _, tc := range []struct{ raw, want string }{
+		{`<?audit secret < 80% ?>alpha`, "alpha"},
+		{`<?audit secret </x ?>alpha`, "alpha"},
+		{`<?audit secret?>alpha`, "alpha"},
+		{"<?audit secret <\n80% ?>alpha", "<?audit secret < 80% ? alpha"},
+		{"<?open\n<?audit secret?>alpha", "<?open alpha"},
+		{`<?audit secret`, "<?audit secret"},
+		{`<?audit secret>alpha`, "alpha"},
+		{`<?a>one<?b>two<?c?>three`, "one two three"},
+		{`<p>Hi<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" /><o:p></o:p></p><p>budget visible</p><?php echo 1 ?>tail`, "Hi budget visible tail"},
+		{`<?audit secret>alpha<b>x</b>?>tail`, "alpha x ? tail"},
+		{`<?audit > < 80% ?>alpha`, "alpha"},
+		{`<?audit < nested ?>alpha`, "alpha"},
+		{`<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" />budget`, "budget"},
+		{`<?no closer at all`, "<?no closer at all"},
+		{`<?php if ($a > 1) ?>alpha`, "alpha"},
+		{`<?audit < nested>alpha`, "alpha"},
+		{"<?audit secret\nvalue>alpha", "<?audit secret value alpha"},
+		{"<?audit secret>alpha\n?>tail", "alpha ? tail"},
+		{"<?open\r<?audit secret>alpha", "<?open alpha"},
+		{`<?first>alpha <?second>tail <?unclosed`, "alpha tail <?unclosed"},
+		{`<img src="secret" alt="load </b> value">alpha`, "alpha"},
+		{`<img src='secret' alt='load </b> value'>alpha`, "alpha"},
+		{`<title>a <!-- b</title>alpha<!-- x -->tail`, "a <!-- b alpha tail"},
+		{`<textarea>a <!-- b</textarea>alpha<!-- x -->tail`, "a <!-- b alpha tail"},
+		{`<title>heading</title>alpha`, "heading alpha"},
+		{`<script>secret</script foo>alpha`, "alpha"},
+		{`<script>secret</script >alpha`, "alpha"},
+		{`<script>secret</script/>alpha`, "alpha"},
+		{`<style>secret</style foo>alpha`, "alpha"},
+		{`<script/>alpha<script>secret</script>tail`, "alpha tail"},
+		{`<style type="text/css"/>alpha<style>secret</style>tail`, "alpha tail"},
+		{"If <80% memory is free\nsession state stays warm\nuntil >90% utilization.", "If <80% memory is free session state stays warm until 90% utilization."},
+		{"client <-- proxy\nsession memory\nserver --> sink", "client <-- proxy session memory server -- sink"},
+		{"a < b and c > d", "a < b and c d"},
+		{"x <= 5 and y >= 3", "x <= 5 and y = 3"},
+		{"keep <80% this <b>alpha</b>", "keep <80% this alpha"},
+		{"<p class=\"lead\">alpha</p>", "alpha"},
+		{"<img src=\"a.png\" alt=\"b\">alpha", "alpha"},
+		{"cat <<EOF\nsession memory warm\nEOF\necho done > log", "cat <<EOF session memory warm EOF echo done log"},
+		{"<What an attacker gains.\nBe specific.> alpha", "<What an attacker gains. Be specific. alpha"},
+		{"<img src=\"a.png\"\n  alt=\"b\">alpha", "<img src=\"a.png\" alt=\"b\" alpha"},
+		{"<!-- note\nspans lines -->alpha", "alpha"},
+		{"<?xml version=\"1.0\"?><!DOCTYPE html>alpha", "alpha"},
+		{"</div>alpha<br/>", "alpha"},
+		{`<p class="x">hi</p>`, "hi"},
+		{`<img src="secret" alt="load <80%">alpha`, "alpha"},
+		{`<img src='secret' alt='load <80% >20% "quoted"'>alpha`, "alpha"},
+		{"<!-- secret < 80%\ninternal note -->alpha", "alpha"},
+		{"<!-- first > note -->alpha<!-- second < note -->beta", "alpha beta"},
+		{"<![CDATA[secret < 80%\ninternal > note]]>alpha", "alpha"},
+		{`<!DOCTYPE html SYSTEM "secret<file>">alpha`, "alpha"},
+		{"<!DOCTYPE root [\n<!ENTITY note 'secret < 80% >20%'>\n]>alpha", "alpha"},
+		{`<!DOCTYPE root [<!ENTITY note "[ ] ' > <">]>alpha`, "alpha"},
+		{`<!DOCTYPE secret [<!-- don't -->]><secret>alpha</secret>`, "alpha"},
+		{`<!DOCTYPE secret [<!-- " ] > < -->]><secret>alpha</secret>`, "alpha"},
+		{"<script>const s = \"<!--\";</script>\nalpha\n<!-- footer -->tail", "alpha tail"},
+		{"<style>a::after {content: \"<!--\"}</style>\nalpha\n<!-- footer -->tail", "alpha tail"},
+		{`<SCRIPT title="a>b">"<![CDATA["</SCRIPT>alpha<![CDATA[footer]]>tail`, "alpha tail"},
+		{`<!-- <script> -->alpha<script>hidden</script>tail`, "alpha tail"},
+		{`<!-- <a x=" --> <script>hidden <b> "> hidden</script>alpha`, "alpha"},
+		{`<!DOCTYPE secret [<!--> ' -->]><secret>alpha</secret>`, "alpha"},
+		{`<img alt="<!--">alpha<!-- footer -->tail`, "alpha tail"},
+		{`<img alt='<![CDATA['>alpha<![CDATA[footer]]>tail`, "alpha tail"},
+		{`<script>hidden</script>alpha<style>hidden</style>tail`, "alpha tail"},
+		{`<!X "[" ['['] ']' [" ] "]>alpha`, "alpha"},
+		{"<!a [\n<b>alpha</b>\nbeta", "<!a [ alpha beta"},
+		{"<!DOCTYPE x [\n<b>alpha</b>\nbeta", "<!DOCTYPE x [ alpha beta"},
+		{"<!a [\n<!ENTITY note 'hidden'>\n<b>alpha</b>", "<!a [ alpha"},
+		{"<b says \"hi>\nalpha\nends here >", "<b says \"hi alpha ends here"},
+		{"<b says 'hi>\nalpha\nends here >", "<b says 'hi alpha ends here"},
+		{"<b says \"hi>\nalpha\n\">tail", "<b says \"hi alpha \" tail"},
+		{"<b says 'hi>\ralpha\r'>tail", "<b says 'hi alpha ' tail"},
+		{"<!-- note >\n<b>alpha</b>\nbeta", "<!-- note alpha beta"},
+		{"<![CDATA[\n<b>alpha</b>\nbeta", "<![CDATA[ alpha beta"},
+		{"<!-- open\n<![CDATA[hidden]]><b>alpha</b>", "<!-- open alpha"},
+		{"<![CDATA[open\n<!-- hidden --><b>alpha</b>", "<![CDATA[open alpha"},
+		{`<a title="a<b">text</a>`, "text"},
+		{`<div data-x="a>b">text</div>`, "text"},
+		{`<p class="x>alpha</p>`, `<p class="x alpha`},
+	} {
+		if got := CleanContent(tc.raw); got != tc.want {
+			t.Errorf("CleanContent(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+		if got := cleanStage3Content(tc.raw, false).text; got != tc.want {
+			t.Errorf("cleanStage3Content(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+		for _, match := range textTagRegex.FindAllString(tc.raw, -1) {
+			if end := markupTagEnds(match)[0]; end != len(match) {
+				t.Errorf("text tag %q is not a complete HTML tag match: end=%d", match, end)
+			}
+		}
+	}
+}
+
+func TestUnterminatedMarkupScaling(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"instruction", "<?audit secret \n", "<?audit secret "},
+		{"instruction_flood", "<? <? ", "<? <? "},
+		{"instruction_angles", "<?audit < </x ", "<?audit < </x "},
+		{"instruction_complete", "<?audit < </x ?>alpha ", "alpha "},
+		{"instruction_fallback", "<?audit < nested>alpha ", "alpha "},
+		{"instruction_bounded", "<?a>one<?b>two<?c?>three ", "one two three "},
+		{"closing_attribute", "<img alt=\"</b></b>\">alpha ", "alpha "},
+		{"closing_attribute_single", "<img alt='</b></b>'>alpha ", "alpha "},
+		{"title", "<title><b>bold</b>\n", "bold "},
+		{"comment", "<!-- note <b>bold</b>\n", "<!-- note bold "},
+		{"cdata", "<![CDATA[<b>\n", "<![CDATA[ "},
+		{"subset", "<!a [ <b>bold</b>\n", "<!a [ bold "},
+		{"doctype_subset", "<!DOCTYPE x [ <b>bold</b>\n", "<!DOCTYPE x [ bold "},
+		{"double_quote", "<!a \"<b>bold</b>\n", "<!a \" bold "},
+		{"single_quote", "<!a '<b>bold</b>\n", "<!a ' bold "},
+		{"subset_comment", "<!a [<!-- don't \" ] > < --> <b>bold</b>\n", "<!a [ bold "},
+		{"script", "<script><b>bold</b>\n", "bold "},
+		{"style", "<STYLE><b>bold</b>\n", "bold "},
+		{"attribute_double", "<img alt=\"<<\n<b>bold</b>\n", "<img alt=\"<< bold "},
+		{"attribute_single", "<img alt='</ \n<b>bold</b>\n", "<img alt='</ bold "},
+		{"attribute_whitespace", "<img alt=\n \"<<\n<b>bold</b>\n", "<img alt= \"<< bold "},
+	} {
+		for _, stage := range []struct {
+			name  string
+			clean func(string) string
+		}{
+			{"analysis", CleanContent},
+			{"mapped", func(raw string) string { return cleanStage3Content(raw, false).text }},
+			{"correspondence", func(raw string) string {
+				return strings.Join(strings.Fields(documentCorrespondence(raw, false).text), " ")
+			}},
+			{"html", func(raw string) string { return strings.Join(strings.Fields(stripHTMLTags(raw)), " ") }},
+		} {
+			t.Run(tc.name+"/"+stage.name, func(t *testing.T) {
+				var small time.Duration
+				for _, size := range []int{50_000, 100_000, 200_000} {
+					n := size / len(tc.raw)
+					tail := "<b>tail</b>"
+					if strings.Contains(tc.raw, "<?") {
+						// A tagged tail would close otherwise unclosed instructions.
+						tail = "tail"
+					}
+					raw := strings.Repeat(tc.raw, n) + tail
+					start := time.Now()
+					got := stage.clean(raw)
+					elapsed := time.Since(start)
+					if want := strings.Repeat(tc.want, n) + "tail"; got != want {
+						t.Fatalf("%d bytes: unterminated markup lost text or retained tags", len(raw))
+					}
+					t.Logf("%d bytes: %s", len(raw), elapsed)
+					// Slack permits race instrumentation and scheduler noise, but
+					// rejects the multi-second quadratic tail rescans.
+					if elapsed > 5*time.Second || small > 0 && elapsed > 3*small+500*time.Millisecond {
+						t.Fatalf("nonlinear markup cleaning: small=%s, current=%s", small, elapsed)
+					}
+					small = elapsed
+				}
+			})
+		}
+	}
+}
+
+func TestEngineIgnoresMarkupInExclusionsAndExcerpts(t *testing.T) {
+	for _, raw := range []string{
+		`<?audit secret < 80% ?>alpha`,
+		`<?audit secret?>alpha`,
+		`<?audit secret>alpha`,
+		`<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" />alpha`,
+		`<img src="secret" alt="load <80%">alpha`,
+		"<!-- secret < 80%\ninternal note -->alpha",
+		`<p class="x">alpha</p>`,
+		`<!DOCTYPE secret [<!-- don't -->]><secret>alpha</secret>`,
+		"<!-- secret\ninternal note -->alpha",
+		"<![CDATA[secret < 80%\ninternal note]]>alpha",
+		"<!DOCTYPE root [\n<!ENTITY note 'secret < 80%'>\n]>alpha",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "notes.md")
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for _, excludes := range [][]string{nil, {"secret"}} {
+				engine := NewSearchEngine([]string{"alpha"}, excludes, nil, false, 1, 1000)
+				engine.Silent = true
+				matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+				if err != nil || len(matches) != 1 {
+					t.Fatalf("excludes=%v: matches=%+v err=%v, want one", excludes, matches, err)
+				}
+				results, err := engine.ExtractAndBuildResults(matches)
+				wantLine := 1 + strings.Count(raw[:strings.Index(raw, "alpha")], "\n")
+				if err != nil || len(results) != 1 || results[0].CleanContent != "alpha" ||
+					!slices.Equal(results[0].RawExcerpts, []string{"alpha"}) || !slices.Equal(results[0].StartLines, []int{wantLine}) {
+					t.Fatalf("excludes=%v: results=%+v err=%v, want alpha at line %d", excludes, results, err, wantLine)
+				}
+			}
+		})
+	}
+}
+
+func TestEngineSearchesTextBetweenStrayAngleBrackets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notes.md")
+	if err := os.WriteFile(path, []byte("alpha <80% load\nsecret beta\nuntil >90% gamma\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		terms, excludes []string
+		want            int
+	}{
+		{[]string{"alpha", "beta"}, nil, 1},
+		{[]string{"alpha", "gamma"}, []string{"secret"}, 0},
+	} {
+		engine := NewSearchEngine(tc.terms, tc.excludes, nil, false, 1, 1000)
+		engine.Silent = true
+		matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+		if err != nil || len(matches) != tc.want {
+			t.Fatalf("terms=%v excludes=%v: matches=%+v err=%v, want %d", tc.terms, tc.excludes, matches, err, tc.want)
+		}
+		if tc.want == 0 {
+			continue
+		}
+		results, err := engine.ExtractAndBuildResults(matches)
+		if err != nil || len(results) != 1 || !slices.Equal(results[0].StartLines, []int{1}) || !strings.Contains(strings.Join(results[0].RawExcerpts, " "), "secret beta") {
+			t.Fatalf("results=%+v err=%v, want one excerpt with secret beta at line 1", results, err)
+		}
+	}
+}
+
 func TestCleaningStageParity(t *testing.T) {
-	for _, raw := range []string{"header\n> alpha beta hidden\nvisible\n", "\n-----\nvisible", "<style>hidden</style>\n<script>hidden</script>\n<b>A1,2B</b> &amp;\tend", "\u00a0\x00é\u0085\tX\xff\u2003", "", " \n\t"} {
+	for _, raw := range []string{"<?php secret < 80; ?>alpha", "<?php secret <\n80; ?>alpha", "<?php if ($a > 1)", "header\n> alpha beta hidden\nvisible\n", "\n-----\nvisible", "<style>hidden</style>\n<script>hidden</script>\n<b>A1,2B</b> &amp;\tend", "\u00a0\x00é\u0085\tX\xff\u2003", "", " \n\t"} {
 		for _, code := range []bool{false, true} {
 			got := CleanContent(raw)
 			if code {
 				got = CleanContentCode(raw)
+				if strings.HasPrefix(raw, "<?php") && got != strings.Join(strings.Fields(raw), " ") {
+					t.Errorf("PHP source changed: %q", got)
+				}
 			}
 			if want := cleanStage3Content(raw, code).text; got != want {
 				t.Errorf("raw=%q code=%v: Stage 2=%q Stage 3=%q", raw, code, got, want)
