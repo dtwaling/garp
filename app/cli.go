@@ -1196,7 +1196,7 @@ func Run() int {
 	startWall = time.Now()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		fmt.Println("Error:", terminaltext.Sanitize(err.Error()))
+		fmt.Fprintln(os.Stderr, "Error: "+terminaltext.Sanitize(err.Error()))
 		return 1
 	}
 	return 0
