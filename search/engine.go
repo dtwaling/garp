@@ -269,7 +269,7 @@ type SearchEngine struct {
 	PositiveGlobCodeEligibility bool
 
 	// PDF metrics (atomic)
-	pdfProcessed     int64 // atomic counter
+	pdfProcessed     int64 // PDFs whose Stage 2 extraction succeeded
 	pdfSkippedBudget int64 // atomic counter
 
 	// Metrics (atomic)
@@ -862,6 +862,11 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 			}
 		}
 
+		// Every Stage 2 failure path has returned, so count each PDF once here.
+		if strings.EqualFold(filepath.Ext(filePath), ".pdf") {
+			atomic.AddInt64(&se.pdfProcessed, 1)
+		}
+
 		if !hasAllWords {
 			return false
 		}
@@ -1156,9 +1161,6 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 					}
 					outcome.Matches--
 					continue
-				}
-				if strings.EqualFold(ext, ".pdf") {
-					atomic.AddInt64(&se.pdfProcessed, 1)
 				}
 			} else {
 				if !se.Silent {
