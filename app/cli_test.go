@@ -59,6 +59,44 @@ func TestRunEmptyPositiveQuery(t *testing.T) {
 	}
 }
 
+func TestRunTUIStartupErrorWritesOnlyToStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cannot control the Windows console input")
+	}
+	if tty, err := os.Open("/dev/tty"); err == nil {
+		_ = tty.Close()
+		t.Skip("a controlling terminal is available")
+	}
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdin pipe: %v", err)
+	}
+	originalStdin := os.Stdin
+	os.Stdin = reader
+	defer func() {
+		os.Stdin = originalStdin
+		_ = reader.Close()
+		_ = writer.Close()
+	}()
+
+	var code int
+	var stderr string
+	stdout := string(captureCLIStdout(t, func() int {
+		code, stderr = runWithArgsAndStderr(t, []string{"garp", "needle", "--startdir", t.TempDir()})
+		return 0 // Assert Run's exit code separately from the capture helper.
+	}))
+	if code != 1 {
+		t.Errorf("Run() = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.HasPrefix(stderr, "Error: ") {
+		t.Errorf("stderr = %q, want Error: prefix", stderr)
+	}
+}
+
 func TestConcurrencyFlagBounds(t *testing.T) {
 	for _, tc := range []struct {
 		flag    string
