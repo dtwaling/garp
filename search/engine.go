@@ -269,8 +269,7 @@ type SearchEngine struct {
 	PositiveGlobCodeEligibility bool
 
 	// PDF metrics (atomic)
-	pdfProcessed     int64 // PDFs whose Stage 2 extraction succeeded
-	pdfSkippedBudget int64 // atomic counter
+	pdfProcessed int64 // PDFs whose Stage 2 extraction succeeded
 
 	// Metrics (atomic)
 	emlPrefilterCount    int64
@@ -1384,11 +1383,8 @@ func (se *SearchEngine) ExecuteDetailed() (ExecutionResult, error) {
 			}
 		}
 		// PDF extraction summary
-		if atomic.LoadInt64(&se.pdfProcessed) > 0 || atomic.LoadInt64(&se.pdfSkippedBudget) > 0 {
-			fmt.Printf("  PDF extracted: %d • skipped (budget): %d • pages truncated: %d\n",
-				atomic.LoadInt64(&se.pdfProcessed),
-				atomic.LoadInt64(&se.pdfSkippedBudget),
-				atomic.LoadInt64(&pdfPagesTruncated))
+		if processed, truncated := se.GetPDFStatsDetailed(); processed > 0 || truncated > 0 {
+			fmt.Printf("  PDF extracted: %d • pages truncated: %d\n", processed, truncated)
 		}
 	}
 
@@ -1414,6 +1410,6 @@ func formatNumber(n int) string {
 }
 
 // GetPDFStatsDetailed returns PDF counters including truncated page count for UI/metrics.
-func (se *SearchEngine) GetPDFStatsDetailed() (processed int64, skippedBudget int64, truncatedPages int64) {
-	return atomic.LoadInt64(&se.pdfProcessed), atomic.LoadInt64(&se.pdfSkippedBudget), atomic.LoadInt64(&pdfPagesTruncated)
+func (se *SearchEngine) GetPDFStatsDetailed() (processed int64, truncatedPages int64) {
+	return atomic.LoadInt64(&se.pdfProcessed), atomic.LoadInt64(&pdfPagesTruncated)
 }

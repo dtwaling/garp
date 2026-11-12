@@ -35,7 +35,6 @@ type progressMsg struct {
 	Total        int
 	Path         string
 	PdfScanned   int64
-	PdfSkipped   int64
 	PdfTruncated int64
 }
 
@@ -105,7 +104,6 @@ type model struct {
 	heavyConcurrency  int
 	fileTimeoutBinary int
 	pdfScanned        int64
-	pdfSkipped        int64
 	pdfTruncated      int64
 	filterWorkers     int
 	maxResults        int
@@ -264,7 +262,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.confirmSelected = "yes"
 		m.searchTime = msg.searchTime
 		m.pdfScanned = msg.pdfScanned
-		m.pdfSkipped = msg.pdfSkipped
 		m.pdfTruncated = msg.pdfTruncated
 		m.totalPages = len(m.results)
 		if m.totalPages == 0 {
@@ -288,7 +285,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.totalFiles = msg.Total
 		}
 		m.pdfScanned = msg.PdfScanned
-		m.pdfSkipped = msg.PdfSkipped
 		m.pdfTruncated = msg.PdfTruncated
 		if msg.Total > 0 {
 			m.progressText = fmt.Sprintf("%s [%d/%d]: %s", strings.Title(terminaltext.Sanitize(msg.Stage)), msg.Count, msg.Total, p)
@@ -312,7 +308,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.totalFiles = lp.Total
 			}
 			m.pdfScanned = lp.PdfScanned
-			m.pdfSkipped = lp.PdfSkipped
 			m.pdfTruncated = lp.PdfTruncated
 			if lp.Total > 0 {
 				m.progressText = fmt.Sprintf("%s [%d/%d]: %s", strings.Title(terminaltext.Sanitize(lp.Stage)), lp.Count, lp.Total, p)
@@ -411,7 +406,7 @@ func (m model) View() string {
 	} else {
 		minutes = m.searchTime.Minutes()
 	}
-	elapsed := fmt.Sprintf("⏱️ Searched:  %.2f minutes • Matched: %d of %d files • PDFs Scanned %d • Skipped %d • Truncated %d", minutes, len(m.results), m.totalFiles, m.pdfScanned, m.pdfSkipped, m.pdfTruncated)
+	elapsed := fmt.Sprintf("⏱️ Searched:  %.2f minutes • Matched: %d of %d files • PDFs Scanned %d • Truncated %d", minutes, len(m.results), m.totalFiles, m.pdfScanned, m.pdfTruncated)
 	elapsedStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#8ab4f8"))
 	headerLines = append(headerLines, elapsedStyled.Render(elapsed))
 
@@ -731,7 +726,7 @@ func (m model) runSearch() tea.Cmd {
 	se := m.newSearchEngine()
 	// Stream progress from the engine to the TUI header
 	se.OnProgress = func(stage string, processed, total int, path string) {
-		ps, sk, tr := se.GetPDFStatsDetailed()
+		ps, tr := se.GetPDFStatsDetailed()
 
 		progressMu.Lock()
 		latestProgress = progressMsg{
@@ -740,7 +735,6 @@ func (m model) runSearch() tea.Cmd {
 			Total:        total,
 			Path:         path,
 			PdfScanned:   ps,
-			PdfSkipped:   sk,
 			PdfTruncated: tr,
 		}
 		haveLatestProgress = true
@@ -753,7 +747,6 @@ func (m model) runSearch() tea.Cmd {
 			Total:        total,
 			Path:         path,
 			PdfScanned:   ps,
-			PdfSkipped:   sk,
 			PdfTruncated: tr,
 		}
 		select {
@@ -806,12 +799,11 @@ func (m model) runSearch() tea.Cmd {
 		func() tea.Msg {
 
 			results, _ := se.Execute()
-			ps, sk, tr := se.GetPDFStatsDetailed()
+			ps, tr := se.GetPDFStatsDetailed()
 			return searchResultMsg{
 				results:      results,
 				searchTime:   time.Since(startWall),
 				pdfScanned:   ps,
-				pdfSkipped:   sk,
 				pdfTruncated: tr,
 			}
 		},
@@ -994,7 +986,6 @@ type searchResultMsg struct {
 	results      []search.SearchResult
 	searchTime   time.Duration
 	pdfScanned   int64
-	pdfSkipped   int64
 	pdfTruncated int64
 }
 
