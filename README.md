@@ -93,7 +93,8 @@ Ensure `~/.local/bin` is on your `PATH`.
 **Option 2: Copy the prebuilt binary**
 
 Both release binaries are committed to the repo: `bin/garp` (Linux) and
-`bin/garp.exe` (Windows, cross-compiled). Copy the one for your OS to any
+`bin/garp.exe` (Windows, cross-compiled). Both are pure Go; `bin/garp` is
+statically linked, with no glibc dependency. Copy the one for your OS to any
 directory on your `PATH`:
 
 ```bash
@@ -447,8 +448,10 @@ garp/
 ## Building
 
 ```bash
-make                  # build to bin/garp
+make                  # build to bin/garp-local (static, gitignored)
 make install          # build + copy to ~/.local/bin/garp
+make release          # rebuild tracked bin/garp + bin/garp.exe (clean tree required)
+make dist             # all release assets -> dist/garp-<os>-<arch>[.exe]
 make test             # run tests
 make fmt              # format
 make tidy             # go mod tidy
@@ -457,23 +460,18 @@ make tidy             # go mod tidy
 ### Windows
 
 A stock Windows install has no `make`, so drive the Go toolchain directly. This
-produces `bin\garp.exe` using the same release flags as the Makefile (`-trimpath`,
+produces `bin\garp-local.exe` (gitignored) using the same release flags as the Makefile (`-trimpath`,
 stripped symbol table + DWARF, embedded version):
 
 ```powershell
-go build -trimpath -ldflags "-s -w -X garp/app.version=0.10.0" -o bin\garp.exe .
+go build -trimpath -ldflags "-s -w -X garp/app.version=0.10.0" -o bin\garp-local.exe .
 go test ./...                                              # run tests
 go vet ./...                                               # vet
 ```
 
-The `.exe` was cross-compiled from Linux with the same release flags
-(`GOOS=windows GOARCH=amd64`, `-trimpath`, stripped symbol table + DWARF,
-embedded version) and is committed alongside the Linux build at `bin/garp.exe`.
-
-```bash
-GOOS=windows GOARCH=amd64 go build -trimpath \
-  -ldflags "-s -w -X garp/app.version=0.10.0" -o bin/garp.exe .
-```
+The committed `bin/garp` and `bin/garp.exe` are produced only by `make release`
+(`CGO_ENABLED=0`, `-trimpath`, stripped symbol table + DWARF, embedded version),
+built from a clean tree and committed on their own.
 
 ## TUI navigation
 

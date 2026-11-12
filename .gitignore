@@ -45,4 +45,9 @@ Thumbs.db
 *.log
 find-words
 bin/scopedbg
+# Local build outputs (bin/garp-local, bin/garp-dev); only the release binaries are tracked.
+bin/*
+!bin/garp
+!bin/garp.exe
+dist/
 gh-body-files/
