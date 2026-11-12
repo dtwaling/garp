@@ -696,6 +696,25 @@ func TestExcerptLineAnchorsMayRepeatOnSingleLine(t *testing.T) {
 }
 
 func TestStage3MappedCleaning(t *testing.T) {
+	for _, block := range []string{
+		`<script>const s = "<!--";</script>`,
+		`<style>a::after {content: "<!--"}</style>`,
+		`<SCRIPT title="a>b">"<![CDATA["</SCRIPT>`,
+		`<!DOCTYPE secret [<!-- don't -->]>`,
+		`<script>hidden</script><style>hidden</style>`,
+	} {
+		raw := block + "\nalpha\n<!-- footer -->tail"
+		for _, mapped := range []mappedContent{cleanStage3Content(raw, false), documentCorrespondence(raw, true), documentCorrespondence(raw, false)} {
+			if got := strings.Join(strings.Fields(mapped.text), " "); got != "alpha tail" {
+				t.Fatalf("%q: mapped text = %q", block, got)
+			}
+			for _, term := range []string{"alpha", "tail"} {
+				if got := mapped.offsets[strings.Index(mapped.text, term)]; got != strings.Index(raw, term) {
+					t.Fatalf("%q: %s offset = %d", block, term, got)
+				}
+			}
+		}
+	}
 	raw := "<!-- hidden <b>\n<![CDATA[ hidden -->\n<![CDATA[<!-- hidden\n]]>\n" +
 		"<!DOCTYPE root [\n<!ENTITY note 'hidden ] < >'>\n]>\n" +
 		"<style>hidden</style>\n<script>hidden</script>\n> hidden\n-----\n<b>é</b> A1,2B\x09end\xff\n"
@@ -772,6 +791,8 @@ func TestStage3LegacyFallbackStrippedAndExhausted(t *testing.T) {
 		{"<![CDATA[open\n<b>needle</b>\nneedle", []int{2, 3, 0}},
 		{"<!a [\n<b>needle</b>\nneedle", []int{2, 3, 0}},
 		{"<!DOCTYPE x [\n<b>needle</b>\nneedle", []int{2, 3, 0}},
+		{"<script>const s = \"<!-- needle\";</script>\nneedle\n<!-- footer -->needle", []int{2, 3, 0}},
+		{"<style>a {content: '<!-- needle'}</style>\nneedle\n<!-- footer -->needle", []int{2, 3, 0}},
 	} {
 		if got := computeExcerptSpanLinesQuery(tc.raw, spans, query, 200); !slices.Equal(got, tc.want) {
 			t.Errorf("raw=%q: legacy anchors=%v, want %v", tc.raw, got, tc.want)

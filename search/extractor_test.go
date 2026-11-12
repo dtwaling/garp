@@ -69,6 +69,18 @@ func TestMarkupExtractorsStripQuotedTagsAndDeclarations(t *testing.T) {
 		{`<p class='x>alpha</p><p class='y'>beta</p>`, "alpha beta"},
 		{`<p class="x>alpha</p>" >tail`, `alpha " >tail`},
 		{`<img src="secret" alt="load <80%">alpha`, "alpha"},
+		{"<img src=\"secret\" alt=\n\"load <80%\">alpha", "alpha"},
+		{"<img src='secret' alt=\r\n	\f 'load <80%'>alpha", "alpha"},
+		{`<img src="secret" alt="load </ 80%">alpha`, "alpha"},
+		{`<img src="secret" alt="<<">alpha`, "alpha"},
+		{`<img src='secret' alt='<< / </'>alpha`, "alpha"},
+		{`<!DOCTYPE secret [<!-- don't -->]><secret>alpha</secret>`, "alpha"},
+		{`<img alt="<!--">alpha<!-- footer -->tail`, "alpha tail"},
+		{`<!-- <script> -->alpha<script>hidden</script>tail`, "alpha tail"},
+		{`<![CDATA[<style>]]>alpha<style>hidden</style>tail`, "alpha tail"},
+		{`<script>"<style>"</script>alpha<style>hidden</style>tail`, "alpha tail"},
+		{`<SCRIPT title="a>b">"<!--"</SCRIPT>alpha<!-- footer -->tail`, "alpha tail"},
+		{`<scripture>alpha</scripture>tail`, "alpha tail"},
 		{"<img src='secret'\nalt='load <80% >20%'>alpha", "alpha"},
 		{"<img alt=\"load <80%\n>20%\">alpha", "alpha"},
 		{"<!-- secret < 80%\ninternal note -->alpha", "alpha"},
@@ -469,6 +481,15 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 		{"binary HTML without BOM and predominantly Cyrillic body", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{utf16LE("<html><body>" + strings.Repeat("Отчёт о продажах", 30) + "</body></html>"), nil}), "Отчёт о продажах", ""},
+		{"binary CP1252 HTML strips quoted attributes after newline", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\n\"load <80%\">alpha"), nil}), "alpha", "secret"},
+		{"binary CP1252 HTML strips angle sequences in attributes", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"<< </ 80%\">alpha"), nil}), "alpha", "secret"},
+		{"binary CP1252 HTML strips ordinary attributes", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"load\">alpha"), nil}), "alpha", "secret"},
 		{"binary UTF-8 HTML preserves non-ASCII text and strips attributes", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{[]byte(`<html><body><p class="MsoNormal">café 東京都の報告書 quarterly</p></body></html>`), nil}), "café 東京都の報告書 quarterly", "MsoNormal"},

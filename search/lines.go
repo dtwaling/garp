@@ -118,8 +118,7 @@ func documentCorrespondence(raw string, clean bool) mappedContent {
 		m.offsets[i] = i
 	}
 	strip := func(control string) {
-		m = stripDelimitedMarkup(m, " ")
-		m = m.replace(cssRegex, "").replace(jsRegex, "")
+		m = stripDelimitedMarkup(m, " ", markupTagPattern{})
 		m = m.replace(textTagRegex, " ").replace(htmlEntityRegex, " ")
 		m = m.replace(controlCharRegex, control).replace(junkSymbolsRegex, "")
 		m = m.replace(emailQuotingRegex, "").replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")

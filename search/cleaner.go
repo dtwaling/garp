@@ -24,7 +24,25 @@ func markupDeclarationSpans(raw string) []matchRange {
 	var spans []matchRange
 	var end, subset int
 	var quotedEnd, quotedSubset [2]int
+	var comments [2]struct{ close, end, subset int }
 	for i := len(raw) - 1; i >= 0; i-- {
+		// Save the continuation after the nearest complete comment. Its quotes,
+		// brackets and angle brackets are opaque to the declaration grammar.
+		if i >= 2 && raw[i-2:i+1] == "-->" {
+			comments[1] = comments[0]
+			comments[0].close, comments[0].end, comments[0].subset = i-2, end, subset
+		}
+		if strings.HasPrefix(raw[i:], "<!--") {
+			comment := comments[0]
+			if comment.close < i+4 {
+				// <!--> overlaps a closer; only the next closer can end it.
+				comment = comments[1]
+			}
+			if comment.close >= i+4 {
+				end, subset = comment.end, comment.subset
+				continue
+			}
+		}
 		switch raw[i] {
 		case '"', '\'':
 			kind := 0
@@ -50,13 +68,56 @@ func markupDeclarationSpans(raw string) []matchRange {
 	return spans
 }
 
+// markupTagEnds computes every candidate endpoint, including overlapping tags.
+// FindAll cannot do this: a quote beginning inside a comment can hide a real tag
+// after the comment. Suffix continuations take constant work per byte, even for
+// failed quotes. Balanced values after = and HTML whitespace take precedence;
+// otherwise recover at the first >. A closing element bounds quote recovery so
+// an unmatched quote cannot borrow a quote from a later element's attributes.
+func markupTagEnds(raw string) []int {
+	ends := make([]int, len(raw))
+	var end, valueEnd int
+	var quotedEnd [2]int
+	for i := len(raw) - 1; i >= 0; i-- {
+		nextValue := 0
+		switch raw[i] {
+		case ' ', '	', '\r', '\n', '\f':
+			nextValue = valueEnd
+		case '"', '\'':
+			kind := 0
+			if raw[i] == '\'' {
+				kind = 1
+			}
+			nextValue, quotedEnd[kind] = quotedEnd[kind], end
+		case '=':
+			if valueEnd != 0 {
+				end = valueEnd
+			}
+		case '>':
+			end = i + 1
+		case '<':
+			if i+1 < len(raw) && (isMarkupLetter(raw[i+1]) || raw[i+1] == '/' || raw[i+1] == '?') {
+				ends[i] = end
+			}
+			if i+2 < len(raw) && raw[i+1] == '/' && isMarkupLetter(raw[i+2]) {
+				quotedEnd = [2]int{}
+			}
+			end = 0
+		}
+		valueEnd = nextValue
+	}
+	return ends
+}
+
 // markupTagPattern keeps the extractors' replacement surface while sharing the
-// linear declaration/comment/CDATA pass with the offset-aware document cleaner.
-type markupTagPattern struct{ *regexp.Regexp }
+// linear context scan with the offset-aware document cleaner.
+type markupTagPattern struct {
+	tags    bool
+	rawText string // nonempty selects only this raw-text element, for legacy readings
+}
 
 func (p markupTagPattern) ReplaceAllString(raw, replacement string) string {
-	m := stripDelimitedMarkup(mappedContent{text: raw}, replacement)
-	return p.Regexp.ReplaceAllString(m.text, replacement)
+	return stripDelimitedMarkup(mappedContent{text: raw}, replacement, p).text
 }
 
 // stripDelimitedMarkup visits openers in source order, skipping each complete
@@ -64,10 +125,21 @@ func (p markupTagPattern) ReplaceAllString(raw, replacement string) string {
 // Thus successful searches cover disjoint spans, with at most two failed O(N)
 // searches: total O(N), even with arbitrarily many unterminated openers.
 // Declaration endpoints are precomputed once by the same linear-time rule.
-// This pre-pass precedes element matching: a comment opener inside an element's
-// quoted attribute still takes precedence over that element (not an HTML parser).
-func stripDelimitedMarkup(m mappedContent, replacement string) mappedContent {
+// Tags protect their attributes; complete raw-text blocks protect their bodies.
+// Source-order precedence also prevents a tag inside a comment from opening a
+// raw-text block. Each precomputed span/closer is visited at most once.
+func stripDelimitedMarkup(m mappedContent, replacement string, pattern markupTagPattern) mappedContent {
 	declarations := markupDeclarationSpans(m.text)
+	tags := markupTagEnds(m.text)
+	closers := rawTextCloseRegex.FindAllStringSubmatchIndex(m.text, -1)
+	var rawCloses [2][]int
+	for _, loc := range closers {
+		kind := 0
+		if strings.EqualFold(m.text[loc[2]:loc[3]], "script") {
+			kind = 1
+		}
+		rawCloses[kind] = append(rawCloses[kind], loc[1])
+	}
 	var text strings.Builder
 	var offsets []int
 	copyRange := func(start, end int) {
@@ -86,8 +158,31 @@ func stripDelimitedMarkup(m mappedContent, replacement string) mappedContent {
 			declarations = declarations[:len(declarations)-1]
 		}
 		end := 0
+		remove := pattern.rawText == ""
 		if len(declarations) > 0 && declarations[len(declarations)-1].start == i {
 			end = declarations[len(declarations)-1].end
+		} else if tags[i] != 0 {
+			tagEnd := tags[i]
+			end, remove = tagEnd, pattern.tags
+			nameEnd := i + 1
+			for nameEnd < tagEnd && isMarkupLetter(m.text[nameEnd]) {
+				nameEnd++
+			}
+			name := m.text[i+1 : nameEnd]
+			if nameEnd < tagEnd && strings.ContainsRune(" 	\r\n\f/>", rune(m.text[nameEnd])) &&
+				(strings.EqualFold(name, "style") || strings.EqualFold(name, "script")) {
+				kind := 0
+				if strings.EqualFold(name, "script") {
+					kind = 1
+				}
+				for len(rawCloses[kind]) > 0 && rawCloses[kind][0] <= tagEnd {
+					rawCloses[kind] = rawCloses[kind][1:]
+				}
+				if len(rawCloses[kind]) > 0 {
+					end = rawCloses[kind][0]
+					remove = pattern.rawText == "" || strings.EqualFold(name, pattern.rawText)
+				}
+			}
 		} else {
 			kind, opener, closer := 0, "<!--", "-->"
 			if !strings.HasPrefix(m.text[i:], opener) {
@@ -106,6 +201,10 @@ func stripDelimitedMarkup(m mappedContent, replacement string) mappedContent {
 			}
 			end += i + len(opener) + len(closer)
 		}
+		if !remove {
+			i = end - 1
+			continue
+		}
 		copyRange(last, i)
 		text.WriteString(replacement)
 		if m.offsets != nil {
@@ -122,12 +221,16 @@ func stripDelimitedMarkup(m mappedContent, replacement string) mappedContent {
 	return mappedContent{text.String(), offsets}
 }
 
+func isMarkupLetter(b byte) bool {
+	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
+}
+
 var (
 	// Known markup -- the extractors' HTML/XML. Tags open with a letter, / or ?
 	// and may span lines. Quotes start attribute values only after =, not in
 	// O'Brien. Prefer balanced values; malformed markup falls back to the first
 	// > without consuming the next tag. Quotes cannot cross a closing element.
-	htmlTagRegex = markupTagPattern{regexp.MustCompile(`<[A-Za-z/?](?:=[ 	]*"(?:[^"<]|<[^/"<])*<?"|=[ 	]*'(?:[^'<]|<[^/'<])*<?'|[^<>])*>`)}
+	htmlTagRegex = markupTagPattern{tags: true}
 
 	// Text that may be prose -- every non-code document. Element and processing-
 	// instruction tags, including quoted values, must close on their own line,
@@ -143,9 +246,12 @@ var (
 	// Email headers (case insensitive)
 	emailHeaderRegex = regexp.MustCompile(`(?i)^(Content-Type|Content-Transfer-Encoding|MIME-Version|Date|From|To|Subject|Message-ID|Return-Path|Received|X-[^:]*|Authentication-Results):`)
 
-	// CSS/JavaScript blocks (separate patterns since Go doesn't support backreferences)
-	cssRegex = regexp.MustCompile(`(?s)<style[^>]*>.*?</style>`)
-	jsRegex  = regexp.MustCompile(`(?s)<script[^>]*>.*?</script>`)
+	// Keep the legacy reading-cleanup call surface, but use the same context
+	// precedence as the cleaner instead of matching blocks inside comments or
+	// inside the other kind of raw-text element.
+	cssRegex          = markupTagPattern{rawText: "style"}
+	jsRegex           = markupTagPattern{rawText: "script"}
+	rawTextCloseRegex = regexp.MustCompile(`(?i)</(style|script)[	\n\f\r ]*>`)
 
 	// Control characters and excessive whitespace
 	controlCharRegex = regexp.MustCompile(`[\x00-\x1f\x7f-\x9f]`)
@@ -217,8 +323,7 @@ func cleanStage3Content(raw string, isCode bool) mappedContent {
 // A nil offset slice avoids building correspondence that analysis never uses.
 func cleanSearchContent(m mappedContent, isCode bool) mappedContent {
 	if !isCode {
-		m = stripDelimitedMarkup(m, " ")
-		m = m.replace(cssRegex, " ").replace(jsRegex, " ")
+		m = stripDelimitedMarkup(m, " ", markupTagPattern{})
 		m = m.replace(textTagRegex, " ").replace(htmlEntityRegex, " ")
 		m = m.replace(junkSymbolsRegex, "").replace(emailQuotingRegex, "")
 		m = m.replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")

@@ -1233,6 +1233,17 @@ func TestCleanContentStripsOnlyTagSyntax(t *testing.T) {
 		{`<!DOCTYPE html SYSTEM "secret<file>">alpha`, "alpha"},
 		{"<!DOCTYPE root [\n<!ENTITY note 'secret < 80% >20%'>\n]>alpha", "alpha"},
 		{`<!DOCTYPE root [<!ENTITY note "[ ] ' > <">]>alpha`, "alpha"},
+		{`<!DOCTYPE secret [<!-- don't -->]><secret>alpha</secret>`, "alpha"},
+		{`<!DOCTYPE secret [<!-- " ] > < -->]><secret>alpha</secret>`, "alpha"},
+		{"<script>const s = \"<!--\";</script>\nalpha\n<!-- footer -->tail", "alpha tail"},
+		{"<style>a::after {content: \"<!--\"}</style>\nalpha\n<!-- footer -->tail", "alpha tail"},
+		{`<SCRIPT title="a>b">"<![CDATA["</SCRIPT>alpha<![CDATA[footer]]>tail`, "alpha tail"},
+		{`<!-- <script> -->alpha<script>hidden</script>tail`, "alpha tail"},
+		{`<!-- <a x=" --> <script>hidden <b> "> hidden</script>alpha`, "alpha"},
+		{`<!DOCTYPE secret [<!--> ' -->]><secret>alpha</secret>`, "alpha"},
+		{`<img alt="<!--">alpha<!-- footer -->tail`, "alpha tail"},
+		{`<img alt='<![CDATA['>alpha<![CDATA[footer]]>tail`, "alpha tail"},
+		{`<script>hidden</script>alpha<style>hidden</style>tail`, "alpha tail"},
 		{`<!X "[" ['['] ']' [" ] "]>alpha`, "alpha"},
 		{"<!a [\n<b>alpha</b>\nbeta", "<!a [ alpha beta"},
 		{"<!DOCTYPE x [\n<b>alpha</b>\nbeta", "<!DOCTYPE x [ alpha beta"},
@@ -1256,8 +1267,8 @@ func TestCleanContentStripsOnlyTagSyntax(t *testing.T) {
 			t.Errorf("cleanStage3Content(%q) = %q, want %q", tc.raw, got, tc.want)
 		}
 		for _, match := range textTagRegex.FindAllString(tc.raw, -1) {
-			if got := htmlTagRegex.FindString(match); got != match {
-				t.Errorf("text tag %q is not a complete HTML tag match: %q", match, got)
+			if end := markupTagEnds(match)[0]; end != len(match) {
+				t.Errorf("text tag %q is not a complete HTML tag match: end=%d", match, end)
 			}
 		}
 	}
@@ -1271,6 +1282,12 @@ func TestUnterminatedMarkupScaling(t *testing.T) {
 		{"doctype_subset", "<!DOCTYPE x [ <b>bold</b>\n", "<!DOCTYPE x [ bold "},
 		{"double_quote", "<!a \"<b>bold</b>\n", "<!a \" bold "},
 		{"single_quote", "<!a '<b>bold</b>\n", "<!a ' bold "},
+		{"subset_comment", "<!a [<!-- don't \" ] > < --> <b>bold</b>\n", "<!a [ bold "},
+		{"script", "<script><b>bold</b>\n", "bold "},
+		{"style", "<STYLE><b>bold</b>\n", "bold "},
+		{"attribute_double", "<img alt=\"<<\n<b>bold</b>\n", "<img alt=\"<< bold "},
+		{"attribute_single", "<img alt='</ \n<b>bold</b>\n", "<img alt='</ bold "},
+		{"attribute_whitespace", "<img alt=\n \"<<\n<b>bold</b>\n", "<img alt= \"<< bold "},
 	} {
 		for _, stage := range []struct {
 			name  string
@@ -1278,11 +1295,14 @@ func TestUnterminatedMarkupScaling(t *testing.T) {
 		}{
 			{"analysis", CleanContent},
 			{"mapped", func(raw string) string { return cleanStage3Content(raw, false).text }},
+			{"correspondence", func(raw string) string {
+				return strings.Join(strings.Fields(documentCorrespondence(raw, false).text), " ")
+			}},
 			{"html", func(raw string) string { return strings.Join(strings.Fields(stripHTMLTags(raw)), " ") }},
 		} {
 			t.Run(tc.name+"/"+stage.name, func(t *testing.T) {
 				var small time.Duration
-				for _, size := range []int{100_000, 200_000} {
+				for _, size := range []int{50_000, 100_000, 200_000} {
 					n := size / len(tc.raw)
 					raw := strings.Repeat(tc.raw, n) + "<b>tail</b>"
 					start := time.Now()
@@ -1309,6 +1329,7 @@ func TestEngineIgnoresMarkupInExclusionsAndExcerpts(t *testing.T) {
 		`<img src="secret" alt="load <80%">alpha`,
 		"<!-- secret < 80%\ninternal note -->alpha",
 		`<p class="x">alpha</p>`,
+		`<!DOCTYPE secret [<!-- don't -->]><secret>alpha</secret>`,
 		"<!-- secret\ninternal note -->alpha",
 		"<![CDATA[secret < 80%\ninternal note]]>alpha",
 		"<!DOCTYPE root [\n<!ENTITY note 'secret < 80%'>\n]>alpha",
