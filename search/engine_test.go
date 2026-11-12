@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestSearchEngineResourceBounds(t *testing.T) {
@@ -2076,6 +2077,40 @@ func TestStage2MSGSkipsPrefilter(t *testing.T) {
 			}
 			if extractor.readerCalls.Load() != 1 || extractor.calls.Load() != 0 || engine.msgPrefilterCount != 0 {
 				t.Fatalf("ReaderAt=%d legacy=%d prefilters=%d", extractor.readerCalls.Load(), extractor.calls.Load(), engine.msgPrefilterCount)
+			}
+		})
+	}
+}
+
+func TestExecuteDetailedSearchesCP1252MSGText(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "legacy.msg"), cp1252MSG(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name     string
+		words    []string
+		excludes []string
+		want     int
+	}{
+		{"accented term", []string{"café"}, nil, 1},
+		{"uppercase accented terms", []string{"CAFÉ", "crème"}, nil, 1},
+		{"ASCII term", []string{"ordered"}, nil, 1},
+		{"accented exclusion", []string{"ordered"}, []string{"café"}, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := NewSearchEngine(tt.words, tt.excludes, nil, false, 1, 1000)
+			engine.StartDir, engine.Silent = dir, true
+			outcome, err := engine.ExecuteDetailed()
+			if err != nil || outcome.Matches != tt.want {
+				t.Fatalf("matches=%d err=%v, want %d", outcome.Matches, err, tt.want)
+			}
+			for _, result := range outcome.Results {
+				for _, excerpt := range result.RawExcerpts {
+					if !utf8.ValidString(excerpt) || !strings.Contains(strings.ToLower(excerpt), "café") {
+						t.Errorf("excerpt = %q, want valid UTF-8 containing café", excerpt)
+					}
+				}
 			}
 		})
 	}
