@@ -56,6 +56,46 @@ func TestEMLExtractorPrependsDecodedSubject(t *testing.T) {
 	}
 }
 
+func TestMarkupExtractorsStripQuotedTagsAndDeclarations(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{`<p class="x">alpha</p>`, "alpha"},
+		{`<a title="a<b">alpha</a>`, "alpha"},
+		{`<div data-x="a>b">alpha</div>`, "alpha"},
+		{`<p class="x>alpha</p>`, "alpha"},
+		{`<img alt=O'Brien>Name<p>It's ok</p>`, "Name It's ok"},
+		{`<img alt=O'Brien title="a>b">alpha`, "alpha"},
+		{`<img alt=O'Brien title='a<b'>alpha`, "alpha"},
+		{`<p class="x>alpha</p><p class="y">beta</p>`, "alpha beta"},
+		{`<p class='x>alpha</p><p class='y'>beta</p>`, "alpha beta"},
+		{`<p class="x>alpha</p>" >tail`, `alpha " >tail`},
+		{`<img src="secret" alt="load <80%">alpha`, "alpha"},
+		{"<img src='secret'\nalt='load <80% >20%'>alpha", "alpha"},
+		{"<img alt=\"load <80%\n>20%\">alpha", "alpha"},
+		{"<!-- secret < 80%\ninternal note -->alpha", "alpha"},
+		{"<!-- secret\ninternal note -->alpha", "alpha"},
+		{"<![CDATA[secret < 80%\ninternal > note]]>alpha", "alpha"},
+		{"<!DOCTYPE root [\n<!ENTITY note 'secret < 80% >20%'>\n]>alpha", "alpha"},
+		{`<!DOCTYPE root [<!ENTITY note "[ ] ' > <">]>alpha`, "alpha"},
+		{"<!a [\n<b>alpha</b>\nbeta", "<!a [ alpha beta"},
+		{"<!DOCTYPE x [\n<b>alpha</b>\nbeta", "<!DOCTYPE x [ alpha beta"},
+	} {
+		for _, extractor := range []Extractor{&HTMLExtractor{}, &XMLExtractor{}} {
+			got, err := extractor.ExtractText([]byte(tc.raw))
+			if err != nil || strings.Join(strings.Fields(got), " ") != tc.want {
+				t.Errorf("%T(%q) = (%q, %v), want %q", extractor, tc.raw, got, err, tc.want)
+			}
+		}
+		if got := strings.Join(strings.Fields(stripHTMLTags(tc.raw)), " "); got != tc.want {
+			t.Errorf("stripHTMLTags(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+		// Legacy reading cleanup additionally blanks stray angle brackets.
+		want := strings.Join(strings.Fields(strings.NewReplacer("<", " ", ">", " ").Replace(tc.want)), " ")
+		if got := strings.Join(strings.Fields(stripReadingMarkup(tc.raw)), " "); got != want {
+			t.Errorf("stripReadingMarkup(%q) = %q, want %q", tc.raw, got, want)
+		}
+	}
+}
+
 func TestExtractorRegistry_RegistersPDFExtractor(t *testing.T) {
 	registry := NewExtractorRegistry()
 	extractor, ok := registry.GetExtractor("pdf")

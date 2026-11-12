@@ -696,7 +696,9 @@ func TestExcerptLineAnchorsMayRepeatOnSingleLine(t *testing.T) {
 }
 
 func TestStage3MappedCleaning(t *testing.T) {
-	raw := "<style>hidden</style>\n<script>hidden</script>\n> hidden\n-----\n<b>é</b> A1,2B\tend\xff\n"
+	raw := "<!-- hidden <b>\n<![CDATA[ hidden -->\n<![CDATA[<!-- hidden\n]]>\n" +
+		"<!DOCTYPE root [\n<!ENTITY note 'hidden ] < >'>\n]>\n" +
+		"<style>hidden</style>\n<script>hidden</script>\n> hidden\n-----\n<b>é</b> A1,2B\x09end\xff\n"
 	for _, isCode := range []bool{false, true} {
 		mapped := cleanStage3Content(raw, isCode)
 		want := "é A 1, 2 B end\xff"
@@ -757,11 +759,23 @@ func TestStage3RawAnchorForCreatedOCRMatch(t *testing.T) {
 }
 
 func TestStage3LegacyFallbackStrippedAndExhausted(t *testing.T) {
-	raw := "<style>needle</style>\n<script>needle</script>\n> needle\n-----\nneedle\nneedle\n"
 	query := compileQuery([]string{"needle"}, PartialModeOff)
 	spans := lineSpans([]int{0}, []int{0}, []int{0})
-	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{5, 6, 0}) {
-		t.Fatalf("legacy anchors=%v, want [5 6 0]", got)
+	for _, tc := range []struct {
+		raw  string
+		want []int
+	}{
+		{"<style>needle</style>\n<script>needle</script>\n> needle\n-----\nneedle\nneedle\n", []int{5, 6, 0}},
+		{"<img src=\"needle\" alt=\"load <80%\">\nneedle\nneedle", []int{2, 3, 0}},
+		{"<!-- needle < 80%\ninternal note -->needle\nneedle", []int{2, 3, 0}},
+		{"<!-- open\n<b>needle</b>\nneedle", []int{2, 3, 0}},
+		{"<![CDATA[open\n<b>needle</b>\nneedle", []int{2, 3, 0}},
+		{"<!a [\n<b>needle</b>\nneedle", []int{2, 3, 0}},
+		{"<!DOCTYPE x [\n<b>needle</b>\nneedle", []int{2, 3, 0}},
+	} {
+		if got := computeExcerptSpanLinesQuery(tc.raw, spans, query, 200); !slices.Equal(got, tc.want) {
+			t.Errorf("raw=%q: legacy anchors=%v, want %v", tc.raw, got, tc.want)
+		}
 	}
 }
 

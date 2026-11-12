@@ -14,17 +14,128 @@ import (
 // unconstrainedDistance disables the excerpt proximity bound for legacy helpers.
 const unconstrainedDistance = -1
 
+// markupDeclarationSpans returns complete <!letter ...> spans in reverse order.
+// Scan suffixes once, not once per opener: end is the declaration endpoint from
+// here; subset is its endpoint when inside [...]. Zero means unterminated.
+// Quoted continuations resume immediately after the next matching quote, so
+// quotes can contain <, >, brackets and newlines without rescanning any suffix.
+// Each byte takes constant work, including failed subsets/quotes: O(N) time.
+func markupDeclarationSpans(raw string) []matchRange {
+	var spans []matchRange
+	var end, subset int
+	var quotedEnd, quotedSubset [2]int
+	for i := len(raw) - 1; i >= 0; i-- {
+		switch raw[i] {
+		case '"', '\'':
+			kind := 0
+			if raw[i] == '\'' {
+				kind = 1
+			}
+			end, quotedEnd[kind] = quotedEnd[kind], end
+			subset, quotedSubset[kind] = quotedSubset[kind], subset
+		case ']':
+			subset = end
+		case '[':
+			end = subset
+		case '>':
+			end = i + 1
+		case '<':
+			if end != 0 && i+2 < len(raw) && raw[i+1] == '!' &&
+				(raw[i+2] >= 'A' && raw[i+2] <= 'Z' || raw[i+2] >= 'a' && raw[i+2] <= 'z') {
+				spans = append(spans, matchRange{start: i, end: end})
+			}
+			end = 0
+		}
+	}
+	return spans
+}
+
+// markupTagPattern keeps the extractors' replacement surface while sharing the
+// linear declaration/comment/CDATA pass with the offset-aware document cleaner.
+type markupTagPattern struct{ *regexp.Regexp }
+
+func (p markupTagPattern) ReplaceAllString(raw, replacement string) string {
+	m := stripDelimitedMarkup(mappedContent{text: raw}, replacement)
+	return p.Regexp.ReplaceAllString(m.text, replacement)
+}
+
+// stripDelimitedMarkup visits openers in source order, skipping each complete
+// span. A failed closer search disables that delimiter for the remaining tail.
+// Thus successful searches cover disjoint spans, with at most two failed O(N)
+// searches: total O(N), even with arbitrarily many unterminated openers.
+// Declaration endpoints are precomputed once by the same linear-time rule.
+// This pre-pass precedes element matching: a comment opener inside an element's
+// quoted attribute still takes precedence over that element (not an HTML parser).
+func stripDelimitedMarkup(m mappedContent, replacement string) mappedContent {
+	declarations := markupDeclarationSpans(m.text)
+	var text strings.Builder
+	var offsets []int
+	copyRange := func(start, end int) {
+		text.WriteString(m.text[start:end])
+		if m.offsets != nil {
+			offsets = append(offsets, m.offsets[start:end]...)
+		}
+	}
+	var exhausted [2]bool
+	last := 0
+	for i := 0; i < len(m.text); i++ {
+		if m.text[i] != '<' {
+			continue
+		}
+		for len(declarations) > 0 && declarations[len(declarations)-1].start < i {
+			declarations = declarations[:len(declarations)-1]
+		}
+		end := 0
+		if len(declarations) > 0 && declarations[len(declarations)-1].start == i {
+			end = declarations[len(declarations)-1].end
+		} else {
+			kind, opener, closer := 0, "<!--", "-->"
+			if !strings.HasPrefix(m.text[i:], opener) {
+				kind, opener, closer = 1, "<![CDATA[", "]]>"
+				if !strings.HasPrefix(m.text[i:], opener) {
+					continue
+				}
+			}
+			if exhausted[kind] {
+				continue
+			}
+			end = strings.Index(m.text[i+len(opener):], closer)
+			if end < 0 {
+				exhausted[kind] = true
+				continue
+			}
+			end += i + len(opener) + len(closer)
+		}
+		copyRange(last, i)
+		text.WriteString(replacement)
+		if m.offsets != nil {
+			for range len(replacement) {
+				offsets = append(offsets, m.offsets[i])
+			}
+		}
+		last, i = end, end-1
+	}
+	if last == 0 {
+		return m
+	}
+	copyRange(last, len(m.text))
+	return mappedContent{text.String(), offsets}
+}
+
 var (
-	// Known markup -- the extractors' HTML/XML, where a raw < cannot be text.
-	// Tags open with a letter, /, ! or ? and may span lines.
-	htmlTagRegex = regexp.MustCompile(`<[A-Za-z/!?][^<>]*>`)
+	// Known markup -- the extractors' HTML/XML. Tags open with a letter, / or ?
+	// and may span lines. Quotes start attribute values only after =, not in
+	// O'Brien. Prefer balanced values; malformed markup falls back to the first
+	// > without consuming the next tag. Quotes cannot cross a closing element.
+	htmlTagRegex = markupTagPattern{regexp.MustCompile(`<[A-Za-z/?](?:=[ 	]*"(?:[^"<]|<[^/"<])*<?"|=[ 	]*'(?:[^'<]|<[^/'<])*<?'|[^<>])*>`)}
 
 	// Text that may be prose -- every non-code document. Element and processing-
-	// instruction tags must close on their own line, so <80%, <--, heredocs
-	// (<<EOF) and multi-line <placeholder ...> prose cannot erase later lines.
-	// Only <!...> may span lines; every match is also an htmlTagRegex match.
+	// instruction tags, including quoted values, must close on their own line,
+	// so <80%, <--, heredocs (<<EOF), multi-line <placeholder ...> prose and
+	// unbalanced quotes cannot erase later lines. Only <!...> may span lines.
+	// Unlike known markup, prose does not use a malformed-attribute fallback.
 	// cleanSearchContent and documentCorrespondence share this rule.
-	textTagRegex = regexp.MustCompile(`<![^<>]*>|<[A-Za-z/?][^<>\n]*>`)
+	textTagRegex = regexp.MustCompile(`<[A-Za-z/?](?:"[^"\r\n]*"|'[^'\r\n]*'|[^<>"'\r\n])*>`)
 
 	// HTML entities
 	htmlEntityRegex = regexp.MustCompile(`&[a-zA-Z0-9#]*;`)
@@ -106,6 +217,7 @@ func cleanStage3Content(raw string, isCode bool) mappedContent {
 // A nil offset slice avoids building correspondence that analysis never uses.
 func cleanSearchContent(m mappedContent, isCode bool) mappedContent {
 	if !isCode {
+		m = stripDelimitedMarkup(m, " ")
 		m = m.replace(cssRegex, " ").replace(jsRegex, " ")
 		m = m.replace(textTagRegex, " ").replace(htmlEntityRegex, " ")
 		m = m.replace(junkSymbolsRegex, "").replace(emailQuotingRegex, "")
