@@ -397,8 +397,14 @@ restricts to just this family.
 | RTF | regex/control-word stripping |
 | MSG | raw content fallback |
 
-> PDF note: strict guardrails apply -- concurrency=2, 250ms per-PDF, max 200 pages,
-> max 128 KiB/page, max 100 PDFs per search.
+> PDF note: extractions share `--heavy-concurrency` slots -- auto: half of
+> `--workers`, at most 1 per 4 GiB of available RAM, clamped to 1..8.
+> Each extraction has a `--file-timeout-binary` deadline (default 1000 ms, max 60000 ms).
+> Extracted text is capped at 8 MiB per PDF, cumulative across pages. A PDF over
+> the cap is skipped, not partially searched; its unextracted pages are reported
+> as `Truncated`. Parser panics on malformed PDFs are recovered -- unreadable
+> pages yield no text, and unopenable files are skipped. There is no page-count
+> or per-search PDF limit.
 
 ## How it works
 
