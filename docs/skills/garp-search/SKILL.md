@@ -28,8 +28,8 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 ## Flags that matter
 
 - `--startdir <dir>`: search roots (default: cwd). Use one comma-separated value for a multi-repository search; specify the flag once. An existing directory name that contains a comma stays intact.
-- `--pathscope <patterns>`: comma-separated path patterns in one flag occurrence; prefix with `!` to exclude. Anchored prefixes such as `src/` prune unrelated directories during the walk. Uses the path pattern rules below and intersects with positive `-g` / `--iglob` globs.
-- `-g <pattern>` is case-sensitive and `--iglob <pattern>` is case-insensitive; both are repeatable, positive globs form one union, and commas are literal. Prefix a pattern with `!` to exclude it. Bare `name` matches basenames at any depth. `name/`, `./name`, and patterns that contain `/` are root-anchored. `*` and `?` stay within one segment; `**` crosses segments.
+- `--pathscope <patterns>`: comma-separated path patterns in one flag occurrence; a `!pattern` entry excludes matching paths. Anchored prefixes such as `src/` prune unrelated directories during the walk. Uses the path pattern rules below and intersects with positive `-g` / `--iglob` globs.
+- `-g <pattern>` is case-sensitive and `--iglob <pattern>` is case-insensitive; both are repeatable, positive globs form one union, and commas are literal. A `!pattern` glob (e.g. `!archive/**`) excludes matching paths. Bare `name` matches basenames at any depth. `name/`, `./name`, and patterns that contain `/` are root-anchored. `*` and `?` stay within one segment; `**` crosses segments.
 - `--code`: include source files, including Dockerfile/Containerfile names. `-t <ext>` restricts file types. Repeat the flag or use comma-separated values. A type restriction overrides `--code`.
 - `.gitignore`, `.ignore`, and `.git/info/exclude` are respected by default. Use `--no-ignore` to search ignored files; other search filters still apply.
 - `--max-filesize <size>`: skip files above the size cap; text/code files default to `5M` when omitted. Requires a positive size, up to `100M`; `0` is invalid.
