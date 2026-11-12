@@ -10,7 +10,7 @@ description: Use when searching a codebase or docs for terms that must appear ne
 Invariants:
 - **Always pass `--json`** (preferred), **`-l`** (when only matching file paths are needed), **or `--plain`** in agent sessions. Without one of these, garp launches the interactive TUI, which blocks a PTY and errors out without one.
 - Errors go to stderr: check the exit code before parsing stdout, and zero-check the top-level `matches` integer before iterating `results`.
-- Tuning flags (`--workers`, `--heavy-concurrency`, `--file-timeout-binary`) have safe defaults; leave them.
+- Tuning flags (`--workers`, `--heavy-concurrency`, `--file-timeout-binary`) have safe defaults; leave them. Exception: if top-level `timed_out` is above 0, rerun with a higher `--file-timeout-binary` (max 60000) to search the skipped binary files.
 
 ## When to use garp vs grep/ripgrep
 
@@ -64,7 +64,7 @@ slash is root-relative.
 
 One-shot find -> pinpoint -> targeted read: each result carries the file, a ranked excerpt, and the line of the earliest matched term.
 
-- Top-level `matches` counts all matching files; `returned` counts files in `results`. `truncated: true` means only the top `N` ranked files were returned under `--max-results N`; use `--max-results 0` for all matches.
+- Top-level `matches` counts all matching files; `returned` counts files in `results`. `truncated: true` means only the top `N` ranked files were returned under `--max-results N`; use `--max-results 0` for all matches. `timed_out` counts binary files skipped because extraction exceeded `--file-timeout-binary`; they are absent from `matches`, and a one-line `Warning:` goes to stderr.
 - Sort order: score, matched-term count, path-term count, boundary quality, tighter span, top-quality chunk count, ranking-root-relative path, supplied root order, then canonical path. `matched_terms` lists the terms that actually hit.
 - Each excerpt: `text` (context-padded, newlines collapsed) plus 1-based `start_line` = line of the earliest matched term in that chunk, and per-chunk `score`/`term_count`. Present for text/code; omitted for extracted formats (PDF, DOCX, email).
 - When matched terms are further apart than the excerpt display budget (`span > budget`), multipart excerpts join per-term context windows with `" ... "` (space, three ASCII dots, space). Windows are in source order and overlapping windows are merged; the joiner marks omitted text, not a contiguous source passage.

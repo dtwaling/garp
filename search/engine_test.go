@@ -195,6 +195,9 @@ func TestTimedOutExtractionsStayBounded(t *testing.T) {
 			if gate.calls.Load() != bound || gate.active.Load() != bound || len(cm.sem) != bound {
 				t.Fatalf("workers exceeded bound: calls=%d active=%d slots=%d", gate.calls.Load(), gate.active.Load(), len(cm.sem))
 			}
+			if got := atomic.LoadInt64(&engine.timedOutFiles); got != bound+4 {
+				t.Fatalf("timed-out count = %d, want %d", got, bound+4)
+			}
 			var files []*os.File
 			if readerAt {
 				for i := 0; i < bound; i++ {
@@ -841,6 +844,36 @@ func TestExecuteDetailedMaxResults(t *testing.T) {
 	}
 	if outcome.Matches != 4 || outcome.Returned != 2 || !outcome.Truncated || len(outcome.Results) != 2 {
 		t.Fatalf("outcome = %+v, want 4 matches, 2 returned, truncated", outcome)
+	}
+}
+
+func TestExecuteDetailedReportsTimedOutBinaryFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "slow.pdf"), []byte("alpha"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gate := &timeoutGatedExtractor{entered: make(chan struct{}, 8), release: make(chan struct{})}
+	var release sync.Once
+	defer release.Do(func() { close(gate.release) })
+	engine := NewSearchEngine([]string{"alpha"}, nil, nil, false, 1, 100)
+	engine.StartDir, engine.Silent = root, true
+	engine.Registry.extractors["pdf"] = gate
+	outcome, err := engine.ExecuteDetailed()
+	if err != nil || outcome.Matches != 0 || outcome.TimedOut != 1 {
+		t.Fatalf("binary-only outcome = %+v, error = %v; want 0 matches, 1 timed out", outcome, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "fast.txt"), []byte("alpha"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err = engine.ExecuteDetailed()
+	if err != nil || outcome.Matches != 1 || outcome.TimedOut != 1 {
+		t.Fatalf("mixed outcome = %+v, error = %v; want 1 match, 1 timed out", outcome, err)
+	}
+	release.Do(func() { close(gate.release) })
+	waitExtractionIdle(t, engine.extractionManager())
+	outcome, err = engine.ExecuteDetailed()
+	if err != nil || outcome.Matches != 2 || outcome.TimedOut != 0 {
+		t.Fatalf("released outcome = %+v, error = %v; want 2 matches, 0 timed out", outcome, err)
 	}
 }
 

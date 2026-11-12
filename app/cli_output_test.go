@@ -318,6 +318,7 @@ func assertJSONEnvelopeKeys(t *testing.T, out []byte, returned int, truncated bo
 		"matches":   "",
 		"returned":  fmt.Sprint(returned),
 		"truncated": fmt.Sprint(truncated),
+		"timed_out": "0",
 		"results":   "",
 	}
 	for key, value := range want {
@@ -370,11 +371,12 @@ func TestOutputMetadataUsesAdjustedStage3Matches(t *testing.T) {
 		Matches:   3,
 		Returned:  2,
 		Truncated: true,
+		TimedOut:  2,
 	}
 
 	jsonResult := buildJSONOutput(args, outcome)
-	if jsonResult.Matches != 3 || jsonResult.Returned != 2 || !jsonResult.Truncated {
-		t.Fatalf("JSON metadata = %+v, want adjusted 3 matches, 2 returned, truncated", jsonResult)
+	if jsonResult.Matches != 3 || jsonResult.Returned != 2 || !jsonResult.Truncated || jsonResult.TimedOut != 2 {
+		t.Fatalf("JSON metadata = %+v, want adjusted 3 matches, 2 returned, truncated, 2 timed out", jsonResult)
 	}
 
 	var plain bytes.Buffer
@@ -385,6 +387,19 @@ func TestOutputMetadataUsesAdjustedStage3Matches(t *testing.T) {
 	const footer = "# truncated: showing 2 of 3 matching files (use --max-results 0 for all)\n"
 	if !strings.HasSuffix(plain.String(), footer) {
 		t.Errorf("plain output does not end with adjusted footer %q:\n%s", footer, plain.String())
+	}
+}
+
+func TestWriteTimeoutNotice(t *testing.T) {
+	var buf bytes.Buffer
+	writeTimeoutNotice(&buf, 0, 1000)
+	if buf.Len() != 0 {
+		t.Fatalf("zero timeouts wrote %q", buf.String())
+	}
+	writeTimeoutNotice(&buf, 2, 1000)
+	const want = "Warning: 2 binary file(s) exceeded --file-timeout-binary 1000 ms and were skipped; raise it (max 60000) to search them\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("timeout notice = %q, want %q", got, want)
 	}
 }
 
