@@ -580,9 +580,9 @@ func TestPDFReaderAtPageTextBudgets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			data := pdfWithPageStreams(tc.streams...)
 			engine := &SearchEngine{}
-			_, _, before := engine.GetPDFStatsDetailed()
+			_, before := engine.GetPDFStatsDetailed()
 			got, err := (&PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), tc.limit)
-			_, _, after := engine.GetPDFStatsDetailed()
+			_, after := engine.GetPDFStatsDetailed()
 			var wantTruncated int64
 			if tc.want == "" {
 				// Each completed nonempty fixture page consumes five bytes.
@@ -627,9 +627,9 @@ func TestPDFReaderAtPlainTextFallbackBudgets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			data := pdfWithPageStreams(tc.streams...)
 			engine := &SearchEngine{}
-			_, _, before := engine.GetPDFStatsDetailed()
+			_, before := engine.GetPDFStatsDetailed()
 			got, err := (&PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), tc.limit)
-			_, _, after := engine.GetPDFStatsDetailed()
+			_, after := engine.GetPDFStatsDetailed()
 			var wantTruncated int64
 			if tc.want == "" {
 				// Each completed nonempty fixture page consumes five bytes.

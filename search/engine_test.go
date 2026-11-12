@@ -256,6 +256,9 @@ func TestExtractionBoundPersistsAcrossStages(t *testing.T) {
 	if gate.calls.Load() != 1 || gate.active.Load() != 1 {
 		t.Fatalf("stage reset admission: calls=%d active=%d", gate.calls.Load(), gate.active.Load())
 	}
+	if got := atomic.LoadInt64(&engine.pdfProcessed); got != 0 {
+		t.Fatalf("PDF count = %d, want 0 for timed-out extractions", got)
+	}
 	release.Do(func() { close(gate.release) })
 	waitExtractionIdle(t, engine.extractionManager())
 	if gate.active.Load() != 0 {
@@ -346,6 +349,9 @@ func TestAdmissionWaitDoesNotConsumeExtractionDeadline(t *testing.T) {
 	}
 	if len(matches) != len(candidates) {
 		t.Fatalf("matched %d candidates, want %d (queued candidates timed out under multi-worker contention)", len(matches), len(candidates))
+	}
+	if got := atomic.LoadInt64(&engine.pdfProcessed); got != int64(len(candidates)) {
+		t.Fatalf("PDF count = %d, want %d", got, len(candidates))
 	}
 }
 

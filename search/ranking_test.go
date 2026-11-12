@@ -90,6 +90,9 @@ func TestEngineBinaryExtractorDispatch(t *testing.T) {
 						t.Fatal(err)
 					}
 					checkCalls(1)
+					if got := atomic.LoadInt64(&engine.pdfProcessed); got != 1 {
+						t.Fatalf("Stage 2 PDF count = %d, want 1", got)
+					}
 					if excluded {
 						if len(matches) != 0 {
 							t.Fatal("excluded binary matched")

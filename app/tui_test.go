@@ -26,12 +26,15 @@ func TestTUIFormatting(t *testing.T) {
 		height:          60,
 		searchWords:     []string{"query", "synchronization", "mutex"},
 		totalFiles:      1,
+		pdfScanned:      3,
+		pdfTruncated:    2,
 		confirmSelected: "yes",
 	}
 
 	view := m.View()
 	for _, want := range []string{
 		"Score: 10 (2/3 terms)",
+		"PDFs Scanned 3 • Truncated 2",
 		"Result [ 1 / 1 ] (Score 10, 2/3 terms) -- Continue?",
 	} {
 		if !strings.Contains(view, want) {
