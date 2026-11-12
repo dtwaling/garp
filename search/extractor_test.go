@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/ledongthuc/pdf"
 )
@@ -479,6 +480,12 @@ func ansiMSG() []byte {
 		[2][]byte{[]byte("subject" + strings.Repeat(" ", 4089)), []byte("body" + strings.Repeat(" ", 4092))})
 }
 
+// cp1252MSG holds space-padded Windows-1252 ANSI subject and body streams.
+func cp1252MSG() []byte {
+	return cfbWithRootStreams([2]string{"__substg1.0_0037001E", "__substg1.0_1000001E"},
+		[2][]byte{[]byte("Men\xfa caf\xe9" + strings.Repeat(" ", 4087)), []byte("Le caf\xe9 cr\xe8me ordered" + strings.Repeat(" ", 4075))})
+}
+
 func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 	hiddenHTML := utf16LE("<html><style>cssneedle</style><script>jsneedle()</script><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</body></html>")
 	for _, tc := range []struct {
@@ -488,6 +495,13 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 		notWant string
 	}{
 		{"ANSI 001E", ansiMSG(), "subject body", ""},
+		{"ANSI 001E CP1252 decodes to UTF-8", cp1252MSG(), "Menú café Le café crème ordered", ""},
+		{"ANSI 001E UTF-8 is not decoded twice", cfbWithRootStreams(
+			[2]string{"__substg1.0_0037001E", "__substg1.0_1000001E"},
+			[2][]byte{[]byte("Le café crème" + strings.Repeat(" ", 4081)), []byte("body" + strings.Repeat(" ", 4092))}), "Le café crème", "cafÃ©"},
+		{"binary CP1252 HTML decodes 8-bit text", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("<html><body><p>Le caf\xe9 cr\xe8me au lait</p></body></html>"), nil}), "Le café crème au lait", ""},
 		{"non-CFB 8-bit fallback", []byte("arithmetic exception, numeric overflow"), "arithmetic exception, numeric overflow", ""},
 		{"binary UTF-16LE HTML drops hidden blocks", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
@@ -533,6 +547,9 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 			got, err := (&MSGExtractor{}).ExtractText(tc.data)
 			if err != nil || !strings.Contains(got, tc.want) {
 				t.Errorf("extraction = (%q, %v), want containing %q", got, err, tc.want)
+			}
+			if !utf8.ValidString(got) {
+				t.Errorf("extraction = %q, want valid UTF-8", got)
 			}
 			for _, unwanted := range strings.Fields(tc.notWant) {
 				if strings.Contains(got, unwanted) {

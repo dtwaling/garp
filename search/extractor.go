@@ -19,6 +19,7 @@ import (
 	"github.com/jhillyerd/enmime"
 	"github.com/ledongthuc/pdf"
 	"github.com/richardlehane/mscfb"
+	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 )
@@ -576,12 +577,12 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				// Strip each reading's tags before combining, while markup is intact.
 				// Leave entities encoded for the final HTML pass to decode once.
 				if !utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0 {
-					text := stripReadingMarkup(string(b)) + "\n" +
+					text := stripReadingMarkup(decodeANSIText(b)) + "\n" +
 						stripReadingMarkup(utf16LEReadingWithMarkup(b, true))
 					return strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
 				}
 			}
-			s := whitespaceRegex.ReplaceAllString(string(b), " ")
+			s := whitespaceRegex.ReplaceAllString(decodeANSIText(b), " ")
 			return strings.TrimSpace(s)
 		}
 
@@ -618,6 +619,18 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		return "", readErr
 	}
 	return decodeLegacyStreamText(data, false), nil
+}
+
+// decodeANSIText keeps valid UTF-8 (including ASCII) and decodes other 8-bit
+// MAPI ANSI text as Windows-1252, the default Outlook code page.
+func decodeANSIText(b []byte) string {
+	if utf8.Valid(b) {
+		return string(b)
+	}
+	if s, err := charmap.Windows1252.NewDecoder().Bytes(b); err == nil {
+		return string(s)
+	}
+	return string(b)
 }
 
 // stripReadingMarkup removes style/script contents, tags and stray brackets before readings are joined.

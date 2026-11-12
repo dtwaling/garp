@@ -74,6 +74,7 @@ type ExecutionResult struct {
 	Matches   int
 	Returned  int
 	Truncated bool
+	TimedOut  int
 }
 
 // candidateMatch retains ranked metadata between filtering and result building.
@@ -269,7 +270,8 @@ type SearchEngine struct {
 	PositiveGlobCodeEligibility bool
 
 	// PDF metrics (atomic)
-	pdfProcessed int64 // PDFs whose Stage 2 extraction succeeded
+	pdfProcessed  int64 // PDFs whose Stage 2 extraction succeeded
+	timedOutFiles int64 // binary extractions that hit --file-timeout-binary this search
 
 	// Metrics (atomic)
 	emlPrefilterCount    int64
@@ -582,6 +584,7 @@ func (se *SearchEngine) extractBinaryFile(cm *ConcurrencyManager, filePath, ext 
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			timedOut = true
+			atomic.AddInt64(&se.timedOutFiles, 1)
 		} else {
 			extractErr = err
 		}
@@ -1306,6 +1309,7 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 // result metadata adjusted for Stage 3 failures that were actually observed.
 func (se *SearchEngine) ExecuteDetailed() (ExecutionResult, error) {
 	startTime := time.Now()
+	atomic.StoreInt64(&se.timedOutFiles, 0)
 	query := compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions())
 	if len(query.terms) == 0 {
 		return ExecutionResult{}, nil
@@ -1345,7 +1349,7 @@ func (se *SearchEngine) ExecuteDetailed() (ExecutionResult, error) {
 		if !se.Silent {
 			fmt.Println("No files found containing all search terms.")
 		}
-		return ExecutionResult{}, nil
+		return ExecutionResult{TimedOut: int(atomic.LoadInt64(&se.timedOutFiles))}, nil
 	}
 
 	// Step 4: Extract and build results
@@ -1388,6 +1392,7 @@ func (se *SearchEngine) ExecuteDetailed() (ExecutionResult, error) {
 		}
 	}
 
+	outcome.TimedOut = int(atomic.LoadInt64(&se.timedOutFiles))
 	return outcome, nil
 }
 

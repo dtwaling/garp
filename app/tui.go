@@ -105,6 +105,7 @@ type model struct {
 	fileTimeoutBinary int
 	pdfScanned        int64
 	pdfTruncated      int64
+	timedOut          int
 	filterWorkers     int
 	maxResults        int
 	maxExcerpts       int
@@ -263,6 +264,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.searchTime = msg.searchTime
 		m.pdfScanned = msg.pdfScanned
 		m.pdfTruncated = msg.pdfTruncated
+		m.timedOut = msg.timedOut
 		m.totalPages = len(m.results)
 		if m.totalPages == 0 {
 			m.totalPages = 1
@@ -407,6 +409,9 @@ func (m model) View() string {
 		minutes = m.searchTime.Minutes()
 	}
 	elapsed := fmt.Sprintf("⏱️ Searched:  %.2f minutes • Matched: %d of %d files • PDFs Scanned %d • Truncated %d", minutes, len(m.results), m.totalFiles, m.pdfScanned, m.pdfTruncated)
+	if m.timedOut > 0 {
+		elapsed += fmt.Sprintf(" • Timed out %d", m.timedOut)
+	}
 	elapsedStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#8ab4f8"))
 	headerLines = append(headerLines, elapsedStyled.Render(elapsed))
 
@@ -798,13 +803,14 @@ func (m model) runSearch() tea.Cmd {
 		func() tea.Msg { return progressMsg{Stage: "Discovery", Count: 0, Total: total, Path: ""} },
 		func() tea.Msg {
 
-			results, _ := se.Execute()
+			outcome, _ := se.ExecuteDetailed()
 			ps, tr := se.GetPDFStatsDetailed()
 			return searchResultMsg{
-				results:      results,
+				results:      outcome.Results,
 				searchTime:   time.Since(startWall),
 				pdfScanned:   ps,
 				pdfTruncated: tr,
+				timedOut:     outcome.TimedOut,
 			}
 		},
 	)
@@ -987,6 +993,7 @@ type searchResultMsg struct {
 	searchTime   time.Duration
 	pdfScanned   int64
 	pdfTruncated int64
+	timedOut     int
 }
 
 type memUsageMsg struct {

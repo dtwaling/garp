@@ -640,7 +640,7 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("                          Defaults: --json 50, --plain 50, --pathonly 0, TUI 0."))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  --heavy-concurrency N   Concurrent heavy extractions (auto if omitted, max %d)", search.MaxHeavyConcurrency)))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  --workers N             Stage 2 text filter workers (default 4); max %d", search.MaxWorkers)))
-	fmt.Println(infoStyle.Render(fmt.Sprintf("  --file-timeout-binary N Timeout in ms for binary extraction (default 1000, max %d)", search.MaxFileTimeoutBinary)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  --file-timeout-binary N Timeout in ms per binary extraction; timed-out files are skipped and reported (default 1000, max %d)", search.MaxFileTimeoutBinary)))
 	fmt.Println(infoStyle.Render("  --smart-forms           Enable smart word forms (s, es, ed, ing, al, tion/ation)"))
 	fmt.Println(infoStyle.Render("  -t, --type, --only TYPE Restrict file types; repeat or use comma-separated values"))
 	fmt.Println(infoStyle.Render("  --startdir PATH         Comma-separated search roots; specify this flag once"))
@@ -763,6 +763,7 @@ type jsonOutput struct {
 	Matches   int          `json:"matches"`
 	Returned  int          `json:"returned"`
 	Truncated bool         `json:"truncated"`
+	TimedOut  int          `json:"timed_out"`
 	Results   []jsonResult `json:"results"`
 }
 
@@ -909,6 +910,7 @@ func runJSON(args *Arguments) int {
 		fmt.Fprintln(os.Stderr, "Error encoding JSON: "+terminaltext.Sanitize(err.Error()))
 		return 1
 	}
+	writeTimeoutNotice(os.Stderr, outcome.TimedOut, args.FileTimeoutBinary)
 	return 0
 }
 
@@ -930,6 +932,7 @@ func buildJSONOutput(args *Arguments, outcome search.ExecutionResult) jsonOutput
 		Matches:   outcome.Matches,
 		Returned:  outcome.Returned,
 		Truncated: outcome.Truncated,
+		TimedOut:  outcome.TimedOut,
 		Results:   make([]jsonResult, 0, outcome.Returned),
 	}
 	if len(args.OnlyTypes) >= 2 {
@@ -996,6 +999,7 @@ func runPlain(args *Arguments) int {
 		return 1
 	}
 	writePlainOutput(os.Stdout, args, outcome)
+	writeTimeoutNotice(os.Stderr, outcome.TimedOut, args.FileTimeoutBinary)
 	return 0
 }
 
@@ -1005,6 +1009,14 @@ func runPlain(args *Arguments) int {
 func escapeOutputLine(s string) string {
 	quoted := strconv.Quote(s)
 	return quoted[1 : len(quoted)-1]
+}
+
+// writeTimeoutNotice reports skipped binary files without changing stdout.
+func writeTimeoutNotice(w io.Writer, timedOut, timeoutMS int) {
+	if timedOut <= 0 {
+		return
+	}
+	fmt.Fprintf(w, "Warning: %d binary file(s) exceeded --file-timeout-binary %d ms and were skipped; raise it (max %d) to search them\n", timedOut, timeoutMS, search.MaxFileTimeoutBinary)
 }
 
 func writePlainOutput(w io.Writer, args *Arguments, outcome search.ExecutionResult) {
@@ -1054,11 +1066,12 @@ func runPathOnly(args *Arguments) int {
 	se := newSilentSearchEngine(args)
 	se.PathOnly = true
 
-	results, err := se.Execute()
+	outcome, err := se.ExecuteDetailed()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error: "+terminaltext.Sanitize(err.Error()))
 		return 1
 	}
+	results := outcome.Results
 
 	seen := make(map[string]struct{}, len(results))
 	for _, r := range results {
@@ -1071,6 +1084,7 @@ func runPathOnly(args *Arguments) int {
 		seen[r.FilePath] = struct{}{}
 		fmt.Println(escapeOutputLine(r.FilePath))
 	}
+	writeTimeoutNotice(os.Stderr, outcome.TimedOut, args.FileTimeoutBinary)
 	return 0
 }
 

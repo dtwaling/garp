@@ -163,7 +163,7 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `--max-results N` | JSON/plain: 50; path-only/TUI: 0 | Maximum matching files to return. An explicit `0` means unlimited |
 | `--workers N` | 4 | Stage 2 filter worker count |
 | `--heavy-concurrency N` | auto | Concurrent heavy (binary) extractions |
-| `--file-timeout-binary N` | 1000 | Timeout in ms for binary extraction |
+| `--file-timeout-binary N` | 1000 | Timeout in ms per binary extraction; timed-out files are skipped and counted in `timed_out` |
 | `--help`, `-h` | | Show help |
 | `--version`, `-v` | | Show version |
 
@@ -247,6 +247,7 @@ as positive search terms.
   "matches": 2,
   "returned": 2,
   "truncated": false,
+  "timed_out": 0,
   "results": [
     {
       "file": "/path/to/audio2midi/dsp.py",
@@ -332,12 +333,20 @@ The footer is omitted when all matching files are returned.
 default to 50. Path-only output and the TUI default to unlimited. An explicit
 `--max-results 0` selects unlimited output in every mode.
 
-JSON always includes `matches`, `returned`, and `truncated`. `matches` is the
-deduplicated matching-file count, adjusted only for file-open, extraction, or
-zero-excerpt failures observed while garp fills the result limit. `returned`
-is the number of entries in `results`. `truncated` is true when `returned` is
-less than the adjusted `matches`. Errors go to stderr; check the exit code
-before parsing stdout as JSON.
+JSON always includes `matches`, `returned`, `truncated`, and `timed_out`.
+`matches` is the deduplicated matching-file count, adjusted only for file-open,
+extraction, or zero-excerpt failures observed while garp fills the result limit.
+`returned` is the number of entries in `results`. `truncated` is true when
+`returned` is less than the adjusted `matches`. Errors go to stderr; check the
+exit code before parsing stdout as JSON.
+
+`timed_out` counts binary files whose extraction exceeded `--file-timeout-binary`,
+including the wait for a heavy-extraction slot. Those files are not in `matches`:
+a Stage 2 timeout drops a file before garp knows whether it matches, while a
+Stage 3 timeout drops a file that had already matched. When `timed_out` is above
+0, `--json`, `--plain`, and `-l` print one `Warning:` line to stderr after stdout.
+stdout is unchanged and the exit code stays 0. The TUI header shows `Timed out N`.
+Rerun with a higher `--file-timeout-binary` (max 60000) to search the skipped files.
 
 ### Bounded-overlap excerpts
 
@@ -400,7 +409,8 @@ restricts to just this family.
 
 > PDF note: extractions share `--heavy-concurrency` slots -- auto: half of
 > `--workers`, at most 1 per 4 GiB of available RAM, clamped to 1..8.
-> Each extraction has a `--file-timeout-binary` deadline (default 1000 ms, max 60000 ms).
+> Each extraction has a `--file-timeout-binary` deadline (default 1000 ms, max 60000 ms);
+> a file that exceeds it is skipped and counted in `timed_out`.
 > Extracted text is capped at 8 MiB per PDF, cumulative across pages. A PDF over
 > the cap is skipped, not partially searched; its unextracted pages are reported
 > as `Truncated`. Parser panics on malformed PDFs are recovered -- unreadable

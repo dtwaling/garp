@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestSearchEngineResourceBounds(t *testing.T) {
@@ -194,6 +195,9 @@ func TestTimedOutExtractionsStayBounded(t *testing.T) {
 			}
 			if gate.calls.Load() != bound || gate.active.Load() != bound || len(cm.sem) != bound {
 				t.Fatalf("workers exceeded bound: calls=%d active=%d slots=%d", gate.calls.Load(), gate.active.Load(), len(cm.sem))
+			}
+			if got := atomic.LoadInt64(&engine.timedOutFiles); got != bound+4 {
+				t.Fatalf("timed-out count = %d, want %d", got, bound+4)
 			}
 			var files []*os.File
 			if readerAt {
@@ -841,6 +845,36 @@ func TestExecuteDetailedMaxResults(t *testing.T) {
 	}
 	if outcome.Matches != 4 || outcome.Returned != 2 || !outcome.Truncated || len(outcome.Results) != 2 {
 		t.Fatalf("outcome = %+v, want 4 matches, 2 returned, truncated", outcome)
+	}
+}
+
+func TestExecuteDetailedReportsTimedOutBinaryFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "slow.pdf"), []byte("alpha"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gate := &timeoutGatedExtractor{entered: make(chan struct{}, 8), release: make(chan struct{})}
+	var release sync.Once
+	defer release.Do(func() { close(gate.release) })
+	engine := NewSearchEngine([]string{"alpha"}, nil, nil, false, 1, 100)
+	engine.StartDir, engine.Silent = root, true
+	engine.Registry.extractors["pdf"] = gate
+	outcome, err := engine.ExecuteDetailed()
+	if err != nil || outcome.Matches != 0 || outcome.TimedOut != 1 {
+		t.Fatalf("binary-only outcome = %+v, error = %v; want 0 matches, 1 timed out", outcome, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "fast.txt"), []byte("alpha"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err = engine.ExecuteDetailed()
+	if err != nil || outcome.Matches != 1 || outcome.TimedOut != 1 {
+		t.Fatalf("mixed outcome = %+v, error = %v; want 1 match, 1 timed out", outcome, err)
+	}
+	release.Do(func() { close(gate.release) })
+	waitExtractionIdle(t, engine.extractionManager())
+	outcome, err = engine.ExecuteDetailed()
+	if err != nil || outcome.Matches != 2 || outcome.TimedOut != 0 {
+		t.Fatalf("released outcome = %+v, error = %v; want 2 matches, 0 timed out", outcome, err)
 	}
 }
 
@@ -2048,6 +2082,40 @@ func TestStage2MSGSkipsPrefilter(t *testing.T) {
 	}
 }
 
+func TestExecuteDetailedSearchesCP1252MSGText(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "legacy.msg"), cp1252MSG(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name     string
+		words    []string
+		excludes []string
+		want     int
+	}{
+		{"accented term", []string{"café"}, nil, 1},
+		{"uppercase accented terms", []string{"CAFÉ", "crème"}, nil, 1},
+		{"ASCII term", []string{"ordered"}, nil, 1},
+		{"accented exclusion", []string{"ordered"}, []string{"café"}, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := NewSearchEngine(tt.words, tt.excludes, nil, false, 1, 1000)
+			engine.StartDir, engine.Silent = dir, true
+			outcome, err := engine.ExecuteDetailed()
+			if err != nil || outcome.Matches != tt.want {
+				t.Fatalf("matches=%d err=%v, want %d", outcome.Matches, err, tt.want)
+			}
+			for _, result := range outcome.Results {
+				for _, excerpt := range result.RawExcerpts {
+					if !utf8.ValidString(excerpt) || !strings.Contains(strings.ToLower(excerpt), "café") {
+						t.Errorf("excerpt = %q, want valid UTF-8 containing café", excerpt)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestResultRanking(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -2516,6 +2584,10 @@ func TestCaseInsensitiveExclusionsPreserveLegacyWordBoundaries(t *testing.T) {
 		{text: "(test), passed", exclude: "test"},
 		{text: "bob@spam.com", exclude: "@spam.com"},
 		{text: "message from bob@spam.com!", exclude: "@SPAM.COM"},
+		{text: "Le café crème", exclude: "café"},
+		{text: "café.", exclude: "café"},
+		{text: "Le CAFÉ crème", exclude: "café"},
+		{text: "Un élan vital", exclude: "élan"},
 	} {
 		if !CheckTextContainsExcludeWords(tt.text, []string{tt.exclude}) {
 			t.Errorf("legacy exclusion %q did not match %q", tt.exclude, tt.text)
@@ -2524,6 +2596,11 @@ func TestCaseInsensitiveExclusionsPreserveLegacyWordBoundaries(t *testing.T) {
 	for _, text := range []string{"contest", "testament"} {
 		if CheckTextContainsExcludeWords(text, []string{"test"}) {
 			t.Errorf("whole-word exclusion matched %q", text)
+		}
+	}
+	for _, text := range []string{"cafés", "xcafé", "Le cafés crème"} {
+		if CheckTextContainsExcludeWords(text, []string{"café"}) {
+			t.Errorf("non-ASCII-edge exclusion matched inside %q", text)
 		}
 	}
 }

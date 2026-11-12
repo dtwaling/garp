@@ -252,7 +252,16 @@ func containsLiteralExcludeWord(text, word string, caseSensitive bool) bool {
 	if !caseSensitive {
 		literal = `(?i:` + literal + `)`
 	}
-	pattern := `\b(?:` + literal + `)\b`
+	// RE2 \b is ASCII-only; non-ASCII edges follow termMatcher.boundaryOK:
+	// the neighboring byte must not be an ASCII word byte.
+	leading, trailing := `\b`, `\b`
+	if word[0] >= 0x80 {
+		leading = `(?:^|[^0-9A-Za-z_])`
+	}
+	if word[len(word)-1] >= 0x80 {
+		trailing = `(?:$|[^0-9A-Za-z_])`
+	}
+	pattern := leading + `(?:` + literal + `)` + trailing
 	return getWordRegex(pattern).MatchString(text)
 }
 

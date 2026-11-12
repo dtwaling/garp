@@ -28,13 +28,14 @@ func TestTUIFormatting(t *testing.T) {
 		totalFiles:      1,
 		pdfScanned:      3,
 		pdfTruncated:    2,
+		timedOut:        1,
 		confirmSelected: "yes",
 	}
 
 	view := m.View()
 	for _, want := range []string{
 		"Score: 10 (2/3 terms)",
-		"PDFs Scanned 3 • Truncated 2",
+		"PDFs Scanned 3 • Truncated 2 • Timed out 1",
 		"Result [ 1 / 1 ] (Score 10, 2/3 terms) -- Continue?",
 	} {
 		if !strings.Contains(view, want) {
@@ -43,6 +44,10 @@ func TestTUIFormatting(t *testing.T) {
 	}
 	if strings.Contains(view, "phantom ") {
 		t.Errorf("TUI augmented excerpt with unmatched query term:\n%s", view)
+	}
+	m.timedOut = 0
+	if strings.Contains(m.View(), "Timed out") {
+		t.Error("TUI shows timeout suffix with zero timeouts")
 	}
 }
 
