@@ -1514,14 +1514,10 @@ func checkFileContainsAllWordsQuery(filePath string, query compiledQuery, distan
 		return false, nil
 	}
 
-	content, err := readTextForStage2(filePath, maxBytes)
+	cleaned, err := readStage2SearchText(filePath, maxBytes)
 	if err != nil {
 		return false, err
 	}
-	// Clean the content so matching aligns with excerpt generation. Code files use the
-	// minimal code-safe cleaner so markup/operator stripping can't drop a real match
-	// (e.g. a term adjacent to "<?php", "->", or inside a "TList<T>" generic).
-	cleaned := cleanSearchContent(mappedContent{text: content}, config.IsCodeFile(filePath)).text
 	return CheckTextContainsAllWordsPartial(cleaned, query.terms, distance, partial), nil
 }
 
@@ -1542,29 +1538,28 @@ func checkFileContainsRankedWordsPartial(filePath string, words []string, distan
 }
 
 func checkFileContainsRankedWordsQuery(filePath string, query compiledQuery, distance int, strict bool, silent bool, maxBytes int64) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
-	analysis, ok, err := checkFileRankedAnalysisQuery(filePath, query, distance, strict, maxBytes)
+	analysis, _, ok, err := checkFileRankedAnalysisQuery(filePath, query, distance, strict, maxBytes)
 	if err != nil || !ok {
 		return 0, 0, nil, 0, ok, err
 	}
 	return analysis.Score, analysis.TermCount, analysis.MatchedTerms, analysis.SpanLength, true, nil
 }
 
-func checkFileRankedAnalysisQuery(filePath string, query compiledQuery, distance int, strict bool, maxBytes int64) (rankedTextAnalysis, bool, error) {
+func checkFileRankedAnalysisQuery(filePath string, query compiledQuery, distance int, strict bool, maxBytes int64) (rankedTextAnalysis, string, bool, error) {
 	found, decided := streamContainsRankedWordsDecidedQuery(filePath, query, strict, maxBytes)
 	if decided && !found {
-		return rankedTextAnalysis{}, false, nil
+		return rankedTextAnalysis{}, "", false, nil
 	}
 
-	content, err := readTextForStage2(filePath, maxBytes)
+	cleaned, err := readStage2SearchText(filePath, maxBytes)
 	if err != nil {
-		return rankedTextAnalysis{}, false, err
+		return rankedTextAnalysis{}, "", false, err
 	}
-	cleaned := cleanSearchContent(mappedContent{text: content}, config.IsCodeFile(filePath)).text
 	analysis, ok := analyzeRankedText(cleaned, query, distance, strict)
 	if !ok {
-		return rankedTextAnalysis{}, false, nil
+		return rankedTextAnalysis{}, "", false, nil
 	}
-	return analysis, true, nil
+	return analysis, cleaned, true, nil
 }
 
 // CheckFileContainsExcludeWords checks if a file contains any exclude words
@@ -1581,7 +1576,7 @@ func checkFileContainsExcludeWordsWithOptions(filePath string, excludeWords []st
 		return false, nil
 	}
 
-	content, err := readTextForStage2(filePath, maxBytes)
+	content, _, err := readTextPrefix(filePath, maxBytes)
 	if err != nil {
 		return false, err
 	}
@@ -1594,7 +1589,7 @@ func checkFileContainsExcludeWordsWithOptions(filePath string, excludeWords []st
 	return false, nil
 }
 
-func readTextForStage2(filePath string, maxBytes int64) (string, error) {
+func readStage2SearchText(filePath string, maxBytes int64) (string, error) {
 	if maxBytes <= 0 {
 		maxBytes = defaultTextMaxBytes
 	}
@@ -1610,7 +1605,7 @@ func readTextForStage2(filePath string, maxBytes int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return string(content), nil
+	return cleanSearchContent(mappedContent{text: string(content)}, config.IsCodeFile(filePath)).text, nil
 }
 
 // readTextPrefix reads only the active searchable prefix while reporting the

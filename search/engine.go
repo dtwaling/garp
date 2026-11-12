@@ -787,7 +787,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 				}
 			} else {
 				// Text file: stream+distance
-				analysis, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
+				analysis, _, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %q: %q\n", filePath, err)
@@ -846,7 +846,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 					return false
 				}
 			} else {
-				analysis, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
+				analysis, _, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %q: %q\n", filePath, err)
