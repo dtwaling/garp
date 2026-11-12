@@ -5,7 +5,7 @@ description: Use when searching a codebase or docs for terms that must appear ne
 
 # garp -- proximity content search
 
-`garp` finds files where search terms co-occur within a character window -- text, code, and binary documents (PDF, DOCX, ODT, RTF, eml/mbox/msg). Single pure-Go binary, identical behavior on Windows and Linux/macOS: run `garp` from PATH, else the repo binary (`bin/garp`; `garp.exe` on Windows). Forward slashes work in paths on every OS. Quote paths containing spaces; `--startdir` paths reject wildcards.
+`garp` finds files where search terms co-occur within a proximity window (UTF-8 bytes) -- text, code, and binary documents (PDF, DOC, DOCX, ODT, RTF, eml/mbox/msg). Single pure-Go binary, identical behavior on Windows and Linux/macOS: run `garp` from PATH, else the repo binary (`bin/garp`; `garp.exe` on Windows). Forward slashes work in paths on every OS. Quote paths containing spaces; `--startdir` paths reject wildcards.
 
 Invariants:
 - **Always pass `--json`** (preferred), **`-l`** (when only matching file paths are needed), **or `--plain`** in agent sessions. Without one of these, garp launches the interactive TUI, which blocks a PTY and errors out without one.
@@ -21,7 +21,7 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 | 2+ terms that must co-occur within a window (`--distance`) | exact symbol / regex lookup |
 | 3+ terms: ranked best-cluster match by default; `--strict` forces AND on all terms | list every literal hit of one token |
 | prefix/partial identifier matching (`deploy*`, `--partial`) | full regex syntax needed |
-| PDF / DOCX / ODT / RTF / eml / mbox / msg content | quick one-shot in a terminal |
+| PDF / DOC / DOCX / ODT / RTF / eml / mbox / msg content | quick one-shot in a terminal |
 | monster files: ranked excerpt + `start_line` -> one targeted read, no paging | |
 | prune the walk to chosen subdirs (`-g` / `--iglob`) | |
 
@@ -33,7 +33,7 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 - `--code`: include source files, including Dockerfile/Containerfile names. Only recognized code types skip markup cleaning; HTML is not a code type (even with `--code`), so positive and `--not` terms on `.html` files match cleaned text. Single-line tags (with attributes), comments, entities, and `script`/`style` bodies are removed; an element tag that spans lines stays searchable. `-t <ext>` restricts file types. Repeat the flag or use comma-separated values. A type restriction overrides `--code`.
 - `.gitignore`, `.ignore`, and `.git/info/exclude` are respected by default. Use `--no-ignore` to search ignored files; other search filters still apply.
 - `--max-filesize <size>`: skip files above the size cap; text/code files default to `5M` when omitted. Requires a positive size, up to `100M`; `0` is invalid.
-- `--distance N`: proximity window in characters (default 5000). Same call/block in code ~100-300; same paragraph/section in docs ~1000-2000.
+- `--distance N`: proximity window in UTF-8 bytes (default 5000; non-ASCII characters take 2-4 bytes). Same call/block in code ~100-300; same paragraph/section in docs ~1000-2000.
 - `-m N`: proximity excerpts per file (default 1, max 50), not raw matching lines.
 - `--max-results N`: maximum ranked matching files returned (default `50` in `--json` and `--plain`; `-l`/`--pathonly` defaults to `0`; `0` = unlimited).
 - `--partial[=prefix|contains]`: boundary-aware prefix (default) or raw substring. Per-term inline wildcards `*` and `?` work at any position: leading, mid-token, or trailing (`deploy*`, `ms-*-api`, `*OptionApi*`, `mark?systems`; quote terms in shells). `--smart-forms`: match word forms (plurals, -ing, -ed, -tion).

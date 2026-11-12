@@ -249,9 +249,10 @@ type DOCExtractor struct{}
 
 // ExtractText implements the Extractor interface for DOC files.
 // Strategy:
-// - Open OLE/CFB and read a bounded amount of likely streams (WordDocument, 1Table, 0Table)
-// - Try UTF-16 decode; else ASCII salvage replacing non-printables with spaces
-// - Collapse whitespace and return a concise plain-text representation
+// - Open OLE/CFB and read at most 2 MiB in total from the WordDocument, 1Table and 0Table streams
+// - Decode each stream via decodeLegacyStreamText: UTF-16 when a BOM or dominant NUL lane proves it,
+// else both the printable-ASCII and UTF-16LE readings
+// - If CFB parsing fails or no stream yields text, salvage printable ASCII from a bounded prefix
 func (e *DOCExtractor) ExtractText(data []byte) (string, error) {
 	return e.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
 }
@@ -512,7 +513,12 @@ func absFloat(v float64) float64 {
 	return v
 }
 
-// MSGExtractor extracts text from .msg files (Outlook messages)
+// MSGExtractor extracts Subject and body text from .msg files (Outlook OLE/CFB messages).
+// MAPI property types select decoding: Unicode 001F as UTF-16LE, ANSI 001E as UTF-8 or
+// Windows-1252. Binary 0102 (HTML only) is detected UTF-16, else ANSI plus a UTF-16LE
+// reading when the bytes are invalid UTF-8 or contain NULs.
+// HTML is used only without a plain body. Non-CFB input, or a message with no Subject/body
+// text, falls back to bounded legacy-stream decoding.
 type MSGExtractor struct{}
 
 // ExtractText implements the Extractor interface for MSG files
@@ -526,7 +532,7 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		return "", fmt.Errorf("invalid reader or size: %d", size)
 	}
 	limit := effectiveMaxExtractedBytes(maxExtractedBytes)
-	// Attempt to parse the OLE compound file and extract Unicode Subject/Body first.
+	// Parse the OLE compound file and decode Subject/Body (then HTML) by MAPI property type.
 	if cf, err := mscfb.New(r); err == nil {
 		streams := make(map[string][]byte)
 		var totalRead int64

@@ -576,6 +576,7 @@ func TestShowUsageDocumentsFlags(t *testing.T) {
 		"Stop flag parsing",
 		"context flags are not supported",
 		"not a drop-in rg replacement",
+		"--distance N            Proximity window in UTF-8 bytes (default 5000)",
 	} {
 		t.Run(want, func(t *testing.T) {
 			if !strings.Contains(out, want) {
