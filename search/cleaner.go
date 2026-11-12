@@ -1,7 +1,6 @@
 package search
 
 import (
-	"fmt"
 	"io"
 	"regexp"
 	"slices"
@@ -1512,14 +1511,6 @@ func sourceSentenceSpans(text string, matches []excerptMatch) []matchRange {
 	}
 	appendSpan(len(text))
 	return spans
-}
-
-// containsWholeWord checks if text contains a whole word (case insensitive, plural-aware)
-func containsWholeWord(text, word string) bool {
-	// Match base, base+s, or base+es. getWordRegex caches the compiled pattern so
-	// this stays cheap when called per-file across many exclude words.
-	pattern := fmt.Sprintf(`(?i)\b(?:%s(?:es|s)?)\b`, regexp.QuoteMeta(word))
-	return getWordRegex(pattern).MatchString(text)
 }
 
 // MatchRange is a half-open byte range [Start, End) of a source-validated match,

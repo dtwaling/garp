@@ -2549,6 +2549,10 @@ func TestCaseInsensitiveExclusionsPreserveLegacyWordBoundaries(t *testing.T) {
 		{text: "(test), passed", exclude: "test"},
 		{text: "bob@spam.com", exclude: "@spam.com"},
 		{text: "message from bob@spam.com!", exclude: "@SPAM.COM"},
+		{text: "Le café crème", exclude: "café"},
+		{text: "café.", exclude: "café"},
+		{text: "Le CAFÉ crème", exclude: "café"},
+		{text: "Un élan vital", exclude: "élan"},
 	} {
 		if !CheckTextContainsExcludeWords(tt.text, []string{tt.exclude}) {
 			t.Errorf("legacy exclusion %q did not match %q", tt.exclude, tt.text)
@@ -2557,6 +2561,11 @@ func TestCaseInsensitiveExclusionsPreserveLegacyWordBoundaries(t *testing.T) {
 	for _, text := range []string{"contest", "testament"} {
 		if CheckTextContainsExcludeWords(text, []string{"test"}) {
 			t.Errorf("whole-word exclusion matched %q", text)
+		}
+	}
+	for _, text := range []string{"cafés", "xcafé", "Le cafés crème"} {
+		if CheckTextContainsExcludeWords(text, []string{"café"}) {
+			t.Errorf("non-ASCII-edge exclusion matched inside %q", text)
 		}
 	}
 }
