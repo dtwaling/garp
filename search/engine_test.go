@@ -2522,6 +2522,53 @@ func TestCaseInsensitiveExclusionsPreserveLegacyWordBoundaries(t *testing.T) {
 	}
 }
 
+func TestFilterCandidatesWordExclusionsUseSearchableText(t *testing.T) {
+	const page = `<style>.secret{}</style><script>const forbidden=1;</script><body class="draft"><p>Actual visible summary.</p></body>`
+	for _, tt := range []struct {
+		name, raw, exclude string
+		kept, codeKept     bool
+	}{
+		{"style", page, "secret", true, false},
+		{"script", page, "forbidden", true, false},
+		{"attribute", page, "draft", true, false},
+		{"visible word", page, "summary", false, false},
+		{"quoted line", "visible summary\n> forbidden reply", "forbidden", true, false},
+		{"split", "visible summary PDF32", "PDF", false, true},
+		{"unsplit", "visible summary PDF32", "PDF32", true, false},
+		{"phrase", "visible summary <b>red</b>\n\tflag", "red flag", false, true},
+		{"whitespace", "visible summary red\n\tflag", "red flag", false, false},
+	} {
+		for _, terms := range [][]string{{"visible"}, {"visible", "summary"}} {
+			for _, name := range []string{"doc.html", "doc.pdf", "doc.go"} {
+				t.Run(tt.name+"/"+strings.Join(terms, "+")+"/"+name, func(t *testing.T) {
+					root := t.TempDir()
+					path := filepath.Join(root, name)
+					if err := os.WriteFile(path, []byte(tt.raw), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					engine := NewSearchEngine(terms, []string{tt.exclude}, nil, false, 1, 1000)
+					engine.StartDir = root
+					engine.Silent = true
+					if name == "doc.pdf" {
+						engine.Registry.extractors["pdf"] = &rankingCountingExtractor{text: tt.raw}
+					}
+					matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := tt.kept
+					if name == "doc.go" {
+						want = tt.codeKept
+					}
+					if got := len(matches) == 1; got != want {
+						t.Errorf("kept = %t, want %t (exclude %q)", got, want, tt.exclude)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestCaseSensitiveSmartFormsAndRankingMetadata(t *testing.T) {
 	root := t.TempDir()
 	for name, content := range map[string]string{

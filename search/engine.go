@@ -731,7 +731,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 
 		// Check if file contains all search words
 		hasAllWords := true
-		var cleanedBinaryText string
+		var searchText string
 		if len(query.terms) > 1 {
 			if IsBinaryFormat(filePath) {
 				ext := filepath.Ext(filePath)
@@ -773,8 +773,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 						}
 						return false
 					}
-					cleanedBinaryText = cleanSearchContent(mappedContent{text: extractedText}, config.IsCodeFile(filePath)).text
-					analysis, ok := analyzeRankedText(cleanedBinaryText, query, se.Distance, se.Strict)
+					searchText = cleanSearchContent(mappedContent{text: extractedText}, config.IsCodeFile(filePath)).text
+					analysis, ok := analyzeRankedText(searchText, query, se.Distance, se.Strict)
 					if ok {
 						match.setAnalysis(analysis)
 					}
@@ -787,7 +787,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 				}
 			} else {
 				// Text file: stream+distance
-				analysis, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
+				analysis, cleaned, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
+				searchText = cleaned
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %q: %q\n", filePath, err)
@@ -833,8 +834,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 						}
 						return false
 					}
-					cleanedBinaryText = cleanSearchContent(mappedContent{text: extractedText}, config.IsCodeFile(filePath)).text
-					analysis, ok := analyzeRankedText(cleanedBinaryText, query, se.Distance, se.Strict)
+					searchText = cleanSearchContent(mappedContent{text: extractedText}, config.IsCodeFile(filePath)).text
+					analysis, ok := analyzeRankedText(searchText, query, se.Distance, se.Strict)
 					if ok {
 						match.setAnalysis(analysis)
 					}
@@ -846,7 +847,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 					return false
 				}
 			} else {
-				analysis, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
+				analysis, cleaned, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
+				searchText = cleaned
 				if err != nil {
 					if !se.Silent {
 						fmt.Printf("Warning: Error checking file %q: %q\n", filePath, err)
@@ -864,23 +866,8 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 			return false
 		}
 
-		// Check if file contains any exclude words
-		hasExcludeWords := false
-		if len(wordExcludes) > 0 && IsBinaryFormat(filePath) {
-			// Reuse the cleaned text already extracted for the query check.
-			hasExcludeWords = CheckTextContainsExcludeWordsWithOptions(cleanedBinaryText, wordExcludes, se.queryOptions())
-		} else if len(wordExcludes) > 0 {
-			ok2, err := checkFileContainsExcludeWordsWithOptions(filePath, wordExcludes, maxBytes, se.queryOptions())
-			if err != nil {
-				if !se.Silent {
-					fmt.Printf("Warning: Error checking exclude words in %q: %q\n", filePath, err)
-				}
-				return false
-			}
-			hasExcludeWords = ok2
-		}
-
-		if hasExcludeWords {
+		// Check exclusions against the same cleaned text used for positive matching.
+		if len(wordExcludes) > 0 && CheckTextContainsExcludeWordsWithOptions(searchText, wordExcludes, se.queryOptions()) {
 			return false
 		}
 
