@@ -21,6 +21,9 @@ const unconstrainedDistance = -1
 // quotes can contain <, >, brackets and newlines without rescanning any suffix.
 // Each byte takes constant work, including failed subsets/quotes: O(N) time.
 func markupDeclarationSpans(raw string) []matchRange {
+	if !strings.Contains(raw, "<!") {
+		return nil
+	}
 	var spans []matchRange
 	var end, subset int
 	var quotedEnd, quotedSubset [2]int
@@ -72,11 +75,15 @@ func markupDeclarationSpans(raw string) []matchRange {
 // FindAll cannot do this: a quote beginning inside a comment can hide a real tag
 // after the comment. Suffix continuations take constant work per byte, even for
 // failed quotes. Balanced values after = and HTML whitespace take precedence;
-// otherwise recover at the first >. A closing element bounds quote recovery so
-// an unmatched quote cannot borrow a quote from a later element's attributes.
+// otherwise recover at the first >. Consumed attribute openers cannot supply a
+// closing quote to an earlier unmatched value. Closing tags inside balanced
+// values are opaque, just like other angle brackets.
 func markupTagEnds(raw string) []int {
+	if !strings.Contains(raw, "<") {
+		return nil
+	}
 	ends := make([]int, len(raw))
-	var end, valueEnd int
+	var end, valueEnd, valueKind int
 	var quotedEnd [2]int
 	for i := len(raw) - 1; i >= 0; i-- {
 		nextValue := 0
@@ -89,18 +96,17 @@ func markupTagEnds(raw string) []int {
 				kind = 1
 			}
 			nextValue, quotedEnd[kind] = quotedEnd[kind], end
+			valueKind = kind
 		case '=':
 			if valueEnd != 0 {
 				end = valueEnd
+				quotedEnd[valueKind] = 0
 			}
 		case '>':
 			end = i + 1
 		case '<':
-			if i+1 < len(raw) && (isMarkupLetter(raw[i+1]) || raw[i+1] == '/' || raw[i+1] == '?') {
+			if i+1 < len(raw) && (isMarkupLetter(raw[i+1]) || raw[i+1] == '/') {
 				ends[i] = end
-			}
-			if i+2 < len(raw) && raw[i+1] == '/' && isMarkupLetter(raw[i+2]) {
-				quotedEnd = [2]int{}
 			}
 			end = 0
 		}
@@ -122,23 +128,25 @@ func (p markupTagPattern) ReplaceAllString(raw, replacement string) string {
 
 // stripDelimitedMarkup visits openers in source order, skipping each complete
 // span. A failed closer search disables that delimiter for the remaining tail.
-// Thus successful searches cover disjoint spans, with at most two failed O(N)
-// searches: total O(N), even with arbitrarily many unterminated openers.
+// Successful searches cover disjoint spans; each delimiter fails at most once
+// per tail (per line for prose instructions): total O(N), even for opener floods.
 // Declaration endpoints are precomputed once by the same linear-time rule.
 // Tags protect their attributes; complete raw-text blocks protect their bodies.
 // Source-order precedence also prevents a tag inside a comment from opening a
 // raw-text block. Each precomputed span/closer is visited at most once.
 func stripDelimitedMarkup(m mappedContent, replacement string, pattern markupTagPattern) mappedContent {
+	if !strings.Contains(m.text, "<") {
+		return m
+	}
 	declarations := markupDeclarationSpans(m.text)
 	tags := markupTagEnds(m.text)
 	closers := rawTextCloseRegex.FindAllStringSubmatchIndex(m.text, -1)
-	var rawCloses [2][]int
+	var rawCloses [4][]matchRange
 	for _, loc := range closers {
-		kind := 0
-		if strings.EqualFold(m.text[loc[2]:loc[3]], "script") {
-			kind = 1
+		if end := tags[loc[0]]; end != 0 {
+			kind := markupRawTextKind(m.text[loc[2]:loc[3]])
+			rawCloses[kind] = append(rawCloses[kind], matchRange{loc[0], end})
 		}
-		rawCloses[kind] = append(rawCloses[kind], loc[1])
 	}
 	var text strings.Builder
 	var offsets []int
@@ -148,8 +156,17 @@ func stripDelimitedMarkup(m mappedContent, replacement string, pattern markupTag
 			offsets = append(offsets, m.offsets[start:end]...)
 		}
 	}
-	var exhausted [2]bool
-	last := 0
+	writeReplacement := func(anchor int) {
+		text.WriteString(replacement)
+		if m.offsets != nil {
+			for range len(replacement) {
+				offsets = append(offsets, m.offsets[anchor])
+			}
+		}
+	}
+	var exhausted [3]bool // comment, CDATA, instruction's first >
+	prose := !pattern.tags && pattern.rawText == ""
+	last, lineEnd := 0, 0
 	for i := 0; i < len(m.text); i++ {
 		if m.text[i] != '<' {
 			continue
@@ -158,6 +175,7 @@ func stripDelimitedMarkup(m mappedContent, replacement string, pattern markupTag
 			declarations = declarations[:len(declarations)-1]
 		}
 		end := 0
+		var body matchRange
 		remove := pattern.rawText == ""
 		if len(declarations) > 0 && declarations[len(declarations)-1].start == i {
 			end = declarations[len(declarations)-1].end
@@ -169,18 +187,21 @@ func stripDelimitedMarkup(m mappedContent, replacement string, pattern markupTag
 				nameEnd++
 			}
 			name := m.text[i+1 : nameEnd]
-			if nameEnd < tagEnd && strings.ContainsRune(" 	\r\n\f/>", rune(m.text[nameEnd])) &&
-				(strings.EqualFold(name, "style") || strings.EqualFold(name, "script")) {
-				kind := 0
-				if strings.EqualFold(name, "script") {
-					kind = 1
-				}
-				for len(rawCloses[kind]) > 0 && rawCloses[kind][0] <= tagEnd {
+			kind := markupRawTextKind(name)
+			if kind >= 0 && nameEnd < tagEnd && strings.ContainsRune(" 	\r\n\f/>", rune(m.text[nameEnd])) &&
+				m.text[tagEnd-2] != '/' {
+				for len(rawCloses[kind]) > 0 && rawCloses[kind][0].start < tagEnd {
 					rawCloses[kind] = rawCloses[kind][1:]
 				}
 				if len(rawCloses[kind]) > 0 {
-					end = rawCloses[kind][0]
-					remove = pattern.rawText == "" || strings.EqualFold(name, pattern.rawText)
+					close := rawCloses[kind][0]
+					end = close.end
+					if kind < 2 {
+						remove = pattern.rawText == "" || strings.EqualFold(name, pattern.rawText)
+					} else {
+						// RCDATA is visible text, but its delimiters are not markup.
+						body = matchRange{tagEnd, close.start}
+					}
 				}
 			}
 		} else {
@@ -188,29 +209,57 @@ func stripDelimitedMarkup(m mappedContent, replacement string, pattern markupTag
 			if !strings.HasPrefix(m.text[i:], opener) {
 				kind, opener, closer = 1, "<![CDATA[", "]]>"
 				if !strings.HasPrefix(m.text[i:], opener) {
-					continue
+					kind, opener, closer = 2, "<?", ">"
+					if !strings.HasPrefix(m.text[i:], opener) {
+						continue
+					}
 				}
 			}
-			if exhausted[kind] {
-				continue
+			limit := len(m.text)
+			if kind == 2 && prose {
+				if i >= lineEnd {
+					exhausted[kind] = false
+					lineEnd = len(m.text)
+					if n := strings.IndexAny(m.text[i:], "\r\n"); n >= 0 {
+						lineEnd = i + n
+					}
+				}
+				limit = lineEnd
 			}
-			end = strings.Index(m.text[i+len(opener):], closer)
+			end = -1
+			if !exhausted[kind] {
+				end = strings.Index(m.text[i+len(opener):limit], closer)
+				exhausted[kind] = end < 0
+			}
 			if end < 0 {
-				exhausted[kind] = true
 				continue
 			}
 			end += i + len(opener) + len(closer)
+			if kind == 2 && m.text[end-2] != '?' {
+				// Prefer ?> after a bare > only before the next markup opener.
+				// Each later <? is itself a boundary, so lookahead windows are
+				// disjoint. Failed first-> searches are memoized above: O(N).
+				for j := end; j+1 < limit; j++ {
+					next := m.text[j+1]
+					if m.text[j] == '<' && (isMarkupLetter(next) || next == '/' || next == '!' || next == '?') {
+						break
+					}
+					if m.text[j] == '?' && next == '>' {
+						end = j + 2
+						break
+					}
+				}
+			}
 		}
 		if !remove {
 			i = end - 1
 			continue
 		}
 		copyRange(last, i)
-		text.WriteString(replacement)
-		if m.offsets != nil {
-			for range len(replacement) {
-				offsets = append(offsets, m.offsets[i])
-			}
+		writeReplacement(i)
+		if body.end != 0 {
+			copyRange(body.start, body.end)
+			writeReplacement(body.end)
 		}
 		last, i = end, end-1
 	}
@@ -225,11 +274,29 @@ func isMarkupLetter(b byte) bool {
 	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
 }
 
+func markupRawTextKind(name string) int {
+	switch strings.ToLower(name) {
+	case "style":
+		return 0
+	case "script":
+		return 1
+	case "title":
+		return 2
+	case "textarea":
+		return 3
+	}
+	return -1
+}
+
 var (
-	// Known markup -- the extractors' HTML/XML. Tags open with a letter, / or ?
-	// and may span lines. Quotes start attribute values only after =, not in
-	// O'Brien. Prefer balanced values; malformed markup falls back to the first
-	// > without consuming the next tag. Quotes cannot cross a closing element.
+	// Known markup -- the extractors' HTML/XML. Element tags open with a letter
+	// or / and may span lines. Quotes start attribute values only after =, not
+	// in O'Brien. Prefer balanced values; malformed markup falls back to the
+	// first > without consuming the next tag. Balanced values protect closing
+	// elements. The delimiter scanner handles comments, CDATA, declarations and
+	// <? instructions across lines. After the first >, prefer a later ?> only
+	// before the next markup opener (< followed by an ASCII letter, /, ! or ?);
+	// otherwise close at the first >. A first ?> always closes immediately.
 	htmlTagRegex = markupTagPattern{tags: true}
 
 	// Text that may be prose -- every non-code document. Element and processing-
@@ -237,8 +304,9 @@ var (
 	// so <80%, <--, heredocs (<<EOF), multi-line <placeholder ...> prose and
 	// unbalanced quotes cannot erase later lines. Only <!...> may span lines.
 	// Unlike known markup, prose does not use a malformed-attribute fallback.
-	// cleanSearchContent and documentCorrespondence share this rule.
-	textTagRegex = regexp.MustCompile(`<[A-Za-z/?](?:"[^"\r\n]*"|'[^'\r\n]*'|[^<>"'\r\n])*>`)
+	// Instructions use the shared delimiter scanner, not this element regexp.
+	// cleanSearchContent and documentCorrespondence share both rules.
+	textTagRegex = regexp.MustCompile(`<[A-Za-z/](?:"[^"\r\n]*"|'[^'\r\n]*'|[^<>"'\r\n])*>`)
 
 	// HTML entities
 	htmlEntityRegex = regexp.MustCompile(`&[a-zA-Z0-9#]*;`)
@@ -251,7 +319,7 @@ var (
 	// inside the other kind of raw-text element.
 	cssRegex          = markupTagPattern{rawText: "style"}
 	jsRegex           = markupTagPattern{rawText: "script"}
-	rawTextCloseRegex = regexp.MustCompile(`(?i)</(style|script)[	\n\f\r ]*>`)
+	rawTextCloseRegex = regexp.MustCompile(`(?i)</(style|script|title|textarea)[	\n\f\r />]`)
 
 	// Control characters and excessive whitespace
 	controlCharRegex = regexp.MustCompile(`[\x00-\x1f\x7f-\x9f]`)

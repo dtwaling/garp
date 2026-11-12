@@ -696,21 +696,36 @@ func TestExcerptLineAnchorsMayRepeatOnSingleLine(t *testing.T) {
 }
 
 func TestStage3MappedCleaning(t *testing.T) {
-	for _, block := range []string{
-		`<script>const s = "<!--";</script>`,
-		`<style>a::after {content: "<!--"}</style>`,
-		`<SCRIPT title="a>b">"<![CDATA["</SCRIPT>`,
-		`<!DOCTYPE secret [<!-- don't -->]>`,
-		`<script>hidden</script><style>hidden</style>`,
+	for _, tc := range []struct{ block, prefix string }{
+		{`<?audit secret < 80% ?>`, ""},
+		{`<?audit secret?>`, ""},
+		{`<?audit secret>`, ""},
+		{`<?a>one<?b>two<?c?>three `, "one two three "},
+		{`<p>Hi<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" /><o:p></o:p></p><p>budget visible</p><?php echo 1 ?>last `, "Hi budget visible last "},
+		{`<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" />`, ""},
+		{`<?no closer at all `, "<?no closer at all "},
+		{`<?php if ($a > 1) ?>`, ""},
+		{`<img src="secret" alt="load </b> value">`, ""},
+		{`<script>secret</script foo>`, ""},
+		{`<script>secret</script >`, ""},
+		{`<script/>`, ""},
+		{`<title>a <!-- b</title>`, "a <!-- b "},
+		{`<textarea>a <!-- b</textarea>`, "a <!-- b "},
+		{`<title>heading</title>`, "heading "},
+		{`<script>const s = "<!--";</script>`, ""},
+		{`<style>a::after {content: "<!--"}</style>`, ""},
+		{`<SCRIPT title="a>b">"<![CDATA["</SCRIPT>`, ""},
+		{`<!DOCTYPE secret [<!-- don't -->]>`, ""},
+		{`<script>hidden</script><style>hidden</style>`, ""},
 	} {
-		raw := block + "\nalpha\n<!-- footer -->tail"
+		raw := tc.block + "\nalpha\n<!-- footer -->tail"
 		for _, mapped := range []mappedContent{cleanStage3Content(raw, false), documentCorrespondence(raw, true), documentCorrespondence(raw, false)} {
-			if got := strings.Join(strings.Fields(mapped.text), " "); got != "alpha tail" {
-				t.Fatalf("%q: mapped text = %q", block, got)
+			if got := strings.Join(strings.Fields(mapped.text), " "); got != tc.prefix+"alpha tail" {
+				t.Fatalf("%q: mapped text = %q", tc.block, got)
 			}
 			for _, term := range []string{"alpha", "tail"} {
 				if got := mapped.offsets[strings.Index(mapped.text, term)]; got != strings.Index(raw, term) {
-					t.Fatalf("%q: %s offset = %d", block, term, got)
+					t.Fatalf("%q: %s offset = %d", tc.block, term, got)
 				}
 			}
 		}

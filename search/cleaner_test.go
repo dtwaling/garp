@@ -1210,7 +1210,53 @@ func TestCleanContentKeepsTokensAroundStrippedBlocks(t *testing.T) {
 }
 
 func TestCleanContentStripsOnlyTagSyntax(t *testing.T) {
+	// Plain text must not reserve per-byte endpoint storage, at either size.
+	for _, size := range []int{1 << 20, 5 << 20} {
+		raw := strings.Repeat("x", size)
+		if ends := markupTagEnds(raw); cap(ends) != 0 {
+			t.Fatalf("%d plain bytes reserved %d endpoints", size, cap(ends))
+		}
+		allocs := testing.AllocsPerRun(3, func() {
+			if len(markupDeclarationSpans(raw)) != 0 || stripDelimitedMarkup(mappedContent{text: raw}, " ", htmlTagRegex).text != raw {
+				t.Fatal("plain text changed")
+			}
+		})
+		if allocs > 1 {
+			t.Fatalf("%d plain bytes: %g markup allocations", size, allocs)
+		}
+	}
 	for _, tc := range []struct{ raw, want string }{
+		{`<?audit secret < 80% ?>alpha`, "alpha"},
+		{`<?audit secret </x ?>alpha`, "alpha"},
+		{`<?audit secret?>alpha`, "alpha"},
+		{"<?audit secret <\n80% ?>alpha", "<?audit secret < 80% ? alpha"},
+		{"<?open\n<?audit secret?>alpha", "<?open alpha"},
+		{`<?audit secret`, "<?audit secret"},
+		{`<?audit secret>alpha`, "alpha"},
+		{`<?a>one<?b>two<?c?>three`, "one two three"},
+		{`<p>Hi<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" /><o:p></o:p></p><p>budget visible</p><?php echo 1 ?>tail`, "Hi budget visible tail"},
+		{`<?audit secret>alpha<b>x</b>?>tail`, "alpha x ? tail"},
+		{`<?audit > < 80% ?>alpha`, "alpha"},
+		{`<?audit < nested ?>alpha`, "alpha"},
+		{`<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" />budget`, "budget"},
+		{`<?no closer at all`, "<?no closer at all"},
+		{`<?php if ($a > 1) ?>alpha`, "alpha"},
+		{`<?audit < nested>alpha`, "alpha"},
+		{"<?audit secret\nvalue>alpha", "<?audit secret value alpha"},
+		{"<?audit secret>alpha\n?>tail", "alpha ? tail"},
+		{"<?open\r<?audit secret>alpha", "<?open alpha"},
+		{`<?first>alpha <?second>tail <?unclosed`, "alpha tail <?unclosed"},
+		{`<img src="secret" alt="load </b> value">alpha`, "alpha"},
+		{`<img src='secret' alt='load </b> value'>alpha`, "alpha"},
+		{`<title>a <!-- b</title>alpha<!-- x -->tail`, "a <!-- b alpha tail"},
+		{`<textarea>a <!-- b</textarea>alpha<!-- x -->tail`, "a <!-- b alpha tail"},
+		{`<title>heading</title>alpha`, "heading alpha"},
+		{`<script>secret</script foo>alpha`, "alpha"},
+		{`<script>secret</script >alpha`, "alpha"},
+		{`<script>secret</script/>alpha`, "alpha"},
+		{`<style>secret</style foo>alpha`, "alpha"},
+		{`<script/>alpha<script>secret</script>tail`, "alpha tail"},
+		{`<style type="text/css"/>alpha<style>secret</style>tail`, "alpha tail"},
 		{"If <80% memory is free\nsession state stays warm\nuntil >90% utilization.", "If <80% memory is free session state stays warm until 90% utilization."},
 		{"client <-- proxy\nsession memory\nserver --> sink", "client <-- proxy session memory server -- sink"},
 		{"a < b and c > d", "a < b and c d"},
@@ -1276,6 +1322,15 @@ func TestCleanContentStripsOnlyTagSyntax(t *testing.T) {
 
 func TestUnterminatedMarkupScaling(t *testing.T) {
 	for _, tc := range []struct{ name, raw, want string }{
+		{"instruction", "<?audit secret \n", "<?audit secret "},
+		{"instruction_flood", "<? <? ", "<? <? "},
+		{"instruction_angles", "<?audit < </x ", "<?audit < </x "},
+		{"instruction_complete", "<?audit < </x ?>alpha ", "alpha "},
+		{"instruction_fallback", "<?audit < nested>alpha ", "alpha "},
+		{"instruction_bounded", "<?a>one<?b>two<?c?>three ", "one two three "},
+		{"closing_attribute", "<img alt=\"</b></b>\">alpha ", "alpha "},
+		{"closing_attribute_single", "<img alt='</b></b>'>alpha ", "alpha "},
+		{"title", "<title><b>bold</b>\n", "bold "},
 		{"comment", "<!-- note <b>bold</b>\n", "<!-- note bold "},
 		{"cdata", "<![CDATA[<b>\n", "<![CDATA[ "},
 		{"subset", "<!a [ <b>bold</b>\n", "<!a [ bold "},
@@ -1304,7 +1359,12 @@ func TestUnterminatedMarkupScaling(t *testing.T) {
 				var small time.Duration
 				for _, size := range []int{50_000, 100_000, 200_000} {
 					n := size / len(tc.raw)
-					raw := strings.Repeat(tc.raw, n) + "<b>tail</b>"
+					tail := "<b>tail</b>"
+					if strings.Contains(tc.raw, "<?") {
+						// A tagged tail would close otherwise unclosed instructions.
+						tail = "tail"
+					}
+					raw := strings.Repeat(tc.raw, n) + tail
 					start := time.Now()
 					got := stage.clean(raw)
 					elapsed := time.Since(start)
@@ -1326,6 +1386,10 @@ func TestUnterminatedMarkupScaling(t *testing.T) {
 
 func TestEngineIgnoresMarkupInExclusionsAndExcerpts(t *testing.T) {
 	for _, raw := range []string{
+		`<?audit secret < 80% ?>alpha`,
+		`<?audit secret?>alpha`,
+		`<?audit secret>alpha`,
+		`<?xml:namespace prefix = o ns="urn:schemas-microsoft-com:office:office" />alpha`,
 		`<img src="secret" alt="load <80%">alpha`,
 		"<!-- secret < 80%\ninternal note -->alpha",
 		`<p class="x">alpha</p>`,
@@ -1386,11 +1450,14 @@ func TestEngineSearchesTextBetweenStrayAngleBrackets(t *testing.T) {
 }
 
 func TestCleaningStageParity(t *testing.T) {
-	for _, raw := range []string{"header\n> alpha beta hidden\nvisible\n", "\n-----\nvisible", "<style>hidden</style>\n<script>hidden</script>\n<b>A1,2B</b> &amp;\tend", "\u00a0\x00é\u0085\tX\xff\u2003", "", " \n\t"} {
+	for _, raw := range []string{"<?php secret < 80; ?>alpha", "<?php secret <\n80; ?>alpha", "<?php if ($a > 1)", "header\n> alpha beta hidden\nvisible\n", "\n-----\nvisible", "<style>hidden</style>\n<script>hidden</script>\n<b>A1,2B</b> &amp;\tend", "\u00a0\x00é\u0085\tX\xff\u2003", "", " \n\t"} {
 		for _, code := range []bool{false, true} {
 			got := CleanContent(raw)
 			if code {
 				got = CleanContentCode(raw)
+				if strings.HasPrefix(raw, "<?php") && got != strings.Join(strings.Fields(raw), " ") {
+					t.Errorf("PHP source changed: %q", got)
+				}
 			}
 			if want := cleanStage3Content(raw, code).text; got != want {
 				t.Errorf("raw=%q code=%v: Stage 2=%q Stage 3=%q", raw, code, got, want)
