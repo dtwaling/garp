@@ -117,7 +117,7 @@ type model struct {
 
 	// UI state
 	confirmSelected string // "yes" or "no"
-	memUsageText    string // e.g., " • RAM: XXX MB • CPU: YY%"
+	memUsageText    string // e.g., " • Temporary X MB • Total Y MB • CPU Z%"
 
 	// Background progress (optional)
 	progressText string // e.g., "⏳ Processing..."
