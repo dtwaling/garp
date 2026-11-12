@@ -633,7 +633,7 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("                          Bare form selects prefix; off and none select whole-word matching."))
 	fmt.Println(infoStyle.Render("                          Tip: valid query terms support inline * and ?."))
 	fmt.Println(infoStyle.Render("                          Invalid or over-limit wildcard terms match literally. See README for bounds."))
-	fmt.Println(infoStyle.Render("  --distance N            Proximity window in characters (default 5000)"))
+	fmt.Println(infoStyle.Render("  --distance N            Proximity window in UTF-8 bytes (default 5000)"))
 	fmt.Println(infoStyle.Render("  -m, --max-count N       Alias for --max-excerpts, not an rg line-count limit"))
 	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum excerpts per file; >=90% new content (up to 10% overlap; default 1, max 50)"))
 	fmt.Println(infoStyle.Render("  --max-results N         Maximum matching files; 0 = unlimited."))

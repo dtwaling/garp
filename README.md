@@ -60,7 +60,7 @@ garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,d
 ## Key features
 
 - Pure Go -- zero external tool dependencies
-- Unordered multi-word proximity matching within a window (default 5000 chars)
+- Unordered multi-word proximity matching within a window (default 5000 UTF-8 bytes)
 - Strategy A ranked matching for three or more terms: finds the best proximity
   cluster containing the first query term and at least one secondary term
 - Term-length rarity weighting: chunks matching longer domain terms rank above
@@ -142,7 +142,7 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--code` | off | Include code files (.go, .py, .js, .ts, ...) |
-| `--distance N` | 5000 | Proximity window in characters |
+| `--distance N` | 5000 | Proximity window in UTF-8 bytes |
 | `--startdir <path>` | cwd | Search roots as one comma-separated value. Specify the flag once. An existing directory name that contains a comma stays intact. |
 | `--pathscope <patterns>` | (all) | Comma-separated path patterns in one flag occurrence. Prefix with `!` to exclude. Use repeatable `-g` for additional path globs. The scope intersects with positive globs. See path pattern rules below. |
 | `-g`, `--glob <pattern>` | (all) | Repeatable case-sensitive path glob. Prefix with `!` to exclude. |
@@ -403,9 +403,10 @@ restricts to just this family.
 | EML | `enmime` |
 | MBOX | `emersion/go-mbox` |
 | PDF | `ledongthuc/pdf` |
+| DOC | `richardlehane/mscfb` + `WordDocument`/`1Table`/`0Table` streams (2 MiB total): UTF-16 when a BOM or dominant NUL lane proves it, else printable-ASCII plus UTF-16LE readings; non-CFB or textless files fall back to printable-ASCII salvage |
 | DOCX/ODT | `archive/zip` + XML |
 | RTF | regex/control-word stripping |
-| MSG | raw content fallback |
+| MSG | `richardlehane/mscfb` + MAPI property-typed Subject/Body: Unicode `001F` (UTF-16LE), ANSI `001E` (UTF-8, else Windows-1252); HTML body (`001F`/`001E`/`0102`) when no plain body; non-CFB files or messages without that text fall back to legacy-stream salvage |
 
 > PDF note: extractions share `--heavy-concurrency` slots -- auto: half of
 > `--workers`, at most 1 per 4 GiB of available RAM, clamped to 1..8.
@@ -499,8 +500,9 @@ built from a clean tree and committed on their own.
 
 **How does multi-word matching work?**
 One- and two-term searches use unordered strict AND within a proximity window:
-all terms must appear within `--distance` characters of each other (default
-5000) somewhere in the file. Searches with three or more terms use Strategy A
+all terms must appear within `--distance` UTF-8 bytes of each other (default
+5000, measured between term starts in the cleaned text; non-ASCII characters
+take 2-4 bytes) somewhere in the file. Searches with three or more terms use Strategy A
 ranked matching by default: a result needs the first query term plus at least
 one secondary term, and the best clusters rank by term-length rarity score.
 Pass `--strict` to require all terms for any search size.

@@ -51,7 +51,7 @@ type SearchResult struct {
 	PathMatchCount  int            `json:"-"`
 	BoundaryQuality int            `json:"-"`
 	MatchedTerms    []string       // Distinct query terms from the best window.
-	SpanLength      int            // Character span of the best window.
+	SpanLength      int            // UTF-8 byte span of the best window (first term start to furthest term end).
 	Excerpts        []string       // ANSI-highlighted, for TUI display
 	RawExcerpts     []string       // plain text before highlighting -- for machine-readable output (--json, --plain)
 	ExcerptMatches  [][]MatchRange `json:"-"` // source-validated byte ranges per RawExcerpts entry
@@ -246,7 +246,7 @@ type SearchEngine struct {
 	SmartForms        bool
 	PathOnly          bool
 	Registry          *ExtractorRegistry
-	Distance          int
+	Distance          int // inclusive term-start bound in UTF-8 bytes of cleaned text
 	Silent            bool
 	HeavyConcurrency  int
 	FilterWorkers     int
