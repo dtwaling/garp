@@ -765,6 +765,14 @@ func TestStage3LegacyFallbackStrippedAndExhausted(t *testing.T) {
 	}
 }
 
+func TestStage3LegacyFallbackKeepsTextBetweenStrayBrackets(t *testing.T) {
+	raw := "If <80% free\nneedle\nuntil >90%\nneedle\n"
+	query := compileQuery([]string{"needle"}, PartialModeOff)
+	if got := computeExcerptSpanLinesQuery(raw, lineSpans([]int{0}, []int{0}), query, 200); !slices.Equal(got, []int{2, 4}) {
+		t.Fatalf("legacy anchors=%v, want [2 4]", got)
+	}
+}
+
 func TestStage3RawAnchorValidity(t *testing.T) {
 	raw := "header\nneedle\n"
 	query := compileQuery([]string{"needle"}, PartialModeOff)

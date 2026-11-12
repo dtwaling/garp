@@ -119,7 +119,7 @@ func documentCorrespondence(raw string, clean bool) mappedContent {
 	}
 	strip := func(control string) {
 		m = m.replace(cssRegex, "").replace(jsRegex, "")
-		m = m.replace(htmlTagRegex, " ").replace(htmlEntityRegex, " ")
+		m = m.replace(textTagRegex, " ").replace(htmlEntityRegex, " ")
 		m = m.replace(controlCharRegex, control).replace(junkSymbolsRegex, "")
 		m = m.replace(emailQuotingRegex, "").replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")
 	}

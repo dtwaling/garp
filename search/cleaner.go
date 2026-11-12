@@ -15,8 +15,16 @@ import (
 const unconstrainedDistance = -1
 
 var (
-	// HTML/XML tags
-	htmlTagRegex = regexp.MustCompile(`<[^>]*>`)
+	// Known markup -- the extractors' HTML/XML, where a raw < cannot be text.
+	// Tags open with a letter, /, ! or ? and may span lines.
+	htmlTagRegex = regexp.MustCompile(`<[A-Za-z/!?][^<>]*>`)
+
+	// Text that may be prose -- every non-code document. Element and processing-
+	// instruction tags must close on their own line, so <80%, <--, heredocs
+	// (<<EOF) and multi-line <placeholder ...> prose cannot erase later lines.
+	// Only <!...> may span lines; every match is also an htmlTagRegex match.
+	// cleanSearchContent and documentCorrespondence share this rule.
+	textTagRegex = regexp.MustCompile(`<![^<>]*>|<[A-Za-z/?][^<>\n]*>`)
 
 	// HTML entities
 	htmlEntityRegex = regexp.MustCompile(`&[a-zA-Z0-9#]*;`)
@@ -99,7 +107,7 @@ func cleanStage3Content(raw string, isCode bool) mappedContent {
 func cleanSearchContent(m mappedContent, isCode bool) mappedContent {
 	if !isCode {
 		m = m.replace(cssRegex, " ").replace(jsRegex, " ")
-		m = m.replace(htmlTagRegex, " ").replace(htmlEntityRegex, " ")
+		m = m.replace(textTagRegex, " ").replace(htmlEntityRegex, " ")
 		m = m.replace(junkSymbolsRegex, "").replace(emailQuotingRegex, "")
 		m = m.replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")
 	}

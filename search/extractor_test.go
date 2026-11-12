@@ -423,6 +423,9 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 		{"binary non-Latin UTF-16LE HTML preserves entity-encoded brackets", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{utf16LE("<html><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "<p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
+		{"binary CP1252 HTML strips multi-line tags and keeps text between stray comparison brackets", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("<html><body>Caf\xe9 <p class=MsoNormal\nstyle='color:red'>load <80% keeps\nwarm cache until >90%</p></body></html>"), nil}), "keeps warm cache until", "MsoNormal"},
 		{"binary HTML without BOM and predominantly Cyrillic body", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{utf16LE("<html><body>" + strings.Repeat("Отчёт о продажах", 30) + "</body></html>"), nil}), "Отчёт о продажах", ""},

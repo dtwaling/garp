@@ -1209,6 +1209,59 @@ func TestCleanContentKeepsTokensAroundStrippedBlocks(t *testing.T) {
 	}
 }
 
+func TestCleanContentStripsOnlyTagSyntax(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"If <80% memory is free\nsession state stays warm\nuntil >90% utilization.", "If <80% memory is free session state stays warm until 90% utilization."},
+		{"client <-- proxy\nsession memory\nserver --> sink", "client <-- proxy session memory server -- sink"},
+		{"a < b and c > d", "a < b and c d"},
+		{"x <= 5 and y >= 3", "x <= 5 and y = 3"},
+		{"keep <80% this <b>alpha</b>", "keep <80% this alpha"},
+		{"<p class=\"lead\">alpha</p>", "alpha"},
+		{"<img src=\"a.png\" alt=\"b\">alpha", "alpha"},
+		{"cat <<EOF\nsession memory warm\nEOF\necho done > log", "cat <<EOF session memory warm EOF echo done log"},
+		{"<What an attacker gains.\nBe specific.> alpha", "<What an attacker gains. Be specific. alpha"},
+		{"<img src=\"a.png\"\n  alt=\"b\">alpha", "<img src=\"a.png\" alt=\"b\" alpha"},
+		{"<!-- note\nspans lines -->alpha", "alpha"},
+		{"<?xml version=\"1.0\"?><!DOCTYPE html>alpha", "alpha"},
+		{"</div>alpha<br/>", "alpha"},
+	} {
+		if got := CleanContent(tc.raw); got != tc.want {
+			t.Errorf("CleanContent(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+		if got := cleanStage3Content(tc.raw, false).text; got != tc.want {
+			t.Errorf("cleanStage3Content(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestEngineSearchesTextBetweenStrayAngleBrackets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notes.md")
+	if err := os.WriteFile(path, []byte("alpha <80% load\nsecret beta\nuntil >90% gamma\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		terms, excludes []string
+		want            int
+	}{
+		{[]string{"alpha", "beta"}, nil, 1},
+		{[]string{"alpha", "gamma"}, []string{"secret"}, 0},
+	} {
+		engine := NewSearchEngine(tc.terms, tc.excludes, nil, false, 1, 1000)
+		engine.Silent = true
+		matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
+		if err != nil || len(matches) != tc.want {
+			t.Fatalf("terms=%v excludes=%v: matches=%+v err=%v, want %d", tc.terms, tc.excludes, matches, err, tc.want)
+		}
+		if tc.want == 0 {
+			continue
+		}
+		results, err := engine.ExtractAndBuildResults(matches)
+		if err != nil || len(results) != 1 || !slices.Equal(results[0].StartLines, []int{1}) || !strings.Contains(strings.Join(results[0].RawExcerpts, " "), "secret beta") {
+			t.Fatalf("results=%+v err=%v, want one excerpt with secret beta at line 1", results, err)
+		}
+	}
+}
+
 func TestCleaningStageParity(t *testing.T) {
 	for _, raw := range []string{"header\n> alpha beta hidden\nvisible\n", "\n-----\nvisible", "<style>hidden</style>\n<script>hidden</script>\n<b>A1,2B</b> &amp;\tend", "\u00a0\x00é\u0085\tX\xff\u2003", "", " \n\t"} {
 		for _, code := range []bool{false, true} {
