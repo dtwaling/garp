@@ -8,10 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"garp/config"
 )
 
 // These fixtures contain terms that need decoding or extraction. Reuse the real
@@ -957,6 +960,170 @@ func wildcardAttachedAcrossBoundary(match string, boundary int) string {
 func wildcardAttachedAtOverlapStart(match string, boundary, overlap int) string {
 	start := boundary - overlap
 	return strings.Repeat("z", start-1) + "x" + match + "!" + strings.Repeat("z", boundary-start-len(match))
+}
+
+const literalAuditPhrase = "can you confirm that the quarterly reconciliation for the northwind account, including every adjustment, was approved? the auditors asked"
+
+func cleanedAdmissionFixtures(t *testing.T) map[string]string {
+	t.Helper()
+	dir := t.TempDir()
+	text := "Please review PDF32 for 2026Report balance\ndetails, foo<script>x</script>bar R&amp;D\n" +
+		literalAuditPhrase + " again\nx a*b c*d e*f g*h i*j y\n ? \n"
+	fixtures := make(map[string]string)
+	for _, ext := range []string{"txt", "md", "html", "go", "docx", "odt", "eml", "mbox", "rtf", "doc"} {
+		path := filepath.Join(dir, "sample."+ext)
+		data := []byte(text)
+		switch ext {
+		case "docx", "odt":
+			entry := "word/document.xml"
+			if ext == "odt" {
+				entry = "content.xml"
+			}
+			writeXMLContainer(t, path, entry, "<document><p>"+text+"</p></document>")
+		case "eml", "mbox":
+			data = []byte("Subject: ordinary\nContent-Type: text/plain\n\n" + text)
+			if ext == "mbox" {
+				data = append([]byte("From sender@example.com Mon Jan 1 00:00:00 2024\n"), data...)
+			}
+		case "rtf":
+			data = []byte(`{\rtf1 ` + text + `}`)
+		case "doc":
+			data = docWithWordStream(data)
+		}
+		if ext != "docx" && ext != "odt" {
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fixtures[ext] = path
+	}
+	return fixtures
+}
+
+func TestDiscoverySmallFileAllocation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "small.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("ordinary prose. ", 128)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A short term bypasses the raw gate, so this also guards the spacing reader.
+	admission, provable := prefilterAdmissionQuery(compileQuery([]string{"zz"}, PartialModeOff))
+	gate := prefilterRawGate(admission)
+	result := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if discoveryAdmitsTextFile(path, admission, gate, provable, int64(maxFileSizeBytes)) {
+				b.Fatal("unexpected admission")
+			}
+		}
+	})
+	if got := result.AllocedBytesPerOp(); got >= 64*1024 {
+		t.Fatalf("2 KB admission allocates %d bytes; want less than 64 KiB", got)
+	}
+}
+
+func TestPrefiltersAdmitEveryCleanedMatch(t *testing.T) {
+	if len(literalAuditPhrase) != 137 {
+		t.Fatal("literal phrase must exercise the wildcard byte limit")
+	}
+	for ext, path := range cleanedAdmissionFixtures(t) {
+		t.Run(ext, func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(data)
+			if IsBinaryFormat(path) {
+				extractor, ok := NewExtractorRegistry().GetExtractor(ext)
+				if !ok {
+					t.Fatal("missing extractor")
+				}
+				text, err = extractor.ExtractText(data)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			cleaned := cleanSearchContent(mappedContent{text: text}, config.IsCodeFile(path)).text
+			for _, tc := range []struct {
+				terms []string
+				mode  PartialMode
+				opts  QueryOptions
+			}{
+				{[]string{"pdf"}, PartialModeOff, QueryOptions{}},
+				{[]string{"report"}, PartialModeOff, QueryOptions{}},
+				{[]string{"32"}, PartialModeOff, QueryOptions{}},
+				{[]string{"?"}, PartialModeContains, QueryOptions{}},
+				{[]string{"PDF"}, PartialModeOff, QueryOptions{CaseSensitive: true}},
+				{[]string{"balance details"}, PartialModeOff, QueryOptions{}},
+				{[]string{"pdf 32"}, PartialModeOff, QueryOptions{}},
+				{[]string{"details, foo"}, PartialModeOff, QueryOptions{}},
+				{[]string{"review", "pdf"}, PartialModeOff, QueryOptions{}},
+				{[]string{"pdf", "zzqqx", "report"}, PartialModeOff, QueryOptions{}},
+				{[]string{"foobar"}, PartialModeOff, QueryOptions{}},
+				{[]string{"rep"}, PartialModePrefix, QueryOptions{}},
+				{[]string{"P?F"}, PartialModeOff, QueryOptions{}},
+				{[]string{literalAuditPhrase}, PartialModeOff, QueryOptions{}},
+				{[]string{"a*b c*d e*f g*h i*j"}, PartialModeOff, QueryOptions{}},
+			} {
+				for _, strict := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/strict=%v", strings.Join(tc.terms, "+"), strict), func(t *testing.T) {
+						query := compileQueryWithOptions(tc.terms, tc.mode, tc.opts)
+						if len(tc.terms[0]) <= 2 && prefilterRawGate(query).matchers != nil {
+							t.Fatal("short or literal wildcard term must not have a raw gate")
+						}
+						_, matches := analyzeRankedText(cleaned, query, 5000, strict)
+						if (tc.terms[0] == literalAuditPhrase || tc.terms[0] == "a*b c*d e*f g*h i*j" || tc.terms[0] == "?") && !matches {
+							t.Fatal("literal phrase fixture must match authoritative text")
+						}
+						if !matches {
+							return
+						}
+						found, decided := streamContainsRankedWordsDecidedQuery(path, query, strict, defaultTextMaxBytes)
+						if IsBinaryFormat(path) {
+							found, decided = binaryStreamingPrefilterDecidedQuery(path, query, defaultTextMaxBytes, strict)
+						}
+						if decided && !found {
+							t.Error("Stage 2 rejected authoritative match")
+						}
+						files, err := findFilesWithFirstWordProgressQueryWithOptions(query, []string{ext}, 1, nil, filepath.Dir(path), nil, tc.mode, WalkOptions{})
+						if err != nil || !slices.Contains(files, path) {
+							t.Errorf("Stage 1: files=%v err=%v", files, err)
+						}
+						files, err = FindFilesWithFirstWordPartial(tc.terms[0], []string{ext}, filepath.Dir(path), nil, tc.mode)
+						if err != nil || !slices.Contains(files, path) {
+							t.Errorf("legacy Stage 1: files=%v err=%v", files, err)
+						}
+					})
+				}
+			}
+		})
+	}
+}
+
+func TestPrefiltersStayDecisiveOnOrdinaryMisses(t *testing.T) {
+	for ext, path := range cleanedAdmissionFixtures(t) {
+		if ext == "doc" {
+			continue
+		}
+		for _, terms := range [][]string{{"zzqqx"}, {"review zzqqx"}, {"review", "zzqqx"}, {"pdf3"}, {"repor"}, {"zz"}, {"z?"}} {
+			t.Run(ext+"/"+strings.Join(terms, "+"), func(t *testing.T) {
+				if len(terms) == 1 && strings.Contains(terms[0], " ") && (ext == "eml" || ext == "mbox") {
+					return
+				}
+				q := compileQuery(terms, PartialModeOff)
+				found, decided := streamContainsRankedWordsDecidedQuery(path, q, true, defaultTextMaxBytes)
+				if IsBinaryFormat(path) {
+					found, decided = binaryStreamingPrefilterDecidedQuery(path, q, defaultTextMaxBytes, true)
+				}
+				if found || !decided {
+					t.Errorf("Stage 2=(%v,%v), want (false,true)", found, decided)
+				}
+				// Discovery only considers the primary term, not absent secondary terms.
+				files, err := findFilesWithFirstWordProgressQueryWithOptions(q, []string{ext}, 1, nil, filepath.Dir(path), nil, PartialModeOff, WalkOptions{})
+				if err != nil || slices.Contains(files, path) != (len(terms) > 1) {
+					t.Errorf("Stage 1: files=%v err=%v", files, err)
+				}
+			})
+		}
+	}
 }
 
 func writeXMLContainer(t *testing.T, filePath, entryName, content string) {
