@@ -245,6 +245,9 @@ func containsLiteralExcludeWord(text, word string, caseSensitive bool) bool {
 	if word == "" {
 		return false
 	}
+	if regexpInexact(word) {
+		return containsExcludeWordBytes(text, word, caseSensitive)
+	}
 	literal := regexp.QuoteMeta(word)
 	if !caseSensitive && isWordByte(word[len(word)-1]) {
 		literal += `(?:es|s)?`
@@ -263,6 +266,44 @@ func containsLiteralExcludeWord(text, word string, caseSensitive bool) bool {
 	}
 	pattern := leading + `(?:` + literal + `)` + trailing
 	return getWordRegex(pattern).MatchString(text)
+}
+
+func containsExcludeWordBytes(text, word string, caseSensitive bool) bool {
+	forms := []string{""}
+	if !caseSensitive && isWordByte(word[len(word)-1]) {
+		forms = []string{"es", "s", ""}
+	}
+	boundaries := utf8ByteBoundaries(text)
+	for start := 0; start < len(text); start++ {
+		if !boundaries[start] || !excludeEdgeOK(text, start, word[0], true) {
+			continue
+		}
+		end, ok := matchLiteralBytes(text, start, word, !caseSensitive)
+		if !ok {
+			continue
+		}
+		for _, form := range forms {
+			candidate, ok := matchLiteralBytes(text, end, form, !caseSensitive)
+			if ok && boundaries[candidate] && excludeEdgeOK(text, candidate, word[len(word)-1], false) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// excludeEdgeOK mirrors the exclusion regexp edges: RE2 \b for an ASCII edge
+// byte, and a non-word neighbor (or text edge) for a non-ASCII edge byte.
+func excludeEdgeOK(text string, i int, edge byte, leading bool) bool {
+	before := i > 0 && isWordByte(text[i-1])
+	after := i < len(text) && isWordByte(text[i])
+	if edge < 0x80 {
+		return before != after
+	}
+	if leading {
+		return !before
+	}
+	return !after
 }
 
 // FileInfo represents information about a file

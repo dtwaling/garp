@@ -315,8 +315,7 @@ func compileTermMatcherUncached(term string, requestedMode PartialMode, caseInse
 	leadingBound := !startsWildcard && mode != PartialModeContains
 	trailingBound := !endsWildcard && mode == PartialModeOff
 	strictBoundary := hasWildcardSyntax || strings.ContainsAny(term, "-.")
-	regexpInexact := !utf8.ValidString(term) || strings.Contains(term, "\uFFFD")
-	byteExact := regexpInexact
+	byteExact := regexpInexact(term)
 
 	if trailingBound {
 		assertion := `\B`
@@ -335,7 +334,7 @@ func compileTermMatcherUncached(term string, requestedMode PartialMode, caseInse
 		compatibilityPattern = leftBoundary + compatibilityPattern
 	}
 	corePattern := searchPattern
-	if regexpInexact {
+	if byteExact {
 		// regexp maps every invalid byte and literal U+FFFD to RuneError.
 		// Do not expose an inexact regexp match. Later tasks replace remaining
 		// compatibility callers with exact matcher ranges.
@@ -367,6 +366,12 @@ func compileTermMatcherUncached(term string, requestedMode PartialMode, caseInse
 		maxMatchBytes:   maxMatchBytes,
 		detectionBytes:  detectionBytes,
 	}
+}
+
+// regexpInexact reports terms that need byte-exact matching because regexp
+// decodes every invalid byte and literal U+FFFD as the same RuneError.
+func regexpInexact(term string) bool {
+	return !utf8.ValidString(term) || strings.Contains(term, "\uFFFD")
 }
 
 func wildcardPattern(term string, starWidth int, caseInsensitive bool) string {

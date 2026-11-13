@@ -1678,3 +1678,53 @@ func fileUnderRoot(path, root string) bool {
 	// Relative path must not start with ".."
 	return len(rel) > 0 && rel[0] != '.'
 }
+
+func TestExcludeWordByteScanMatchesRegexpEdges(t *testing.T) {
+	words := []string{"test", "@spam.com", "wild*", "café", "élan", "c++", "-foo", "k", "BLOCK", "ab"}
+	texts := []string{
+		"", "test", "tests", "testes", "contest", "(test), passed", "bob@spam.com",
+		"x @spam.com", "Needle wild*", "wild*x", "Le café crème", "cafés", "xcafé",
+		"Un élan", "c++ x", "c++x", " -foo", "x-foo", "\u212a", "K k",
+		"BLOCK\u017f", "BLOCKs", "blocked", "ab_", "ab\xff",
+	}
+	for _, cs := range []bool{false, true} {
+		for _, word := range words {
+			for _, text := range texts {
+				got := containsExcludeWordBytes(text, word, cs)
+				want := containsLiteralExcludeWord(text, word, cs)
+				if got != want {
+					t.Errorf("text=%q word=%q caseSensitive=%v: byte scan=%v, regexp=%v", text, word, cs, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestExcludeWordsMatchInvalidUTF8Exactly(t *testing.T) {
+	tests := []struct {
+		text, exclude string
+		cs, want      bool
+	}{
+		{"needle \xff here", "\xff", false, true},
+		{"needle alpha", "\xff", false, false},
+		{"needle \uFFFD here", "\xff", false, false},
+		{"needle \xff here", "\uFFFD", false, false},
+		{"needle \uFFFD here", "\uFFFD", false, true},
+		{"FOO\xff bar", "foo\xff", false, true},
+		{"FOO\xff bar", "foo\xff", true, false},
+		{"xfoo\xff bar", "foo\xff", false, false},
+		{"foo\xffs bar", "foo\xff", false, false},
+		{"price \xe2\x82\xac", "\xe2\x82", false, false},
+		{"a \xe2\x82 b", "\xe2\x82", false, true},
+		{"Needle wild*\xff", "wild*\xff", false, true},
+		{"Needle wildcard\xff", "wild*\xff", false, false},
+		{"x \xffcs y", "\xffc", false, true},
+		{"x \xffcs y", "\xffc", true, false},
+	}
+	for _, tt := range tests {
+		got := CheckTextContainsExcludeWordsWithOptions(tt.text, []string{tt.exclude}, QueryOptions{CaseSensitive: tt.cs})
+		if got != tt.want {
+			t.Errorf("text=%q exclude=%q caseSensitive=%v: got %v, want %v", tt.text, tt.exclude, tt.cs, got, tt.want)
+		}
+	}
+}
