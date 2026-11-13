@@ -887,9 +887,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 
 	// Start workers
 	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for candidate := range jobs {
 				maybePaceForMemory()
 				matched := handleOne(candidate)
@@ -909,7 +907,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 						cur, len(candidateFiles), percent, elapsed)
 				}
 			}
-		}()
+		})
 	}
 
 	// Enqueue jobs
