@@ -814,13 +814,14 @@ func TestRepositoryPolicyCountDiscoveryAndExtraction(t *testing.T) {
 	fileTypes := config.BuildRipgrepFileTypes(true)
 	options := WalkOptions{MaxFileSize: policyFixtureLimit}
 
-	want := []string{".env.example", "cap.txt", "nested/main.txt", "visible.txt"}
+	want := []string{".env.example", "cap.txt", "visible.txt"}
 	candidates := assertPolicyCountDiscoveryParity(t, root, fileTypes, nil, options, want)
 
 	noIgnoreWant := append(append([]string{}, want...),
 		"ancestor-ignored.txt",
 		"local-ignored.txt",
 		"nested/local-ignored.txt",
+		"nested/main.txt",
 		"repository-excluded.txt",
 		"scoped/main.txt",
 	)

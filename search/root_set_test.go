@@ -123,12 +123,15 @@ func TestPrepareStartRootsNestedTraversalAndReporting(t *testing.T) {
 		name          string
 		childName     string
 		ignore        string
+		repository    bool
 		wantTraversal int
 	}{
 		{name: "reachable", childName: "child", wantTraversal: 1},
 		{name: "hard skipped", childName: "node_modules", wantTraversal: 2},
 		{name: "hidden hard skipped", childName: ".cache", wantTraversal: 2},
 		{name: "ignored", childName: "ignored", ignore: "ignored/\n", wantTraversal: 2},
+		{name: "nested repository", childName: "repo", repository: true, wantTraversal: 1},
+		{name: "ignored nested repository", childName: "repo", ignore: "repo/\n", repository: true, wantTraversal: 2},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -136,6 +139,11 @@ func TestPrepareStartRootsNestedTraversalAndReporting(t *testing.T) {
 			child := filepath.Join(parent, test.childName)
 			if err := os.MkdirAll(child, 0o755); err != nil {
 				t.Fatal(err)
+			}
+			if test.repository {
+				if err := os.MkdirAll(filepath.Join(child, ".git"), 0o755); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if test.ignore != "" {
 				if err := os.WriteFile(filepath.Join(parent, ".ignore"), []byte(test.ignore), 0o644); err != nil {
