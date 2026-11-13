@@ -1046,8 +1046,8 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				continue
 			}
 			if !utf8.FullRune(data[tailStart:]) && utf8.Valid(data[:tailStart]) {
-				r, width := utf8.DecodeRune(raw[tailStart:])
-				if r != utf8.RuneError && width > len(data)-tailStart {
+				_, width := utf8.DecodeRune(raw[tailStart:])
+				if width > len(data)-tailStart {
 					data = data[:tailStart]
 				}
 			}
