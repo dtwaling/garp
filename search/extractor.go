@@ -3,6 +3,7 @@ package search
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -244,14 +245,15 @@ func (e *MBOXExtractor) ExtractText(data []byte) (string, error) {
 // PDFExtractor extracts text from .pdf files
 type PDFExtractor struct{}
 
-// DOCExtractor extracts text from legacy .doc (OLE/CFB) files using conservative salvage
+// DOCExtractor extracts Word 97-2003 piece-table text, with conservative legacy salvage.
 type DOCExtractor struct{}
 
 // ExtractText implements the Extractor interface for DOC files.
 // Strategy:
 // - Open OLE/CFB and read at most 2 MiB in total from the WordDocument, 1Table and 0Table streams
-// - Decode each stream via decodeLegacyStreamText: UTF-16 when a BOM or dominant NUL lane proves it,
-// else both the printable-ASCII and UTF-16LE readings
+// - Prefer the root Word 97-2003 FIB piece table (Windows-1252 or UTF-16LE pieces)
+// - Otherwise decode each stream via decodeLegacyStreamText: UTF-16 when a BOM or dominant NUL lane proves it,
+// else printable ASCII, plus UTF-16LE only with sufficient odd-lane NUL density and dominance or aligned UTF-16LE markup
 // - If CFB parsing fails or no stream yields text, salvage printable ASCII from a bounded prefix
 func (e *DOCExtractor) ExtractText(data []byte) (string, error) {
 	return e.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
@@ -273,8 +275,8 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		return salvagePrintableASCII(data, false), nil
 	}
 
-	var out strings.Builder
-
+	var parts [][]byte
+	root := make(map[string][]byte)
 	total := int64(0)
 	targetStreams := map[string]bool{
 		"WordDocument": true,
@@ -300,6 +302,17 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			continue
 		}
 
+		parts = append(parts, b)
+		if len(ent.Path) == 0 && root[name] == nil {
+			root[name] = b
+		}
+	}
+	if text, ok := wordPieceText(root["WordDocument"], root["0Table"], root["1Table"], maxTotal); ok {
+		return text, nil
+	}
+
+	var out strings.Builder
+	for _, b := range parts {
 		text := decodeLegacyStreamText(b, true)
 		if text != "" {
 			if out.Len() > 0 {
@@ -319,6 +332,123 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		result = salvagePrintableASCII(data, true)
 	}
 	return result, nil
+}
+
+// wordPieceText decodes a Word 97-2003 FIB/CLX piece table. Unsupported or
+// malformed tables leave legacy salvage authoritative; bounded prefixes stop
+// at the first unavailable piece or at the output byte budget.
+func wordPieceText(word, table0, table1 []byte, maxBytes int64) (string, bool) {
+	le16, le32 := binary.LittleEndian.Uint16, binary.LittleEndian.Uint32
+	if len(word) < 34 || le16(word) != 0xa5ec || maxBytes <= 0 {
+		return "", false
+	}
+	flags := le16(word[0x0a:])
+	if flags&0x8100 != 0 { // fEncrypted | fObfuscated
+		return "", false
+	}
+	table := table0
+	if flags&0x0200 != 0 { // fWhichTblStm
+		table = table1
+	}
+	lw := 34 + 2*int(le16(word[32:]))
+	if len(word) < lw+2 {
+		return "", false
+	}
+	fcLcb := lw + 2 + 4*int(le16(word[lw:]))
+	if len(word) < fcLcb+2+34*8 || le16(word[fcLcb:]) < 34 {
+		return "", false
+	}
+	// FibRgFcLcb97 entry 33 locates CLX in the selected table stream.
+	fcClx := int64(le32(word[fcLcb+2+33*8:]))
+	lcbClx := int64(le32(word[fcLcb+2+33*8+4:]))
+	if fcClx > int64(len(table)) || lcbClx > int64(len(table))-fcClx {
+		return "", false
+	}
+	clx := table[fcClx : fcClx+lcbClx]
+	for len(clx) > 0 && clx[0] == 0x01 { // Skip Prc property records.
+		if len(clx) < 3 {
+			return "", false
+		}
+		cb := int(int16(le16(clx[1:])))
+		if cb < 0 || cb > len(clx)-3 {
+			return "", false
+		}
+		clx = clx[3+cb:]
+	}
+	if len(clx) < 5 || clx[0] != 0x02 {
+		return "", false
+	}
+	lcb := int64(le32(clx[1:]))
+	if lcb < 16 || lcb > int64(len(clx)-5) || (lcb-4)%12 != 0 {
+		return "", false
+	}
+	plc := clx[5 : 5+lcb]
+	n := int((lcb - 4) / 12)
+	var out strings.Builder
+	var pendingHigh uint16
+	for i := 0; i < n; i++ {
+		start, end := le32(plc[4*i:]), le32(plc[4*(i+1):])
+		if end < start {
+			return "", false
+		}
+		fc := le32(plc[4*(n+1)+8*i+2:])
+		off, count := int64(fc), int64(end-start)
+		compressed := fc&0x40000000 != 0
+		if compressed {
+			off = int64(fc&0x3fffffff) / 2
+		} else {
+			count *= 2
+		}
+		if off > int64(len(word)) || count > int64(len(word))-off {
+			break
+		}
+		data := word[off : off+count]
+		var piece string
+		if compressed {
+			piece, _ = charmap.Windows1252.NewDecoder().String(string(data))
+			if pendingHigh != 0 {
+				piece = "\ufffd" + piece
+				pendingHigh = 0
+			}
+		} else {
+			units := make([]uint16, 0, len(data)/2+1)
+			if pendingHigh != 0 {
+				units = append(units, pendingHigh)
+				pendingHigh = 0
+			}
+			for j := 0; j < len(data); j += 2 {
+				units = append(units, le16(data[j:]))
+			}
+			// CPs count UTF-16 units, so a pair can span logical pieces
+			// even when their bytes are not contiguous in WordDocument.
+			if last := len(units) - 1; last >= 0 && units[last] >= 0xd800 && units[last] <= 0xdbff {
+				pendingHigh = units[last]
+				units = units[:last]
+			}
+			piece = string(utf16.Decode(units))
+		}
+		remain := maxBytes - int64(out.Len())
+		if int64(len(piece)) > remain {
+			out.WriteString(strings.ToValidUTF8(piece[:remain], ""))
+			pendingHigh = 0 // The omitted prefix precedes any pending unit.
+			break
+		}
+		out.WriteString(piece)
+		if int64(out.Len()) == maxBytes {
+			break
+		}
+	}
+	if pendingHigh != 0 && maxBytes-int64(out.Len()) >= int64(utf8.RuneLen(utf8.RuneError)) {
+		out.WriteRune(utf8.RuneError)
+	}
+	text := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '<' || r == '>' {
+			return ' '
+		}
+		return r
+	}, out.String())
+	text = strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
+	return text, text != ""
 }
 
 // ExtractText implements the Extractor interface for PDF files
@@ -372,9 +502,13 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			if page.V.IsNull() {
 				return
 			}
-			content := page.Content()
 			remaining := limit - int64(b.Len())
-			pageText, perr := pdfTextItemsToStringBounded(content.Text, remaining)
+			items, perr := pdfPageText(page, remaining)
+			if perr != nil {
+				pageErr = perr
+				return
+			}
+			pageText, perr := pdfTextItemsToStringBounded(items, remaining)
 			if perr != nil {
 				pageErr = perr
 				return
@@ -422,6 +556,7 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				}
 			}
 			pagePlain, pageErr = p.GetPlainText(fonts)
+			pagePlain = pdfLigatureFolder.Replace(pagePlain)
 		}()
 		if pageErr != nil {
 			break
@@ -438,6 +573,277 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 	return "", nil
 }
 
+/*
+The PDF matrix and page interpreter below are adapted from
+
+	github.com/ledongthuc/pdf, page.go (5959a4027728).
+
+Copyright 2014 The Go Authors. All rights reserved.
+
+Upstream BSD license:
+Copyright (c) 2009 The Go Authors. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+  - Redistributions of source code must retain the above copyright
+
+notice, this list of conditions and the following disclaimer.
+  - Redistributions in binary form must reproduce the above
+
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+  - Neither the name of Google Inc. nor the names of its
+
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+type pdfMatrix [3][3]float64
+
+var pdfIdentity = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
+
+func (x pdfMatrix) mul(y pdfMatrix) pdfMatrix {
+	var z pdfMatrix
+	for i := 0; i < 3; i++ {
+		for j := 0; j < 3; j++ {
+			for k := 0; k < 3; k++ {
+				z[i][j] += x[i][k] * y[k][j]
+			}
+		}
+	}
+	return z
+}
+
+type pdfFontMetrics struct {
+	name        string
+	enc         pdf.TextEncoding
+	first, last int
+	widths      pdf.Value
+}
+
+func (f *pdfFontMetrics) width(code int) float64 {
+	if f == nil || code < f.first || code > f.last {
+		return 0
+	}
+	return f.widths.Index(code - f.first).Float64()
+}
+
+type pdfTextState struct {
+	Tc, Th, Tl, Tfs, Trise float64
+	Tf                     *pdfFontMetrics
+	Tm, Tlm, CTM           pdfMatrix
+}
+
+var errPDFPageBudget = errors.New("pdf page text budget")
+
+// pdfPageText mirrors ledongthuc/pdf's Page.Content text operators and panic
+// behavior, but resolves font metrics once per page instead of once per glyph.
+// Keep byte-indexed widths and TJ's synthetic newline for extraction parity.
+func pdfPageText(p pdf.Page, maxBytes int64) (text []pdf.Text, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if r != errPDFPageBudget {
+				panic(r)
+			}
+			text, err = nil, fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, maxBytes)
+		}
+	}()
+	if p.V.IsNull() || p.V.Key("Contents").Kind() == pdf.Null {
+		return nil, nil
+	}
+	strm := p.V.Key("Contents")
+	fonts := make(map[string]*pdfFontMetrics)
+	var enc pdf.TextEncoding
+	g := pdfTextState{Th: 1, CTM: pdfIdentity}
+	var rawBytes int64
+	// Whitespace and empty TJ arrays also emit items. Bound those allocations
+	// independently, while allowing ordinary whitespace after an exact budget.
+	maxItems := max(maxBytes, 4096)
+	showText := func(s string) {
+		decoded := s
+		if enc != nil {
+			decoded = enc.Decode(s)
+		}
+		n := 0
+		for _, ch := range decoded {
+			rawBytes += int64(len(pdfLigatureFolder.Replace(strings.TrimSpace(string(ch)))))
+			if rawBytes > maxBytes || int64(len(text)) >= maxItems {
+				panic(errPDFPageBudget)
+			}
+			var w0 float64
+			if n < len(s) {
+				w0 = g.Tf.width(int(s[n]))
+			}
+			n++
+			var name string
+			if g.Tf != nil {
+				name = g.Tf.name
+			}
+			trm := pdfMatrix{{g.Tfs * g.Th, 0, 0}, {0, g.Tfs, 0}, {0, g.Trise, 1}}.mul(g.Tm).mul(g.CTM)
+			text = append(text, pdf.Text{Font: name, FontSize: trm[0][0], X: trm[2][0], Y: trm[2][1], W: w0 / 1000 * trm[0][0], S: string(ch)})
+			tx := (w0/1000*g.Tfs + g.Tc) * g.Th
+			g.Tm = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
+		}
+	}
+	var stack []pdfTextState
+	pdf.Interpret(strm, func(stk *pdf.Stack, op string) {
+		args := make([]pdf.Value, stk.Len())
+		for i := len(args) - 1; i >= 0; i-- {
+			args[i] = stk.Pop()
+		}
+		switch op {
+		case "cm":
+			if len(args) != 6 {
+				panic("bad g.Tm")
+			}
+			var m pdfMatrix
+			for i := 0; i < 6; i++ {
+				m[i/2][i%2] = args[i].Float64()
+			}
+			m[2][2] = 1
+			g.CTM = m.mul(g.CTM)
+		case "re":
+			if len(args) != 4 {
+				panic("bad re")
+			}
+		case "q":
+			stack = append(stack, g)
+		case "Q":
+			n := len(stack) - 1
+			g = stack[n]
+			stack = stack[:n]
+		case "BT":
+			g.Tm = pdfIdentity
+			g.Tlm = g.Tm
+		case "T*":
+			g.Tlm = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {0, -g.Tl, 1}}.mul(g.Tlm)
+			g.Tm = g.Tlm
+		case "Tc":
+			if len(args) != 1 {
+				panic("bad g.Tc")
+			}
+			g.Tc = args[0].Float64()
+		case "TD":
+			if len(args) != 2 {
+				panic("bad Td")
+			}
+			g.Tl = -args[1].Float64()
+			fallthrough
+		case "Td":
+			if len(args) != 2 {
+				panic("bad Td")
+			}
+			tx, ty := args[0].Float64(), args[1].Float64()
+			g.Tlm = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {tx, ty, 1}}.mul(g.Tlm)
+			g.Tm = g.Tlm
+		case "Tf":
+			if len(args) != 2 {
+				panic("bad TL")
+			}
+			name := args[0].Name()
+			f, ok := fonts[name]
+			if !ok {
+				font := p.Font(name)
+				base := font.BaseFont()
+				if i := strings.Index(base, "+"); i >= 0 {
+					base = base[i+1:]
+				}
+				f = &pdfFontMetrics{name: base, enc: font.Encoder(), first: font.FirstChar(), last: font.LastChar(), widths: font.V.Key("Widths")}
+				fonts[name] = f
+			}
+			g.Tf, enc = f, f.enc
+			g.Tfs = args[1].Float64()
+		case "\"":
+			if len(args) != 3 {
+				panic("bad \" operator")
+			}
+			g.Tc = args[1].Float64()
+			args = args[2:]
+			fallthrough
+		case "'":
+			if len(args) != 1 {
+				panic("bad ' operator")
+			}
+			g.Tlm = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {0, -g.Tl, 1}}.mul(g.Tlm)
+			g.Tm = g.Tlm
+			fallthrough
+		case "Tj":
+			if len(args) != 1 {
+				panic("bad Tj operator")
+			}
+			showText(args[0].RawString())
+		case "TJ":
+			v := args[0]
+			for i := 0; i < v.Len(); i++ {
+				x := v.Index(i)
+				if x.Kind() == pdf.String {
+					showText(x.RawString())
+				} else {
+					tx := -x.Float64() / 1000 * g.Tfs * g.Th
+					g.Tm = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
+				}
+			}
+			showText("\n")
+		case "TL":
+			if len(args) != 1 {
+				panic("bad TL")
+			}
+			g.Tl = args[0].Float64()
+		case "Tm":
+			if len(args) != 6 {
+				panic("bad g.Tm")
+			}
+			var m pdfMatrix
+			for i := 0; i < 6; i++ {
+				m[i/2][i%2] = args[i].Float64()
+			}
+			m[2][2] = 1
+			g.Tm, g.Tlm = m, m
+		case "Tr":
+			if len(args) != 1 {
+				panic("bad Tr")
+			}
+		case "Ts":
+			if len(args) != 1 {
+				panic("bad Ts")
+			}
+			g.Trise = args[0].Float64()
+		case "Tw":
+			if len(args) != 1 {
+				panic("bad g.Tw")
+			}
+		case "Tz":
+			if len(args) != 1 {
+				panic("bad Tz")
+			}
+			g.Th = args[0].Float64() / 100
+		}
+	})
+	return text, nil
+}
+
+// TeX justification can shrink a 0.25 em Times space below 0.25 em.
+const pdfWordGapEm = 0.15
+
+var pdfLigatureFolder = strings.NewReplacer(
+	"\ufb00", "ff", "\ufb01", "fi", "\ufb02", "fl", "\ufb03", "ffi",
+	"\ufb04", "ffl", "\ufb05", "st", "\ufb06", "st",
+)
+
 func pdfTextItemsToString(items []pdf.Text) string {
 	text, _ := pdfTextItemsToStringBounded(items, DefaultMaxExtractedBytes)
 	return text
@@ -450,7 +856,7 @@ func pdfTextItemsToStringBounded(items []pdf.Text, maxBytes int64) (string, erro
 	// Reject oversized pages before allocating and sorting a copy of the items.
 	var rawBytes int64
 	for _, item := range items {
-		rawBytes += int64(len(strings.TrimSpace(item.S)))
+		rawBytes += int64(len(pdfLigatureFolder.Replace(strings.TrimSpace(item.S))))
 		if rawBytes > maxBytes {
 			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, maxBytes)
 		}
@@ -466,7 +872,7 @@ func pdfTextItemsToStringBounded(items []pdf.Text, maxBytes int64) (string, erro
 	havePrev := false
 	pendingSpace := false
 	for _, item := range text {
-		s := strings.TrimSpace(item.S)
+		s := pdfLigatureFolder.Replace(strings.TrimSpace(item.S))
 		if s == "" {
 			if item.S != "" {
 				pendingSpace = true
@@ -483,7 +889,7 @@ func pdfTextItemsToStringBounded(items []pdf.Text, maxBytes int64) (string, erro
 				separator = '\n'
 			} else {
 				gap := item.X - (prev.X + prev.W)
-				if pendingSpace || gap > item.FontSize*0.25 {
+				if pendingSpace || gap > item.FontSize*pdfWordGapEm {
 					separator = ' '
 				}
 			}
@@ -515,8 +921,9 @@ func absFloat(v float64) float64 {
 
 // MSGExtractor extracts Subject and body text from .msg files (Outlook OLE/CFB messages).
 // MAPI property types select decoding: Unicode 001F as UTF-16LE, ANSI 001E as UTF-8 or
-// Windows-1252. Binary 0102 (HTML only) is detected UTF-16, else ANSI plus a UTF-16LE
-// reading when the bytes are invalid UTF-8 or contain NULs.
+// Windows-1252. Binary 0102 (HTML only) is detected UTF-16, else ANSI,
+// plus a UTF-16LE reading only with sufficient odd-lane NUL density and dominance
+// or aligned UTF-16LE markup.
 // HTML is used only without a plain body. Non-CFB input, or a message with no Subject/body
 // text, falls back to bounded legacy-stream decoding.
 type MSGExtractor struct{}
@@ -578,11 +985,12 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				if s, ok := tryDecodeUTF16BestEffort(b); ok {
 					return strings.TrimSpace(s)
 				}
-				// Retain both readings for invalid UTF-8 or NUL-containing streams:
-				// non-Latin UTF-16LE can be valid UTF-8, but its HTML tags have NULs.
+				// Retain both readings only with sufficient odd-lane NUL density and
+				// dominance or aligned UTF-16LE markup, even with non-Latin low-byte NULs.
+				// 8-bit HTML gets the single ANSI reading.
 				// Strip each reading's tags before combining, while markup is intact.
 				// Leave entities encoded for the final HTML pass to decode once.
-				if !utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0 {
+				if hasUTF16LECadence(b) {
 					text := stripReadingMarkup(decodeANSIText(b)) + "\n" +
 						stripReadingMarkup(utf16LEReadingWithMarkup(b, true))
 					return strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
@@ -618,11 +1026,33 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		}
 	}
 
-	// Fallback: bounded shared legacy-stream decoding.
+	// Fallback: bounded shared legacy-stream decoding. Read up to three extra
+	// bytes only to distinguish a split UTF-8 rune from a Windows-1252 high byte.
 	fallbackMax := min(limit, 2*1024*1024)
-	data, readErr := io.ReadAll(io.NewSectionReader(r, 0, min(size, fallbackMax)))
+	readSize := min(size, fallbackMax)
+	if fallbackMax < size {
+		readSize = min(size, fallbackMax+int64(utf8.UTFMax-1))
+	}
+	raw, readErr := io.ReadAll(io.NewSectionReader(r, 0, readSize))
 	if readErr != nil {
 		return "", readErr
+	}
+	data := raw[:min(int64(len(raw)), fallbackMax)]
+	// Never decode lookahead bytes, and leave NUL-bearing binary/UTF-16 data
+	// untouched. Trim only a verified split rune after an otherwise UTF-8 prefix.
+	if len(data) < len(raw) && bytes.IndexByte(data, 0) < 0 {
+		for tailStart := len(data) - 1; tailStart >= 0 && tailStart >= len(data)-(utf8.UTFMax-1); tailStart-- {
+			if !utf8.RuneStart(data[tailStart]) {
+				continue
+			}
+			if !utf8.FullRune(data[tailStart:]) && utf8.Valid(data[:tailStart]) {
+				_, width := utf8.DecodeRune(raw[tailStart:])
+				if width > len(data)-tailStart {
+					data = data[:tailStart]
+				}
+			}
+			break
+		}
 	}
 	return decodeLegacyStreamText(data, false), nil
 }
@@ -690,9 +1120,11 @@ func utf16LEReadingWithMarkup(b []byte, keepMarkup bool) string {
 	return out.String()
 }
 
-// decodeLegacyStreamText is the shared Stage 1/2/3 legacy-stream rule. Without
-// encoding evidence, retain both readings; Word's piece table is the exact
-// alternative for distinguishing mixed 8-bit and UTF-16LE text from binary noise.
+// decodeLegacyStreamText is the shared Stage 1/2/3 legacy-stream rule: UTF-16 when
+// a BOM or dense NUL lane proves it; otherwise one 8-bit reading, plus a UTF-16LE
+// reading only with sufficient odd-lane NUL density and dominance or aligned
+// UTF-16LE markup.
+// Word 97 files use the piece table first.
 func decodeLegacyStreamText(b []byte, binary bool) string {
 	if s, ok := tryDecodeUTF16BestEffort(b); ok {
 		if binary {
@@ -701,10 +1133,54 @@ func decodeLegacyStreamText(b []byte, binary bool) string {
 		return strings.TrimSpace(whitespaceRegex.ReplaceAllString(s, " "))
 	}
 	if !binary {
-		return strings.TrimSpace(stripReadingMarkup(salvagePrintableASCII(b, false)) + "\n" +
-			stripReadingMarkup(utf16LEReadingWithMarkup(b, true)))
+		text := stripReadingMarkup(legacyEightBitText(b))
+		if hasUTF16LECadence(b) {
+			text += "\n" + stripReadingMarkup(utf16LEReadingWithMarkup(b, true))
+		}
+		return strings.TrimSpace(text)
 	}
-	return strings.TrimSpace(salvagePrintableASCII(b, binary) + "\n" + utf16LEReading(b))
+	text := salvagePrintableASCII(b, binary)
+	if hasUTF16LECadence(b) {
+		text += "\n" + utf16LEReading(b)
+	}
+	return strings.TrimSpace(text)
+}
+
+// legacyEightBitText decodes NUL-free streams as UTF-8, else Windows-1252,
+// and salvages printable ASCII from streams containing NULs (binary data).
+func legacyEightBitText(b []byte) string {
+	if bytes.IndexByte(b, 0) >= 0 {
+		return salvagePrintableASCII(b, false)
+	}
+	s := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, decodeANSIText(b))
+	return strings.TrimSpace(whitespaceRegex.ReplaceAllString(s, " "))
+}
+
+// hasUTF16LECadence requires NULs in at least 20% of odd-byte positions and more
+// than 4x as many as in the even lane, or aligned UTF-16LE markup. Trailing NUL
+// padding is ignored. The density floor rejects sparse 8-bit separators but is
+// looser than isLikelyUTF16LE's 30% to allow mixed streams with binary headers.
+// Markup remains evidence even with non-Latin nonzero high bytes and NUL low bytes.
+func hasUTF16LECadence(b []byte) bool {
+	b = bytes.TrimRight(b, "\x00")
+	even, odd := utf16ZeroLanes(b)
+	if float64(odd) >= 0.20*float64(len(b)/2) && odd > 4*even {
+		return true
+	}
+	for i := 0; i+3 < len(b); i += 2 {
+		if b[i] == '<' && b[i+1] == 0 && b[i+3] == 0 {
+			x := b[i+2]
+			if x >= 'a' && x <= 'z' || x >= 'A' && x <= 'Z' || x == '/' || x == '!' || x == '?' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // tryDecodeUTF16BestEffort requires a BOM or a dominant NUL lane before decoding.

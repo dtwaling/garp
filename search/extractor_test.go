@@ -3,6 +3,7 @@ package search
 import (
 	"archive/zip"
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ledongthuc/pdf"
+	"golang.org/x/text/encoding/charmap"
 )
 
 func TestMBOXExtractorRequiresValidMessages(t *testing.T) {
@@ -351,14 +353,27 @@ func TestReaderAtExtractorEnforcesMaxExtractedBytes(t *testing.T) {
 func TestDOCAndMSGReaderAtBoundedFallback(t *testing.T) {
 	for ext, e := range map[string]ReaderAtExtractor{"doc": &DOCExtractor{}, "msg": &MSGExtractor{}} {
 		t.Run(ext, func(t *testing.T) {
-			data := []byte("fallback prefix " + strings.Repeat(" ", 4096-len("fallback prefix ")))
-			r := &guardedReaderAt{t: t, r: bytes.NewReader(data), end: 4096}
-			text, err := e.ExtractReaderAt(r, 50*1024*1024, 4096)
-			if err != nil || text == "" {
-				t.Fatalf("extraction = (%q, %v)", text, err)
+			for _, limit := range []int64{4096, 4 * 1024 * 1024} {
+				cap := min(limit, 2*1024*1024)
+				end := cap
+				if ext == "msg" {
+					end += utf8.UTFMax - 1 // Boundary lookahead is not decoded.
+				}
+				data := []byte("fallback prefix " + strings.Repeat(" ", int(cap)-len("fallback prefix ")) + "XYZ")
+				r := &guardedReaderAt{t: t, r: bytes.NewReader(data), end: end}
+				text, err := e.ExtractReaderAt(r, 50*1024*1024, limit)
+				if err != nil || text != "fallback prefix" {
+					t.Fatalf("limit %d: extraction = (%q, %v)", limit, text, err)
+				}
+				if r.maxEnd != end {
+					t.Fatalf("prefix read ends at %d, want %d", r.maxEnd, end)
+				}
 			}
-			if r.maxEnd != 4096 {
-				t.Fatalf("prefix read ends at %d, want 4096", r.maxEnd)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			text, err := e.ExtractReaderAt(contextReaderAt{ctx, strings.NewReader("fallback prefix")}, 15, 4)
+			if text != "" || !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled extraction = (%q, %v)", text, err)
 			}
 		})
 	}
@@ -486,65 +501,115 @@ func cp1252MSG() []byte {
 		[2][]byte{[]byte("Men\xfa caf\xe9" + strings.Repeat(" ", 4087)), []byte("Le caf\xe9 cr\xe8me ordered" + strings.Repeat(" ", 4075))})
 }
 
+var binaryCatalogMSG = []byte("\x01\x01\x00\x04\x00\x00arithmetic exception, numeric overflow\x00\x00\x02\x00\x00\x00invalid database key\x00\x00")
+
+var sparseNULCatalogMSG = []byte("arithmetic overflow\x00invalid database key\x00")
+
+var chineseHTMLUTF16LE = utf16LE("<html><body><p>" + strings.Repeat("\u4e00\u5b63\u5ea6\u62a5\u544a", 30) + "</p></body></html>")
+
 func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 	hiddenHTML := utf16LE("<html><style>cssneedle</style><script>jsneedle()</script><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</body></html>")
 	for _, tc := range []struct {
-		name    string
-		data    []byte
-		want    string
-		notWant string
+		name     string
+		data     []byte
+		want     string
+		notWant  string
+		maxBytes int64 // Nonzero limits also require exact output.
 	}{
-		{"ANSI 001E", ansiMSG(), "subject body", ""},
-		{"ANSI 001E CP1252 decodes to UTF-8", cp1252MSG(), "Menú café Le café crème ordered", ""},
+		{"ANSI 001E", ansiMSG(), "subject body", "", 0},
+		{"ANSI 001E CP1252 decodes to UTF-8", cp1252MSG(), "Menú café Le café crème ordered", "", 0},
 		{"ANSI 001E UTF-8 is not decoded twice", cfbWithRootStreams(
 			[2]string{"__substg1.0_0037001E", "__substg1.0_1000001E"},
-			[2][]byte{[]byte("Le café crème" + strings.Repeat(" ", 4081)), []byte("body" + strings.Repeat(" ", 4092))}), "Le café crème", "cafÃ©"},
+			[2][]byte{[]byte("Le café crème" + strings.Repeat(" ", 4081)), []byte("body" + strings.Repeat(" ", 4092))}), "Le café crème", "cafÃ©", 0},
 		{"binary CP1252 HTML decodes 8-bit text", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("<html><body><p>Le caf\xe9 cr\xe8me au lait</p></body></html>"), nil}), "Le café crème au lait", ""},
-		{"non-CFB 8-bit fallback", []byte("arithmetic exception, numeric overflow"), "arithmetic exception, numeric overflow", ""},
+			[2][]byte{[]byte("<html><body><p>Le caf\xe9 cr\xe8me au lait</p></body></html>"), nil}), "Le café crème au lait", "", 0},
+		{"non-CFB 8-bit fallback", []byte("arithmetic exception, numeric overflow"), "arithmetic exception, numeric overflow", "", 0},
+		{"binary CP1252 HTML excludes UTF-16LE mojibake", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("<html><body><p>cp1252htmlmarker caf\xe9 text \x93quoted\x94</p></body></html>"), nil}), "cp1252htmlmarker caf\u00e9 text \u201cquoted\u201d", "\u683c\u6d74\u3e6c\u623c\u646f\u3e79", 0},
+		{"non-CFB UTF-8 Tcl catalog", []byte("namespace eval ::tk {\n	::msgcat::mcset de \"&Open...\" \"\u00d6&ffnen...\"\n}\n"), "\u00d6&ffnen...", "\u616e\u656d\u7073\u6361", 0},
+		{"non-CFB CP1252 text", []byte("Men\xfa caf\xe9 cr\xe8me"), "Men\u00fa caf\u00e9 cr\u00e8me", "\u654d", 0},
+		{"non-CFB binary catalog", binaryCatalogMSG, "arithmetic exception, numeric overflow invalid database key", "\u7261\u7469\u6d68\u7465\u6369", 0},
+		{"non-CFB sparse NUL catalog", sparseNULCatalogMSG, "arithmetic overflow invalid database key", "\u7261\u7469\u6d68\u7465\u6369", 0},
+		{"binary 0102 sparse NUL text", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{sparseNULCatalogMSG, nil}), "arithmetic overflow", "\u7261\u7469\u6d68\u7465\u6369", 0},
+		{"binary UTF-16LE HTML with low-byte NULs", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{chineseHTMLUTF16LE, nil}), "\u4e00\u5b63\u5ea6\u62a5\u544a", "", 0},
+		{"non-CFB UTF-16LE HTML with low-byte NULs", chineseHTMLUTF16LE, "\u4e00\u5b63\u5ea6\u62a5\u544a", "", 0},
+		{"non-CFB UTF-8 Latin cut after byte 1", []byte("café 季度 é"), "café 季度", "Ã å", int64(len("café 季度 ") + 1)},
+		{"non-CFB UTF-8 CJK cut after byte 1", []byte("café 季度 报"), "café 季度", "Ã å", int64(len("café 季度 ") + 1)},
+		{"non-CFB UTF-8 CJK cut after byte 2", []byte("café 季度 报"), "café 季度", "Ã å", int64(len("café 季度 ") + 2)},
+		{"non-CFB UTF-8 emoji cut after byte 1", []byte("café 季度 😀"), "café 季度", "Ã å", int64(len("café 季度 ") + 1)},
+		{"non-CFB UTF-8 emoji cut after byte 2", []byte("café 季度 😀"), "café 季度", "Ã å", int64(len("café 季度 ") + 2)},
+		{"non-CFB UTF-8 emoji cut after byte 3", []byte("café 季度 😀"), "café 季度", "Ã å", int64(len("café 季度 ") + 3)},
+		{"non-CFB UTF-8 replacement rune cut after byte 1", []byte("caf\u00e9 \ufffd tail"), "caf\u00e9", "\u00c3", int64(len("caf\u00e9 ") + 1)},
+		{"non-CFB UTF-8 replacement rune cut after byte 2", []byte("caf\u00e9 \ufffd tail"), "caf\u00e9", "\u00c3", int64(len("caf\u00e9 ") + 2)},
+		{"non-CFB UTF-8 replacement rune complete at limit", []byte("caf\u00e9 \ufffd tail"), "caf\u00e9 \ufffd", "\u00c3", int64(len("caf\u00e9 \ufffd"))},
+		{"non-CFB UTF-8 Latin untruncated", []byte("café 季度 é"), "café 季度 é", "Ã å", int64(len("café 季度 é"))},
+		{"non-CFB UTF-8 CJK untruncated", []byte("café 季度 报"), "café 季度 报", "Ã å", int64(len("café 季度 报"))},
+		{"non-CFB UTF-8 complete rune at limit", []byte("café 季度 报 remainder"), "café 季度 报", "Ã å", int64(len("café 季度 报"))},
+		{"non-CFB CP1252 truncated ASCII tail", []byte("caf\xe9 text remainder"), "café text", "", int64(len("caf\xe9 text"))},
+		{"non-CFB CP1252 truncated incomplete-looking tail", []byte("caf\xe9 caf\xe9 remainder"), "café café", "", int64(len("caf\xe9 caf\xe9"))},
+		{"non-CFB CP1252 untruncated incomplete-looking tail", []byte("caf\xe9"), "café", "", int64(len("caf\xe9"))},
+		{"non-CFB CP1252 lone high byte at limit", []byte("caf\xe9 remainder"), "café", "", 4},
+		{"non-CFB UTF-8 same leading byte at limit", []byte("caf\u9000 remainder"), "caf", "", 4},
+		{"non-CFB CP1252 incomplete lookahead", []byte("caf\xe9\x80"), "café", "", 4},
+		{"non-CFB CP1252 invalid lookahead", []byte("caf\xe9\x80 remainder"), "café", "", 4},
+		{"non-CFB invalid UTF-8 tail is retained", []byte("report \xe0\x80 remainder"), "report à€", "", int64(len("report \xe0\x80"))},
+		{"non-CFB UTF-16LE complete unit at limit", utf16LE("ABCé remainder"), "ABCé", "", int64(len(utf16LE("ABCé")))},
+		{"non-CFB UTF-8 emoji untruncated", []byte("café 季度 😀"), "café 季度 😀", "Ã å", int64(len("café 季度 😀"))},
+		{"non-CFB UTF-8 Latin complete rune at limit", []byte("café 季度 é remainder"), "café 季度 é", "Ã å", int64(len("café 季度 é"))},
+		{"non-CFB UTF-8 emoji complete rune at limit", []byte("café 季度 😀 remainder"), "café 季度 😀", "Ã å", int64(len("café 季度 😀"))},
 		{"binary UTF-16LE HTML drops hidden blocks", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{hiddenHTML, nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle"},
-		{"non-CFB UTF-16LE HTML drops hidden blocks", hiddenHTML, "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle"},
+			[2][]byte{hiddenHTML, nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle", 0},
+		{"non-CFB UTF-16LE HTML drops hidden blocks", hiddenHTML, "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle", 0},
 		{"Unicode 001F without BOM", cfbWithRootStreams(
 			[2]string{"__substg1.0_0037001F", "__substg1.0_1000001F"},
-			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема", ""},
+			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема", "", 0},
 		{"binary HTML without BOM and predominantly non-Latin body", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{utf16LE(`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal"},
+			[2][]byte{utf16LE(`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal", 0},
 		{"binary UTF-16LE HTML isolates stray brackets between readings", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{utf16LE("<html><body><p>report > limit</p>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "\u503c"), nil}), "report limit \u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", ""},
+			[2][]byte{utf16LE("<html><body><p>report > limit</p>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "\u503c"), nil}), "report limit \u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "", 0},
 		{"non-CFB UTF-16LE HTML strips attributes", utf16LE(
-			`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal"},
+			`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal", 0},
 		{"binary CP1252 HTML preserves entity-encoded brackets", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("<html><body>Caf\xe9 <p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
+			[2][]byte{[]byte("<html><body>Caf\xe9 <p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", "", 0},
 		{"binary non-Latin UTF-16LE HTML preserves entity-encoded brackets", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{utf16LE("<html><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "<p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
+			[2][]byte{utf16LE("<html><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "<p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", "", 0},
 		{"binary CP1252 HTML strips multi-line tags and keeps text between stray comparison brackets", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("<html><body>Caf\xe9 <p class=MsoNormal\nstyle='color:red'>load <80% keeps\nwarm cache until >90%</p></body></html>"), nil}), "keeps warm cache until", "MsoNormal"},
+			[2][]byte{[]byte("<html><body>Caf\xe9 <p class=MsoNormal\nstyle='color:red'>load <80% keeps\nwarm cache until >90%</p></body></html>"), nil}), "keeps warm cache until", "MsoNormal", 0},
 		{"binary HTML without BOM and predominantly Cyrillic body", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{utf16LE("<html><body>" + strings.Repeat("Отчёт о продажах", 30) + "</body></html>"), nil}), "Отчёт о продажах", ""},
+			[2][]byte{utf16LE("<html><body>" + strings.Repeat("Отчёт о продажах", 30) + "</body></html>"), nil}), "Отчёт о продажах", "", 0},
 		{"binary CP1252 HTML strips quoted attributes after newline", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\n\"load <80%\">alpha"), nil}), "alpha", "secret"},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\n\"load <80%\">alpha"), nil}), "alpha", "secret", 0},
 		{"binary CP1252 HTML strips angle sequences in attributes", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"<< </ 80%\">alpha"), nil}), "alpha", "secret"},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"<< </ 80%\">alpha"), nil}), "alpha", "secret", 0},
 		{"binary CP1252 HTML strips ordinary attributes", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"load\">alpha"), nil}), "alpha", "secret"},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"load\">alpha"), nil}), "alpha", "secret", 0},
 		{"binary UTF-8 HTML preserves non-ASCII text and strips attributes", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte(`<html><body><p class="MsoNormal">café 東京都の報告書 quarterly</p></body></html>`), nil}), "café 東京都の報告書 quarterly", "MsoNormal"},
+			[2][]byte{[]byte(`<html><body><p class="MsoNormal">café 東京都の報告書 quarterly</p></body></html>`), nil}), "café 東京都の報告書 quarterly", "MsoNormal", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := (&MSGExtractor{}).ExtractText(tc.data)
+			got, err := (&MSGExtractor{}).ExtractReaderAt(bytes.NewReader(tc.data), int64(len(tc.data)), tc.maxBytes)
+			if tc.maxBytes != 0 {
+				if got != tc.want {
+					t.Errorf("bounded extraction = %q, want exactly %q", got, tc.want)
+				}
+			}
 			if err != nil || !strings.Contains(got, tc.want) {
 				t.Errorf("extraction = (%q, %v), want containing %q", got, err, tc.want)
 			}
@@ -570,24 +635,177 @@ func docWithWordStream(text []byte) []byte {
 	return cfbWithRootStreams([2]string{"WordDocument", "1Table"}, [2][]byte{stream, nil})
 }
 
+// wordStreamsWithPieces builds a Word 97 FIB and CLX pointing to repeated pieces.
+func wordStreamsWithPieces(text string, unicode bool, copies int) [2][]byte {
+	word, table := make([]byte, 4096), make([]byte, 4096)
+	put16, put32 := binary.LittleEndian.PutUint16, binary.LittleEndian.PutUint32
+	put16(word, 0xa5ec)
+	put16(word[2:], 0x00c1)
+	put16(word[0x0a:], 0x0200)
+	put16(word[32:], 14)
+	put16(word[62:], 22)
+	put16(word[152:], 93)
+	put32(word[154+33*8+4:], uint32(5+4+12*copies))
+	payload, err := charmap.Windows1252.NewEncoder().Bytes([]byte(text))
+	fc, count := uint32(2048|0x40000000), len(payload)
+	if unicode {
+		payload = utf16LE(text)
+		fc, count = 1024, len(payload)/2
+	} else if err != nil {
+		panic(err)
+	}
+	copy(word[1024:], payload)
+	table[0] = 0x02
+	put32(table[1:], uint32(4+12*copies))
+	for i := 0; i <= copies; i++ {
+		put32(table[5+4*i:], uint32(i*count))
+	}
+	for i := 0; i < copies; i++ {
+		put32(table[5+4*(copies+1)+8*i+2:], fc)
+	}
+	return [2][]byte{word, table}
+}
+
+func wordDocWithText(text string, unicode bool) []byte {
+	return cfbWithRootStreams([2]string{"WordDocument", "1Table"}, wordStreamsWithPieces(text, unicode, 1))
+}
+
 func TestDOCExtractorReadsEightBitAndUTF16LEStreams(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		text []byte
+		data []byte
 		want string
 	}{
-		{"UTF-16LE ASCII", utf16LE("subject body"), "subject body"},
-		{"8-bit", []byte("subject body"), "subject body"},
-		{"UTF-16LE Cyrillic", utf16LE("Привет мир документ"), "Привет мир документ"},
-		{"UTF-16LE Latin-1", utf16LE("Résumé für Ärzte"), "Résumé für Ärzte"},
-		{"UTF-16LE CJK", utf16LE("東京都の報告書"), "東京都の報告書"},
+		{"8-bit salvage without FIB", docWithWordStream([]byte("subject body")), "subject body"},
+		{"sparse NUL catalog without FIB", cfbWithRootStreams([2]string{"WordDocument", "1Table"},
+			[2][]byte{sparseNULCatalogMSG, nil}), "arithmetic overflow invalid database key"},
+		{"UTF-16LE HTML with low-byte NULs without FIB", docWithWordStream(chineseHTMLUTF16LE), "\u4e00\u5b63\u5ea6\u62a5\u544a"},
+		{"dense UTF-16LE without FIB", cfbWithRootStreams([2]string{"WordDocument", "1Table"},
+			[2][]byte{utf16LE(strings.Repeat("subject body ", 157)), nil}), "subject body subject body"},
+		{"UTF-16LE ASCII piece", wordDocWithText("subject body", true), "subject body"},
+		{"UTF-16LE Cyrillic piece", wordDocWithText("\u041f\u0440\u0438\u0432\u0435\u0442 \u043c\u0438\u0440 \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442", true), "\u041f\u0440\u0438\u0432\u0435\u0442 \u043c\u0438\u0440 \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442"},
+		{"UTF-16LE Latin-1 piece", wordDocWithText("R\u00e9sum\u00e9 f\u00fcr \u00c4rzte", true), "R\u00e9sum\u00e9 f\u00fcr \u00c4rzte"},
+		{"UTF-16LE CJK piece", wordDocWithText("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", true), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8"},
+		{"compressed Windows-1252 piece", wordDocWithText("R\u00e9sum\u00e9 caf\u00e9 a < b", false), "R\u00e9sum\u00e9 caf\u00e9 a b"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := (&DOCExtractor{}).ExtractText(docWithWordStream(tc.text))
+			got, err := (&DOCExtractor{}).ExtractText(tc.data)
 			if err != nil || !strings.Contains(got, tc.want) || strings.ContainsAny(got, "<>") {
 				t.Fatalf("extraction = (%q, %v), want containing %q without angle brackets", got, err, tc.want)
 			}
+			isHighRune := func(r rune) bool { return r >= 0x3000 }
+			if strings.IndexFunc(tc.want, isHighRune) < 0 && strings.IndexFunc(got, isHighRune) >= 0 {
+				t.Errorf("extraction = %q, must not contain spurious high runes", got)
+			}
 		})
+	}
+}
+
+func TestWordPieceTextCapsOverlappingPieces(t *testing.T) {
+	for _, tc := range []struct {
+		name, first, second, want string
+		gap                       int
+		compressed                bool
+	}{
+		{"split pair adjacent", "A\x00\x3d\xd8", "\x00\xdeB\x00", "A😀B", 0, false},
+		{"split pair non-contiguous", "A\x00\x3d\xd8", "\x00\xdeB\x00", "A😀B", 128, false},
+		{"complete pair", string(utf16LE("A😀B")), "", "A😀B", 0, false},
+		{"pair before lone high", string(utf16LE("A😀")) + "\x3d\xd8", "", "A😀\ufffd", 0, false},
+		{"lone high at end", "A\x00\x3d\xd8", "", "A\ufffd", 0, false},
+		{"high before BMP", "A\x00\x3d\xd8", "B\x00", "A\ufffdB", 0, false},
+		{"high before compressed", "A\x00\x3d\xd8", "B\xe9", "A\ufffdBé", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := wordStreamsWithPieces("", true, 2)
+			put32 := binary.LittleEndian.PutUint32
+			off := 1024 + len(tc.first) + tc.gap
+			copy(s[0][1024:], tc.first)
+			copy(s[0][off:], tc.second)
+			count, fc := len(tc.second)/2, uint32(off)
+			if tc.compressed {
+				count, fc = len(tc.second), uint32(off*2)|0x40000000
+			}
+			put32(s[1][5+4:], uint32(len(tc.first)/2))
+			put32(s[1][5+8:], uint32(len(tc.first)/2+count))
+			put32(s[1][5+12+8+2:], fc)
+			for cap := 1; cap <= 16; cap++ {
+				want := strings.ToValidUTF8(tc.want[:min(cap, len(tc.want))], "")
+				got, ok := wordPieceText(s[0], nil, s[1], int64(cap))
+				if !ok || got != want || len(got) > cap || !utf8.ValidString(got) {
+					t.Errorf("cap %d: piece text = (%q, %t), want %q and bounded UTF-8", cap, got, ok, want)
+				}
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, text   string
+		flags, ident uint16
+		ok           bool
+	}{
+		{"overlapping pieces", "subject body text ", 0x0200, 0xa5ec, true},
+		{"encrypted FIB", "subject body text ", 0x0300, 0xa5ec, false},
+		{"obfuscated FIB", "subject body text ", 0x8200, 0xa5ec, false},
+		{"older FIB", "subject body text ", 0x0200, 0xa5dc, false},
+		{"control characters only", "\x00\x07\r	\x7f<> ", 0x0200, 0xa5ec, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := wordStreamsWithPieces(tc.text, true, 200)
+			binary.LittleEndian.PutUint16(s[0], tc.ident)
+			binary.LittleEndian.PutUint16(s[0][0x0a:], tc.flags)
+			got, ok := wordPieceText(s[0], nil, s[1], 64)
+			if ok != tc.ok || len(got) > 64 || !utf8.ValidString(got) ||
+				(ok && !strings.HasPrefix(got, "subject body text subject")) || (!ok && got != "") {
+				t.Fatalf("piece text = (%q, %t), want ok=%t and bounded UTF-8", got, ok, tc.ok)
+			}
+		})
+	}
+}
+
+func TestHasUTF16LECadence(t *testing.T) {
+	mixedLatin := append(bytes.Repeat([]byte{1, 2}, 40), utf16LE("subject body")...)
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"CP1252 text", []byte("caf\xe9 text"), false},
+		{"zero-padded CP1252 HTML", []byte("<p>caf\xe9</p>" + strings.Repeat("\x00", 4083)), false},
+		{"binary catalog", binaryCatalogMSG, false},
+		{"sparse NUL catalog", sparseNULCatalogMSG, false},
+		{"several sparse NULs", bytes.Repeat([]byte("arithmetic overflow\x00"), 4), false},
+		{"BOM-less UTF-16LE Latin", utf16LE("subject body"), true},
+		{"UTF-16LE Latin with binary header", mixedLatin, true},
+		{"UTF-16LE CJK HTML", utf16LE("<p>" + strings.Repeat("\u6771\u4eac\u90fd", 30) + "</p>"), true},
+		{"UTF-16LE HTML with low-byte NULs", chineseHTMLUTF16LE, true},
+		{"UTF-16LE uppercase tag", utf16LE("<P>" + strings.Repeat("\u4e00", 30)), true},
+		{"UTF-16LE closing tag", utf16LE(strings.Repeat("\u4e00", 30) + "</p>"), true},
+		{"UTF-16LE declaration", utf16LE("<!DOCTYPE html>" + strings.Repeat("\u4e00", 30)), true},
+		{"UTF-16LE processing instruction", utf16LE("<?xml?>" + strings.Repeat("\u4e00", 30)), true},
+		{"unaligned UTF-16LE markup", append([]byte{1}, chineseHTMLUTF16LE...), false},
+		{"UTF-16LE comparison is not markup", utf16LE("<8 " + strings.Repeat("\u4e00", 30)), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasUTF16LECadence(tc.data); got != tc.want {
+				t.Fatalf("cadence = %t, want %t", got, tc.want)
+			}
+		})
+	}
+	if _, ok := tryDecodeUTF16BestEffort(chineseHTMLUTF16LE); ok {
+		t.Fatal("CJK fixture must exercise the secondary UTF-16LE reading")
+	}
+	for _, binary := range []bool{false, true} {
+		if got := decodeLegacyStreamText(chineseHTMLUTF16LE, binary); !strings.Contains(got, "\u4e00\u5b63\u5ea6\u62a5\u544a") {
+			t.Errorf("binary=%t: legacy decode lost Chinese text: %q", binary, got)
+		}
+		if got := decodeLegacyStreamText(sparseNULCatalogMSG, binary); !strings.Contains(got, "arithmetic overflow invalid database key") || strings.Contains(got, "\u7261\u7469\u6d68\u7465\u6369") {
+			t.Errorf("binary=%t: sparse NUL decode lost 8-bit text or added mojibake: %q", binary, got)
+		}
+		if got := decodeLegacyStreamText(mixedLatin, binary); !strings.Contains(got, "subject body") {
+			t.Errorf("binary=%t: legacy decode lost mixed Latin text: %q", binary, got)
+		}
+	}
+	if _, ok := tryDecodeUTF16BestEffort(mixedLatin); ok {
+		t.Fatal("mixed Latin fixture must exercise the secondary UTF-16LE reading")
 	}
 }
 
@@ -685,6 +903,7 @@ func TestPDFReaderAtPageTextBudgets(t *testing.T) {
 		{"single raw bytes", []string{text}, 3, ""},
 		{"single page newline", []string{text}, 4, ""},
 		{"single exact", []string{text}, 5, "abcd"},
+		{"folded ligature exact", []string{"BT /F1 12 Tf (\x93) Tj ET\n"}, 3, "fi"},
 		{"space separator", []string{"BT /F1 12 Tf 72 720 Td (ab) Tj 100 0 Td (cd) Tj ET\n"}, 4, ""},
 		{"line separator", []string{"BT /F1 12 Tf 72 720 Td (ab) Tj 0 -20 Td (cd) Tj ET\n"}, 4, ""},
 		{"multiple raw bytes", []string{text, text}, 8, ""},
@@ -737,6 +956,7 @@ func TestPDFReaderAtPlainTextFallbackBudgets(t *testing.T) {
 		{"single limit before broken page", []string{fallback, broken}, 4, ""},
 		{"cumulative limit before broken page", []string{fallback, fallback, broken}, 9, ""},
 		{"exact single", []string{fallback}, 5, "abcd"},
+		{"folded ligature exact", []string{"Q BT /F1 12 Tf (\x93) Tj ET\n"}, 3, "fi"},
 		{"exact cumulative", []string{fallback, fallback}, 10, "abcd\nabcd"},
 		{"retain preceding text on page error", []string{fallback, broken}, 10, "abcd"},
 	} {
@@ -760,6 +980,162 @@ func TestPDFReaderAtPlainTextFallbackBudgets(t *testing.T) {
 				}
 			} else if err != nil || got != tc.want {
 				t.Fatalf("extraction = (%q, %v), want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+type readCountingReaderAt struct {
+	io.ReaderAt
+	reads int
+}
+
+func (r *readCountingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	r.reads++
+	return r.ReaderAt.ReadAt(p, off)
+}
+
+func pdfWithIndirectWidths(t *testing.T, stream string, compressed bool) []byte {
+	t.Helper()
+	// Map lowercase glyph codes to uppercase text, not their raw-byte reading.
+	const cmap = `begincmap
+1 begincodespacerange <00> <ff> endcodespacerange
+1 beginbfchar <0a> <000a> endbfchar
+1 beginbfrange <61> <7a> <0041> endbfrange
+endcmap
+`
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(stream), stream),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Times-Roman /FirstChar 32 /LastChar 126 /Widths 6 0 R /ToUnicode 7 0 R >>",
+		"[" + strings.Repeat("500 ", 95) + "]",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(cmap), cmap),
+	}
+	if compressed {
+		// Objects 5 (font) and 6 (widths) are reached only via type-2 xrefs.
+		header := fmt.Sprintf("5 0 6 %d ", len(objects[4])+1)
+		var packed bytes.Buffer
+		zw := zlib.NewWriter(&packed)
+		if _, err := io.WriteString(zw, header+objects[4]+" "+objects[5]); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		objects = append(objects, fmt.Sprintf("<< /Type /ObjStm /N 2 /First %d /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream", len(header), packed.Len(), packed.Bytes()))
+	}
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.5\n")
+	offsets := make([]int, len(objects)+1)
+	for i, obj := range objects {
+		if compressed && (i == 4 || i == 5) {
+			continue
+		}
+		offsets[i+1] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, obj)
+	}
+	xref := b.Len()
+	if compressed {
+		offsets = append(offsets, xref) // Object 9 is the xref stream itself.
+		entries := make([]byte, 7*len(offsets))
+		for id, off := range offsets {
+			e := entries[7*id : 7*(id+1)]
+			e[0] = 1
+			binary.BigEndian.PutUint32(e[1:5], uint32(off))
+			switch id {
+			case 0:
+				e[0] = 0
+				binary.BigEndian.PutUint16(e[5:], 65535)
+			case 5, 6:
+				e[0] = 2
+				binary.BigEndian.PutUint32(e[1:5], 8)
+				binary.BigEndian.PutUint16(e[5:], uint16(id-5))
+			}
+		}
+		fmt.Fprintf(&b, "9 0 obj\n<< /Type /XRef /Size %d /Root 1 0 R /W [1 4 2] /Length %d >>\nstream\n%s\nendstream\nendobj\n", len(offsets), len(entries), entries)
+	} else {
+		fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f\n", len(offsets))
+		for _, off := range offsets[1:] {
+			fmt.Fprintf(&b, "%010d 00000 n\n", off)
+		}
+		fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\n", len(offsets))
+	}
+	fmt.Fprintf(&b, "startxref\n%d\n%%%%EOF\n", xref)
+	return b.Bytes()
+}
+
+func TestPDFPageTextMatchesContentAndResolvesFontsOncePerPage(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		compressed bool
+	}{
+		{"object stream", true},
+		{"plain indirect", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var reads []int
+			for _, n := range []int{10, 1000} {
+				data := pdfWithIndirectWidths(t, fmt.Sprintf("q 1 0 0 1 10 0 cm BT /F1 10 Tf 2 Tc 110 Tz 1 Ts 72 720 Td (%s) Tj [(x) -333 (y)] TJ 14 TL T* (next) ' 1 0 (quote) \" /F1 10 Tf 0 Tr 2 Tw 1 0 0 1 20 30 Tm 0 -14 TD (end) Tj ET 0 0 1 1 re Q\n", strings.Repeat("a", n)), tc.compressed)
+				reader, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				page := reader.Page(1)
+				want := page.Content().Text
+				got, err := pdfPageText(page, DefaultMaxExtractedBytes)
+				if err != nil || len(got) != len(want) {
+					t.Fatalf("%d glyphs: items = %d, want %d; err = %v", n, len(got), len(want), err)
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Fatalf("%d glyphs, item %d: got %+v, want %+v", n, i, got[i], want[i])
+					}
+				}
+				if _, err := pdfPageText(page, int64(n)); !errors.Is(err, ErrExtractionLimit) {
+					t.Fatalf("%d glyphs: budget error = %v", n, err)
+				}
+				counter := &readCountingReaderAt{ReaderAt: bytes.NewReader(data)}
+				text, err := (&PDFExtractor{}).ExtractReaderAt(counter, int64(len(data)), 0)
+				wantText := strings.Repeat("A ", n) + "X Y\nN E X T\nQUOTE\nEND"
+				if err != nil || text != wantText {
+					t.Fatalf("extraction = (%q, %v), want %q", text, err, wantText)
+				}
+				reads = append(reads, counter.reads)
+			}
+			if reads[0] != reads[1] {
+				t.Fatalf("ReadAt calls scale with glyph count: %v", reads)
+			}
+			t.Logf("ReadAt calls for 10 and 1000 glyphs: %v", reads)
+		})
+	}
+
+	for _, stream := range []string{"re", "Tr", "Q", "cm", "Tc", "TD", "Td", "Tf", "\"", "'", "Tj", "TJ", "TL", "Tm", "Ts", "Tw", "Tz"} {
+		t.Run("panic/"+stream, func(t *testing.T) {
+			data := pdfWithPageStreams(stream + "\n")
+			reader, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			panics := func(f func()) (value any) {
+				defer func() { value = recover() }()
+				f()
+				return nil
+			}
+			want := panics(func() { reader.Page(1).Content() })
+			got := panics(func() { _, _ = pdfPageText(reader.Page(1), DefaultMaxExtractedBytes) })
+			if want == nil || fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("panic = %v, want %v", got, want)
+			}
+		})
+	}
+	for _, stream := range []string{"(" + strings.Repeat(" ", 4097) + ") Tj", strings.Repeat("[] TJ ", 4097)} {
+		t.Run("whitespace item budget", func(t *testing.T) {
+			data := pdfWithPageStreams("BT /F1 12 Tf " + stream + " ET\n")
+			text, err := (&PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), 1)
+			if text != "" || !errors.Is(err, ErrExtractionLimit) {
+				t.Fatalf("extraction = (%q, %v), want extraction limit", text, err)
 			}
 		})
 	}
@@ -991,11 +1367,48 @@ func TestPDFTextItemsToString_ReconstructsGlyphSpacing(t *testing.T) {
 		{X: 54, Y: 84, W: 6, FontSize: 12, S: "e"},
 	}
 
+	var x float64
+	for _, run := range []struct {
+		text string
+		gap  float64
+	}{
+		{"shrunk", 2.4}, {"space", 2.4}, {"ke", 1.2}, {"rn", 2.4}, {"\ufb01gure", 0},
+	} {
+		for _, ch := range run.text {
+			items = append(items, pdf.Text{X: x, Y: 68, W: 6, FontSize: 12, S: string(ch)})
+			x += 6
+		}
+		x += run.gap
+	}
 	got := pdfTextItemsToString(items)
+	if !strings.Contains(got, "shrunk space kern figure") {
+		t.Fatalf("expected shrunk spaces, intact kern and folded ligature, got %q", got)
+	}
 	if !strings.Contains(got, "Hamiltonian cycles") {
 		t.Fatalf("expected word gap without letter spacing, got %q", got)
 	}
 	if !strings.Contains(got, "\nimpossible") {
 		t.Fatalf("expected line break before impossible, got %q", got)
+	}
+	for i, want := range []string{"ff", "fi", "fl", "ffi", "ffl", "st", "st"} {
+		t.Run("ligature/"+string(rune(0xfb00+i)), func(t *testing.T) {
+			// Before Tf, the library's no-op encoder preserves raw UTF-8.
+			data := pdfWithPageStreams(fmt.Sprintf("BT (%c) Tj ET\n", 0xfb00+i))
+			r, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			limit := int64(len(want))
+			items, err := pdfPageText(r.Page(1), limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := pdfTextItemsToStringBounded(items, limit); err != nil || got != want {
+				t.Fatalf("folded text = (%q, %v), want %q", got, err, want)
+			}
+			if _, err := pdfPageText(r.Page(1), limit-1); !errors.Is(err, ErrExtractionLimit) {
+				t.Fatalf("short budget error = %v", err)
+			}
+		})
 	}
 }
