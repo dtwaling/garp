@@ -490,6 +490,8 @@ func cp1252MSG() []byte {
 
 var binaryCatalogMSG = []byte("\x01\x01\x00\x04\x00\x00arithmetic exception, numeric overflow\x00\x00\x02\x00\x00\x00invalid database key\x00\x00")
 
+var sparseNULCatalogMSG = []byte("arithmetic overflow\x00invalid database key\x00")
+
 var chineseHTMLUTF16LE = utf16LE("<html><body><p>" + strings.Repeat("\u4e00\u5b63\u5ea6\u62a5\u544a", 30) + "</p></body></html>")
 
 func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
@@ -515,6 +517,10 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 		{"non-CFB UTF-8 Tcl catalog", []byte("namespace eval ::tk {\n	::msgcat::mcset de \"&Open...\" \"\u00d6&ffnen...\"\n}\n"), "\u00d6&ffnen...", "\u616e\u656d\u7073\u6361"},
 		{"non-CFB CP1252 text", []byte("Men\xfa caf\xe9 cr\xe8me"), "Men\u00fa caf\u00e9 cr\u00e8me", "\u654d"},
 		{"non-CFB binary catalog", binaryCatalogMSG, "arithmetic exception, numeric overflow invalid database key", "\u7261\u7469\u6d68\u7465\u6369"},
+		{"non-CFB sparse NUL catalog", sparseNULCatalogMSG, "arithmetic overflow invalid database key", "\u7261\u7469\u6d68\u7465\u6369"},
+		{"binary 0102 sparse NUL text", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{sparseNULCatalogMSG, nil}), "arithmetic overflow", "\u7261\u7469\u6d68\u7465\u6369"},
 		{"binary UTF-16LE HTML with low-byte NULs", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{chineseHTMLUTF16LE, nil}), "\u4e00\u5b63\u5ea6\u62a5\u544a", ""},
@@ -628,6 +634,8 @@ func TestDOCExtractorReadsEightBitAndUTF16LEStreams(t *testing.T) {
 		want string
 	}{
 		{"8-bit salvage without FIB", docWithWordStream([]byte("subject body")), "subject body"},
+		{"sparse NUL catalog without FIB", cfbWithRootStreams([2]string{"WordDocument", "1Table"},
+			[2][]byte{sparseNULCatalogMSG, nil}), "arithmetic overflow invalid database key"},
 		{"UTF-16LE HTML with low-byte NULs without FIB", docWithWordStream(chineseHTMLUTF16LE), "\u4e00\u5b63\u5ea6\u62a5\u544a"},
 		{"dense UTF-16LE without FIB", cfbWithRootStreams([2]string{"WordDocument", "1Table"},
 			[2][]byte{utf16LE(strings.Repeat("subject body ", 157)), nil}), "subject body subject body"},
@@ -676,6 +684,7 @@ func TestWordPieceTextCapsOverlappingPieces(t *testing.T) {
 }
 
 func TestHasUTF16LECadence(t *testing.T) {
+	mixedLatin := append(bytes.Repeat([]byte{1, 2}, 40), utf16LE("subject body")...)
 	for _, tc := range []struct {
 		name string
 		data []byte
@@ -684,6 +693,10 @@ func TestHasUTF16LECadence(t *testing.T) {
 		{"CP1252 text", []byte("caf\xe9 text"), false},
 		{"zero-padded CP1252 HTML", []byte("<p>caf\xe9</p>" + strings.Repeat("\x00", 4083)), false},
 		{"binary catalog", binaryCatalogMSG, false},
+		{"sparse NUL catalog", sparseNULCatalogMSG, false},
+		{"several sparse NULs", bytes.Repeat([]byte("arithmetic overflow\x00"), 4), false},
+		{"BOM-less UTF-16LE Latin", utf16LE("subject body"), true},
+		{"UTF-16LE Latin with binary header", mixedLatin, true},
 		{"UTF-16LE CJK HTML", utf16LE("<p>" + strings.Repeat("\u6771\u4eac\u90fd", 30) + "</p>"), true},
 		{"UTF-16LE HTML with low-byte NULs", chineseHTMLUTF16LE, true},
 		{"UTF-16LE uppercase tag", utf16LE("<P>" + strings.Repeat("\u4e00", 30)), true},
@@ -706,6 +719,15 @@ func TestHasUTF16LECadence(t *testing.T) {
 		if got := decodeLegacyStreamText(chineseHTMLUTF16LE, binary); !strings.Contains(got, "\u4e00\u5b63\u5ea6\u62a5\u544a") {
 			t.Errorf("binary=%t: legacy decode lost Chinese text: %q", binary, got)
 		}
+		if got := decodeLegacyStreamText(sparseNULCatalogMSG, binary); !strings.Contains(got, "arithmetic overflow invalid database key") || strings.Contains(got, "\u7261\u7469\u6d68\u7465\u6369") {
+			t.Errorf("binary=%t: sparse NUL decode lost 8-bit text or added mojibake: %q", binary, got)
+		}
+		if got := decodeLegacyStreamText(mixedLatin, binary); !strings.Contains(got, "subject body") {
+			t.Errorf("binary=%t: legacy decode lost mixed Latin text: %q", binary, got)
+		}
+	}
+	if _, ok := tryDecodeUTF16BestEffort(mixedLatin); ok {
+		t.Fatal("mixed Latin fixture must exercise the secondary UTF-16LE reading")
 	}
 }
 

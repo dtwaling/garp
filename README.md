@@ -403,10 +403,10 @@ restricts to just this family.
 | EML | `enmime` |
 | MBOX | `emersion/go-mbox` |
 | PDF | `ledongthuc/pdf` |
-| DOC | `richardlehane/mscfb` + `WordDocument`/`1Table`/`0Table` streams (2 MiB total): Word 97-2003 text from the FIB piece table (Windows-1252 or UTF-16LE pieces); otherwise UTF-16 when a BOM or dominant NUL lane proves it, else printable ASCII, plus a UTF-16LE reading only when odd-lane NULs dominate or aligned UTF-16LE markup is present; non-CFB or textless files fall back to printable-ASCII salvage |
+| DOC | `richardlehane/mscfb` + `WordDocument`/`1Table`/`0Table` streams (2 MiB total): Word 97-2003 text from the FIB piece table (Windows-1252 or UTF-16LE pieces); otherwise UTF-16 when a BOM or dominant NUL lane proves it, else printable ASCII, plus a UTF-16LE reading only with sufficient odd-lane NUL density and dominance or aligned UTF-16LE markup; non-CFB or textless files fall back to printable-ASCII salvage |
 | DOCX/ODT | `archive/zip` + XML |
 | RTF | regex/control-word stripping |
-| MSG | `richardlehane/mscfb` + MAPI property-typed Subject/Body: Unicode `001F` (UTF-16LE), ANSI `001E` (UTF-8, else Windows-1252); HTML body (`001F`/`001E`/`0102`) when no plain body, with a `0102` UTF-16LE reading only when odd-lane NULs dominate or aligned UTF-16LE markup is present; non-CFB files or messages without that text fall back to legacy-stream decoding (NUL-free text as UTF-8, else Windows-1252) |
+| MSG | `richardlehane/mscfb` + MAPI property-typed Subject/Body: Unicode `001F` (UTF-16LE), ANSI `001E` (UTF-8, else Windows-1252); HTML body (`001F`/`001E`/`0102`) when no plain body, with a `0102` UTF-16LE reading only with sufficient odd-lane NUL density and dominance or aligned UTF-16LE markup; non-CFB files or messages without that text fall back to legacy-stream decoding (NUL-free text as UTF-8, else Windows-1252) |
 
 > PDF note: extractions share `--heavy-concurrency` slots -- auto: half of
 > `--workers`, at most 1 per 4 GiB of available RAM, clamped to 1..8.
