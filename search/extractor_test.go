@@ -489,6 +489,8 @@ func cp1252MSG() []byte {
 
 var binaryCatalogMSG = []byte("\x01\x01\x00\x04\x00\x00arithmetic exception, numeric overflow\x00\x00\x02\x00\x00\x00invalid database key\x00\x00")
 
+var chineseHTMLUTF16LE = utf16LE("<html><body><p>" + strings.Repeat("\u4e00\u5b63\u5ea6\u62a5\u544a", 30) + "</p></body></html>")
+
 func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 	hiddenHTML := utf16LE("<html><style>cssneedle</style><script>jsneedle()</script><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</body></html>")
 	for _, tc := range []struct {
@@ -512,6 +514,10 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 		{"non-CFB UTF-8 Tcl catalog", []byte("namespace eval ::tk {\n	::msgcat::mcset de \"&Open...\" \"\u00d6&ffnen...\"\n}\n"), "\u00d6&ffnen...", "\u616e\u656d\u7073\u6361"},
 		{"non-CFB CP1252 text", []byte("Men\xfa caf\xe9 cr\xe8me"), "Men\u00fa caf\u00e9 cr\u00e8me", "\u654d"},
 		{"non-CFB binary catalog", binaryCatalogMSG, "arithmetic exception, numeric overflow invalid database key", "\u7261\u7469\u6d68\u7465\u6369"},
+		{"binary UTF-16LE HTML with low-byte NULs", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{chineseHTMLUTF16LE, nil}), "\u4e00\u5b63\u5ea6\u62a5\u544a", ""},
+		{"non-CFB UTF-16LE HTML with low-byte NULs", chineseHTMLUTF16LE, "\u4e00\u5b63\u5ea6\u62a5\u544a", ""},
 		{"binary UTF-16LE HTML drops hidden blocks", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{hiddenHTML, nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle"},
@@ -621,6 +627,7 @@ func TestDOCExtractorReadsEightBitAndUTF16LEStreams(t *testing.T) {
 		want string
 	}{
 		{"8-bit salvage without FIB", docWithWordStream([]byte("subject body")), "subject body"},
+		{"UTF-16LE HTML with low-byte NULs without FIB", docWithWordStream(chineseHTMLUTF16LE), "\u4e00\u5b63\u5ea6\u62a5\u544a"},
 		{"dense UTF-16LE without FIB", cfbWithRootStreams([2]string{"WordDocument", "1Table"},
 			[2][]byte{utf16LE(strings.Repeat("subject body ", 157)), nil}), "subject body subject body"},
 		{"UTF-16LE ASCII piece", wordDocWithText("subject body", true), "subject body"},
@@ -677,12 +684,27 @@ func TestHasUTF16LECadence(t *testing.T) {
 		{"zero-padded CP1252 HTML", []byte("<p>caf\xe9</p>" + strings.Repeat("\x00", 4083)), false},
 		{"binary catalog", binaryCatalogMSG, false},
 		{"UTF-16LE CJK HTML", utf16LE("<p>" + strings.Repeat("\u6771\u4eac\u90fd", 30) + "</p>"), true},
+		{"UTF-16LE HTML with low-byte NULs", chineseHTMLUTF16LE, true},
+		{"UTF-16LE uppercase tag", utf16LE("<P>" + strings.Repeat("\u4e00", 30)), true},
+		{"UTF-16LE closing tag", utf16LE(strings.Repeat("\u4e00", 30) + "</p>"), true},
+		{"UTF-16LE declaration", utf16LE("<!DOCTYPE html>" + strings.Repeat("\u4e00", 30)), true},
+		{"UTF-16LE processing instruction", utf16LE("<?xml?>" + strings.Repeat("\u4e00", 30)), true},
+		{"unaligned UTF-16LE markup", append([]byte{1}, chineseHTMLUTF16LE...), false},
+		{"UTF-16LE comparison is not markup", utf16LE("<8 " + strings.Repeat("\u4e00", 30)), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := hasUTF16LECadence(tc.data); got != tc.want {
 				t.Fatalf("cadence = %t, want %t", got, tc.want)
 			}
 		})
+	}
+	if _, ok := tryDecodeUTF16BestEffort(chineseHTMLUTF16LE); ok {
+		t.Fatal("CJK fixture must exercise the secondary UTF-16LE reading")
+	}
+	for _, binary := range []bool{false, true} {
+		if got := decodeLegacyStreamText(chineseHTMLUTF16LE, binary); !strings.Contains(got, "\u4e00\u5b63\u5ea6\u62a5\u544a") {
+			t.Errorf("binary=%t: legacy decode lost Chinese text: %q", binary, got)
+		}
 	}
 }
 
