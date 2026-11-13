@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ledongthuc/pdf"
+	"golang.org/x/text/encoding/charmap"
 )
 
 func TestMBOXExtractorRequiresValidMessages(t *testing.T) {
@@ -570,22 +571,85 @@ func docWithWordStream(text []byte) []byte {
 	return cfbWithRootStreams([2]string{"WordDocument", "1Table"}, [2][]byte{stream, nil})
 }
 
+// wordStreamsWithPieces builds a Word 97 FIB and CLX pointing to repeated pieces.
+func wordStreamsWithPieces(text string, unicode bool, copies int) [2][]byte {
+	word, table := make([]byte, 4096), make([]byte, 4096)
+	put16, put32 := binary.LittleEndian.PutUint16, binary.LittleEndian.PutUint32
+	put16(word, 0xa5ec)
+	put16(word[2:], 0x00c1)
+	put16(word[0x0a:], 0x0200)
+	put16(word[32:], 14)
+	put16(word[62:], 22)
+	put16(word[152:], 93)
+	put32(word[154+33*8+4:], uint32(5+4+12*copies))
+	payload, err := charmap.Windows1252.NewEncoder().Bytes([]byte(text))
+	fc, count := uint32(2048|0x40000000), len(payload)
+	if unicode {
+		payload = utf16LE(text)
+		fc, count = 1024, len(payload)/2
+	} else if err != nil {
+		panic(err)
+	}
+	copy(word[1024:], payload)
+	table[0] = 0x02
+	put32(table[1:], uint32(4+12*copies))
+	for i := 0; i <= copies; i++ {
+		put32(table[5+4*i:], uint32(i*count))
+	}
+	for i := 0; i < copies; i++ {
+		put32(table[5+4*(copies+1)+8*i+2:], fc)
+	}
+	return [2][]byte{word, table}
+}
+
+func wordDocWithText(text string, unicode bool) []byte {
+	return cfbWithRootStreams([2]string{"WordDocument", "1Table"}, wordStreamsWithPieces(text, unicode, 1))
+}
+
 func TestDOCExtractorReadsEightBitAndUTF16LEStreams(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		text []byte
+		data []byte
 		want string
 	}{
-		{"UTF-16LE ASCII", utf16LE("subject body"), "subject body"},
-		{"8-bit", []byte("subject body"), "subject body"},
-		{"UTF-16LE Cyrillic", utf16LE("Привет мир документ"), "Привет мир документ"},
-		{"UTF-16LE Latin-1", utf16LE("Résumé für Ärzte"), "Résumé für Ärzte"},
-		{"UTF-16LE CJK", utf16LE("東京都の報告書"), "東京都の報告書"},
+		{"8-bit salvage without FIB", docWithWordStream([]byte("subject body")), "subject body"},
+		{"dense UTF-16LE without FIB", cfbWithRootStreams([2]string{"WordDocument", "1Table"},
+			[2][]byte{utf16LE(strings.Repeat("subject body ", 157)), nil}), "subject body subject body"},
+		{"UTF-16LE ASCII piece", wordDocWithText("subject body", true), "subject body"},
+		{"UTF-16LE Cyrillic piece", wordDocWithText("\u041f\u0440\u0438\u0432\u0435\u0442 \u043c\u0438\u0440 \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442", true), "\u041f\u0440\u0438\u0432\u0435\u0442 \u043c\u0438\u0440 \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442"},
+		{"UTF-16LE Latin-1 piece", wordDocWithText("R\u00e9sum\u00e9 f\u00fcr \u00c4rzte", true), "R\u00e9sum\u00e9 f\u00fcr \u00c4rzte"},
+		{"UTF-16LE CJK piece", wordDocWithText("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", true), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8"},
+		{"compressed Windows-1252 piece", wordDocWithText("R\u00e9sum\u00e9 caf\u00e9 a < b", false), "R\u00e9sum\u00e9 caf\u00e9 a b"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := (&DOCExtractor{}).ExtractText(docWithWordStream(tc.text))
+			got, err := (&DOCExtractor{}).ExtractText(tc.data)
 			if err != nil || !strings.Contains(got, tc.want) || strings.ContainsAny(got, "<>") {
 				t.Fatalf("extraction = (%q, %v), want containing %q without angle brackets", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestWordPieceTextCapsOverlappingPieces(t *testing.T) {
+	for _, tc := range []struct {
+		name, text   string
+		flags, ident uint16
+		ok           bool
+	}{
+		{"overlapping pieces", "subject body text ", 0x0200, 0xa5ec, true},
+		{"encrypted FIB", "subject body text ", 0x0300, 0xa5ec, false},
+		{"obfuscated FIB", "subject body text ", 0x8200, 0xa5ec, false},
+		{"older FIB", "subject body text ", 0x0200, 0xa5dc, false},
+		{"control characters only", "\x00\x07\r	\x7f<> ", 0x0200, 0xa5ec, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := wordStreamsWithPieces(tc.text, true, 200)
+			binary.LittleEndian.PutUint16(s[0], tc.ident)
+			binary.LittleEndian.PutUint16(s[0][0x0a:], tc.flags)
+			got, ok := wordPieceText(s[0], nil, s[1], 64)
+			if ok != tc.ok || len(got) > 64 || !utf8.ValidString(got) ||
+				(ok && !strings.HasPrefix(got, "subject body text subject")) || (!ok && got != "") {
+				t.Fatalf("piece text = (%q, %t), want ok=%t and bounded UTF-8", got, ok, tc.ok)
 			}
 		})
 	}

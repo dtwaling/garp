@@ -1466,9 +1466,9 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 	case ".doc":
 		// Conservative OLE (.doc) prefilter:
 		// - Open the compound file and stream a few likely text-bearing streams (WordDocument, 1Table, 0Table)
-		// - Decode text with the same legacy-stream rule as Stage 3 extraction
+		// - Decode raw streams with the same legacy-stream rule as Stage 3's non-piece-table fallback
 		// - If all words are conclusively found within a capped budget: (true, true)
-		// - Otherwise: (false, false) — undecided (never mark as conclusively absent)
+		// - Otherwise: (false, false) -- never decide absent; Stage 3 piece-table extraction stays authoritative
 		f, _, err := openRegularSearchFile(filePath)
 		if err != nil {
 			return false, false

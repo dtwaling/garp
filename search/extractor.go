@@ -3,6 +3,7 @@ package search
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -244,13 +245,14 @@ func (e *MBOXExtractor) ExtractText(data []byte) (string, error) {
 // PDFExtractor extracts text from .pdf files
 type PDFExtractor struct{}
 
-// DOCExtractor extracts text from legacy .doc (OLE/CFB) files using conservative salvage
+// DOCExtractor extracts Word 97-2003 piece-table text, with conservative legacy salvage.
 type DOCExtractor struct{}
 
 // ExtractText implements the Extractor interface for DOC files.
 // Strategy:
 // - Open OLE/CFB and read at most 2 MiB in total from the WordDocument, 1Table and 0Table streams
-// - Decode each stream via decodeLegacyStreamText: UTF-16 when a BOM or dominant NUL lane proves it,
+// - Prefer the root Word 97-2003 FIB piece table (Windows-1252 or UTF-16LE pieces)
+// - Otherwise decode each stream via decodeLegacyStreamText: UTF-16 when a BOM or dominant NUL lane proves it,
 // else both the printable-ASCII and UTF-16LE readings
 // - If CFB parsing fails or no stream yields text, salvage printable ASCII from a bounded prefix
 func (e *DOCExtractor) ExtractText(data []byte) (string, error) {
@@ -273,8 +275,8 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		return salvagePrintableASCII(data, false), nil
 	}
 
-	var out strings.Builder
-
+	var parts [][]byte
+	root := make(map[string][]byte)
 	total := int64(0)
 	targetStreams := map[string]bool{
 		"WordDocument": true,
@@ -300,6 +302,17 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			continue
 		}
 
+		parts = append(parts, b)
+		if len(ent.Path) == 0 && root[name] == nil {
+			root[name] = b
+		}
+	}
+	if text, ok := wordPieceText(root["WordDocument"], root["0Table"], root["1Table"], maxTotal); ok {
+		return text, nil
+	}
+
+	var out strings.Builder
+	for _, b := range parts {
 		text := decodeLegacyStreamText(b, true)
 		if text != "" {
 			if out.Len() > 0 {
@@ -319,6 +332,104 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		result = salvagePrintableASCII(data, true)
 	}
 	return result, nil
+}
+
+// wordPieceText decodes a Word 97-2003 FIB/CLX piece table. Unsupported or
+// malformed tables leave legacy salvage authoritative; bounded prefixes stop
+// at the first unavailable piece or at the output byte budget.
+func wordPieceText(word, table0, table1 []byte, maxBytes int64) (string, bool) {
+	le16, le32 := binary.LittleEndian.Uint16, binary.LittleEndian.Uint32
+	if len(word) < 34 || le16(word) != 0xa5ec || maxBytes <= 0 {
+		return "", false
+	}
+	flags := le16(word[0x0a:])
+	if flags&0x8100 != 0 { // fEncrypted | fObfuscated
+		return "", false
+	}
+	table := table0
+	if flags&0x0200 != 0 { // fWhichTblStm
+		table = table1
+	}
+	lw := 34 + 2*int(le16(word[32:]))
+	if len(word) < lw+2 {
+		return "", false
+	}
+	fcLcb := lw + 2 + 4*int(le16(word[lw:]))
+	if len(word) < fcLcb+2+34*8 || le16(word[fcLcb:]) < 34 {
+		return "", false
+	}
+	// FibRgFcLcb97 entry 33 locates CLX in the selected table stream.
+	fcClx := int64(le32(word[fcLcb+2+33*8:]))
+	lcbClx := int64(le32(word[fcLcb+2+33*8+4:]))
+	if fcClx > int64(len(table)) || lcbClx > int64(len(table))-fcClx {
+		return "", false
+	}
+	clx := table[fcClx : fcClx+lcbClx]
+	for len(clx) > 0 && clx[0] == 0x01 { // Skip Prc property records.
+		if len(clx) < 3 {
+			return "", false
+		}
+		cb := int(int16(le16(clx[1:])))
+		if cb < 0 || cb > len(clx)-3 {
+			return "", false
+		}
+		clx = clx[3+cb:]
+	}
+	if len(clx) < 5 || clx[0] != 0x02 {
+		return "", false
+	}
+	lcb := int64(le32(clx[1:]))
+	if lcb < 16 || lcb > int64(len(clx)-5) || (lcb-4)%12 != 0 {
+		return "", false
+	}
+	plc := clx[5 : 5+lcb]
+	n := int((lcb - 4) / 12)
+	var out strings.Builder
+	for i := 0; i < n; i++ {
+		start, end := le32(plc[4*i:]), le32(plc[4*(i+1):])
+		if end < start {
+			return "", false
+		}
+		fc := le32(plc[4*(n+1)+8*i+2:])
+		off, count := int64(fc), int64(end-start)
+		compressed := fc&0x40000000 != 0
+		if compressed {
+			off = int64(fc&0x3fffffff) / 2
+		} else {
+			count *= 2
+		}
+		if off > int64(len(word)) || count > int64(len(word))-off {
+			break
+		}
+		data := word[off : off+count]
+		var piece string
+		if compressed {
+			piece, _ = charmap.Windows1252.NewDecoder().String(string(data))
+		} else {
+			units := make([]uint16, len(data)/2)
+			for j := range units {
+				units[j] = le16(data[2*j:])
+			}
+			piece = string(utf16.Decode(units))
+		}
+		remain := maxBytes - int64(out.Len())
+		if int64(len(piece)) > remain {
+			out.WriteString(strings.ToValidUTF8(piece[:remain], ""))
+			break
+		}
+		out.WriteString(piece)
+		if int64(out.Len()) == maxBytes {
+			break
+		}
+	}
+	text := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '<' || r == '>' {
+			return ' '
+		}
+		return r
+	}, out.String())
+	text = strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
+	return text, text != ""
 }
 
 // ExtractText implements the Extractor interface for PDF files

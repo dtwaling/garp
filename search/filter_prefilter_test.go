@@ -32,7 +32,7 @@ func encodedBinaryFixtures() map[string][]byte {
 		"unicode.msg":       readerAtMSG(),
 		"ansi.msg":          ansiMSG(),
 		"eight-bit.doc":     docWithWordStream([]byte("subject body")),
-		"utf16.doc":         docWithWordStream(utf16LE("subject body")),
+		"utf16.doc":         wordDocWithText("subject body", true),
 		"control-words.rtf": []byte(`{\rtf1\ansi su{\b}bject bo{\i}dy}`),
 	}
 }
