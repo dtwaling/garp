@@ -385,6 +385,7 @@ func wordPieceText(word, table0, table1 []byte, maxBytes int64) (string, bool) {
 	plc := clx[5 : 5+lcb]
 	n := int((lcb - 4) / 12)
 	var out strings.Builder
+	var pendingHigh uint16
 	for i := 0; i < n; i++ {
 		start, end := le32(plc[4*i:]), le32(plc[4*(i+1):])
 		if end < start {
@@ -405,22 +406,40 @@ func wordPieceText(word, table0, table1 []byte, maxBytes int64) (string, bool) {
 		var piece string
 		if compressed {
 			piece, _ = charmap.Windows1252.NewDecoder().String(string(data))
+			if pendingHigh != 0 {
+				piece = "\ufffd" + piece
+				pendingHigh = 0
+			}
 		} else {
-			units := make([]uint16, len(data)/2)
-			for j := range units {
-				units[j] = le16(data[2*j:])
+			units := make([]uint16, 0, len(data)/2+1)
+			if pendingHigh != 0 {
+				units = append(units, pendingHigh)
+				pendingHigh = 0
+			}
+			for j := 0; j < len(data); j += 2 {
+				units = append(units, le16(data[j:]))
+			}
+			// CPs count UTF-16 units, so a pair can span logical pieces
+			// even when their bytes are not contiguous in WordDocument.
+			if last := len(units) - 1; last >= 0 && units[last] >= 0xd800 && units[last] <= 0xdbff {
+				pendingHigh = units[last]
+				units = units[:last]
 			}
 			piece = string(utf16.Decode(units))
 		}
 		remain := maxBytes - int64(out.Len())
 		if int64(len(piece)) > remain {
 			out.WriteString(strings.ToValidUTF8(piece[:remain], ""))
+			pendingHigh = 0 // The omitted prefix precedes any pending unit.
 			break
 		}
 		out.WriteString(piece)
 		if int64(out.Len()) == maxBytes {
 			break
 		}
+	}
+	if pendingHigh != 0 && maxBytes-int64(out.Len()) >= int64(utf8.RuneLen(utf8.RuneError)) {
+		out.WriteRune(utf8.RuneError)
 	}
 	text := strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f || r == '<' || r == '>' {

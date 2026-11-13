@@ -660,6 +660,41 @@ func TestDOCExtractorReadsEightBitAndUTF16LEStreams(t *testing.T) {
 
 func TestWordPieceTextCapsOverlappingPieces(t *testing.T) {
 	for _, tc := range []struct {
+		name, first, second, want string
+		gap                       int
+		compressed                bool
+	}{
+		{"split pair adjacent", "A\x00\x3d\xd8", "\x00\xdeB\x00", "A😀B", 0, false},
+		{"split pair non-contiguous", "A\x00\x3d\xd8", "\x00\xdeB\x00", "A😀B", 128, false},
+		{"complete pair", string(utf16LE("A😀B")), "", "A😀B", 0, false},
+		{"pair before lone high", string(utf16LE("A😀")) + "\x3d\xd8", "", "A😀\ufffd", 0, false},
+		{"lone high at end", "A\x00\x3d\xd8", "", "A\ufffd", 0, false},
+		{"high before BMP", "A\x00\x3d\xd8", "B\x00", "A\ufffdB", 0, false},
+		{"high before compressed", "A\x00\x3d\xd8", "B\xe9", "A\ufffdBé", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := wordStreamsWithPieces("", true, 2)
+			put32 := binary.LittleEndian.PutUint32
+			off := 1024 + len(tc.first) + tc.gap
+			copy(s[0][1024:], tc.first)
+			copy(s[0][off:], tc.second)
+			count, fc := len(tc.second)/2, uint32(off)
+			if tc.compressed {
+				count, fc = len(tc.second), uint32(off*2)|0x40000000
+			}
+			put32(s[1][5+4:], uint32(len(tc.first)/2))
+			put32(s[1][5+8:], uint32(len(tc.first)/2+count))
+			put32(s[1][5+12+8+2:], fc)
+			for cap := 1; cap <= 16; cap++ {
+				want := strings.ToValidUTF8(tc.want[:min(cap, len(tc.want))], "")
+				got, ok := wordPieceText(s[0], nil, s[1], int64(cap))
+				if !ok || got != want || len(got) > cap || !utf8.ValidString(got) {
+					t.Errorf("cap %d: piece text = (%q, %t), want %q and bounded UTF-8", cap, got, ok, want)
+				}
+			}
+		})
+	}
+	for _, tc := range []struct {
 		name, text   string
 		flags, ident uint16
 		ok           bool
