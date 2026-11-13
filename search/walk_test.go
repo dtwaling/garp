@@ -534,7 +534,7 @@ func TestWalkIgnoreNoIgnoreStillUsesHardcodedSkips(t *testing.T) {
 
 func TestNestedRepoDirectoryResetsParentIgnoreChain(t *testing.T) {
 	root := t.TempDir()
-	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "nested/\n*.bak\n")
+	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "*.bak\n")
 	if err := os.MkdirAll(filepath.Join(root, "nested", ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +554,7 @@ func TestNestedRepoGitfileResetsAndLoadsOwnExclude(t *testing.T) {
 	root := t.TempDir()
 	nested := filepath.Join(root, "nested")
 	gitDir := filepath.Join(root, "gitdirs", "nested")
-	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "nested/\nparent-only.md\n")
+	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "parent-only.md\n")
 	writeIgnoreFixture(t, filepath.Join(nested, ".git"), "gitdir: "+gitDir+"\n")
 	writeIgnoreFixture(t, filepath.Join(gitDir, "info", "exclude"), "excluded.md\n")
 	for _, relative := range []string{"nested/main.md", "nested/parent-only.md", "nested/excluded.md"} {
@@ -565,6 +565,91 @@ func TestNestedRepoGitfileResetsAndLoadsOwnExclude(t *testing.T) {
 	want := []string{"nested/main.md", "nested/parent-only.md"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+}
+
+func TestAncestorIgnorePrunesNestedRepositoryBeforeReset(t *testing.T) {
+	for _, tt := range []struct {
+		name, source, rules string
+		gitfile, noIgnore   bool
+		want                []string
+	}{
+		{name: "gitignore children glob", source: ".gitignore", rules: "sub/*\n", want: []string{"top.md"}},
+		{name: "gitignore wildcard segment", source: ".gitignore", rules: "sub/c*\n", want: []string{"sub/plain/hit.md", "top.md"}},
+		{name: "gitignore basename directory", source: ".gitignore", rules: "child/\n", want: []string{"sub/plain/hit.md", "top.md"}},
+		{name: "gitfile boundary", source: ".gitignore", rules: "sub/*\n", gitfile: true, want: []string{"top.md"}},
+		{name: "dot ignore", source: ".ignore", rules: "sub/*\n", want: []string{"top.md"}},
+		{name: "repository exclude", source: ".git/info/exclude", rules: "sub/*\n", want: []string{"top.md"}},
+		{name: "negated reinclude", source: ".gitignore", rules: "sub/*\n!sub/child/\n", want: []string{"sub/child/hit.md", "top.md"}},
+		{name: "no ignore", source: ".gitignore", rules: "sub/*\n", noIgnore: true, want: []string{"sub/child/hit.md", "sub/plain/hit.md", "top.md"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeIgnoreFixture(t, filepath.Join(root, tt.source), tt.rules)
+			boundary := filepath.Join(root, "sub", "child", ".git")
+			if tt.gitfile {
+				gitDir := filepath.Join(t.TempDir(), "child.git")
+				if err := os.MkdirAll(gitDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeIgnoreFixture(t, boundary, "gitdir: "+gitDir+"\n")
+			} else if err := os.MkdirAll(boundary, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, relative := range []string{"sub/child/hit.md", "sub/plain/hit.md", "top.md"} {
+				writeWalkFixture(t, root, relative, "anchor")
+			}
+			got := collectCandidates(t, root, []string{"-g", "*.md"}, nil, WalkOptions{NoIgnore: tt.noIgnore})
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("candidates = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWalkRootInsideIgnoredNestedRepositoryUsesOwnRules(t *testing.T) {
+	root := t.TempDir()
+	for _, relative := range []string{".git", "sub/child/.git"} {
+		if err := os.MkdirAll(filepath.Join(root, relative), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "sub/*\n*.md\n")
+	writeIgnoreFixture(t, filepath.Join(root, "sub", "child", ".gitignore"), "local.md\n")
+	for _, relative := range []string{"sub/child/docs/hit.md", "sub/child/docs/local.md"} {
+		writeWalkFixture(t, root, relative, "anchor")
+	}
+	for _, relative := range []string{"sub/child", "sub/child/docs"} {
+		t.Run(relative, func(t *testing.T) {
+			got := collectCandidates(t, filepath.Join(root, relative), []string{"-g", "*.md"}, nil, WalkOptions{})
+			if len(got) != 1 || filepath.Base(got[0]) != "hit.md" {
+				t.Fatalf("candidates = %v, want only hit.md", got)
+			}
+		})
+	}
+}
+
+func TestPathScopeExemptionAdmitsIgnoredNestedRepository(t *testing.T) {
+	root := t.TempDir()
+	writeIgnoreFixture(t, filepath.Join(root, ".gitignore"), "RepoA/\nRepoB/\n*.bak\n")
+	for _, repo := range []string{"RepoA", "RepoB"} {
+		if err := os.MkdirAll(filepath.Join(root, repo, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, relative := range []string{"RepoA/main.md", "RepoA/temp.bak", "RepoB/main.md"} {
+		writeWalkFixture(t, root, relative, "anchor")
+	}
+	fileTypes := []string{"-g", "*.md", "-g", "*.bak"}
+	if got := collectCandidates(t, root, fileTypes, nil, WalkOptions{}); len(got) != 0 {
+		t.Fatalf("unscoped candidates = %v, want none", got)
+	}
+	got := collectCandidates(t, root, fileTypes, []string{"RepoA/"}, WalkOptions{})
+	if want := []string{"RepoA/main.md", "RepoA/temp.bak"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scoped candidates = %v, want %v", got, want)
 	}
 }
 

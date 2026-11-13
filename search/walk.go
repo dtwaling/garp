@@ -82,15 +82,18 @@ func decideTraversalDirectory(
 
 	childChain := chain
 	if !traversal.noIgnore {
+		// The inherited chain decides admission before any nested repository
+		// boundary resets the chain for the directory's contents.
+		exempt := depth == 0 && traversal.policy.exemptsDirectChild(name)
+		if !exempt && ignoredByRules(chain.rules, physicalPath, true) {
+			return ignoreChain{}, false
+		}
 		switch {
 		case hasRepositoryBoundary(physicalPath):
 			childChain = initialIgnoreChain(physicalPath)
-		case depth == 0 && traversal.policy.exemptsDirectChild(name):
+		case exempt:
 			childChain = chain.withoutPathScopeContainerExcludes(physicalPath).withLocalFiles(physicalPath)
 		default:
-			if ignoredByRules(chain.rules, physicalPath, true) {
-				return ignoreChain{}, false
-			}
 			childChain = chain.withLocalFiles(physicalPath)
 		}
 	}
