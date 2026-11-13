@@ -426,6 +426,7 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				}
 			}
 			pagePlain, pageErr = p.GetPlainText(fonts)
+			pagePlain = pdfLigatureFolder.Replace(pagePlain)
 		}()
 		if pageErr != nil {
 			break
@@ -549,7 +550,7 @@ func pdfPageText(p pdf.Page, maxBytes int64) (text []pdf.Text, err error) {
 		}
 		n := 0
 		for _, ch := range decoded {
-			rawBytes += int64(len(strings.TrimSpace(string(ch))))
+			rawBytes += int64(len(pdfLigatureFolder.Replace(strings.TrimSpace(string(ch)))))
 			if rawBytes > maxBytes || int64(len(text)) >= maxItems {
 				panic(errPDFPageBudget)
 			}
@@ -705,6 +706,14 @@ func pdfPageText(p pdf.Page, maxBytes int64) (text []pdf.Text, err error) {
 	return text, nil
 }
 
+// TeX justification can shrink a 0.25 em Times space below 0.25 em.
+const pdfWordGapEm = 0.15
+
+var pdfLigatureFolder = strings.NewReplacer(
+	"\ufb00", "ff", "\ufb01", "fi", "\ufb02", "fl", "\ufb03", "ffi",
+	"\ufb04", "ffl", "\ufb05", "st", "\ufb06", "st",
+)
+
 func pdfTextItemsToString(items []pdf.Text) string {
 	text, _ := pdfTextItemsToStringBounded(items, DefaultMaxExtractedBytes)
 	return text
@@ -717,7 +726,7 @@ func pdfTextItemsToStringBounded(items []pdf.Text, maxBytes int64) (string, erro
 	// Reject oversized pages before allocating and sorting a copy of the items.
 	var rawBytes int64
 	for _, item := range items {
-		rawBytes += int64(len(strings.TrimSpace(item.S)))
+		rawBytes += int64(len(pdfLigatureFolder.Replace(strings.TrimSpace(item.S))))
 		if rawBytes > maxBytes {
 			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, maxBytes)
 		}
@@ -733,7 +742,7 @@ func pdfTextItemsToStringBounded(items []pdf.Text, maxBytes int64) (string, erro
 	havePrev := false
 	pendingSpace := false
 	for _, item := range text {
-		s := strings.TrimSpace(item.S)
+		s := pdfLigatureFolder.Replace(strings.TrimSpace(item.S))
 		if s == "" {
 			if item.S != "" {
 				pendingSpace = true
@@ -750,7 +759,7 @@ func pdfTextItemsToStringBounded(items []pdf.Text, maxBytes int64) (string, erro
 				separator = '\n'
 			} else {
 				gap := item.X - (prev.X + prev.W)
-				if pendingSpace || gap > item.FontSize*0.25 {
+				if pendingSpace || gap > item.FontSize*pdfWordGapEm {
 					separator = ' '
 				}
 			}

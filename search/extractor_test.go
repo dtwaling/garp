@@ -685,6 +685,7 @@ func TestPDFReaderAtPageTextBudgets(t *testing.T) {
 		{"single raw bytes", []string{text}, 3, ""},
 		{"single page newline", []string{text}, 4, ""},
 		{"single exact", []string{text}, 5, "abcd"},
+		{"folded ligature exact", []string{"BT /F1 12 Tf (\x93) Tj ET\n"}, 3, "fi"},
 		{"space separator", []string{"BT /F1 12 Tf 72 720 Td (ab) Tj 100 0 Td (cd) Tj ET\n"}, 4, ""},
 		{"line separator", []string{"BT /F1 12 Tf 72 720 Td (ab) Tj 0 -20 Td (cd) Tj ET\n"}, 4, ""},
 		{"multiple raw bytes", []string{text, text}, 8, ""},
@@ -737,6 +738,7 @@ func TestPDFReaderAtPlainTextFallbackBudgets(t *testing.T) {
 		{"single limit before broken page", []string{fallback, broken}, 4, ""},
 		{"cumulative limit before broken page", []string{fallback, fallback, broken}, 9, ""},
 		{"exact single", []string{fallback}, 5, "abcd"},
+		{"folded ligature exact", []string{"Q BT /F1 12 Tf (\x93) Tj ET\n"}, 3, "fi"},
 		{"exact cumulative", []string{fallback, fallback}, 10, "abcd\nabcd"},
 		{"retain preceding text on page error", []string{fallback, broken}, 10, "abcd"},
 	} {
@@ -1090,11 +1092,48 @@ func TestPDFTextItemsToString_ReconstructsGlyphSpacing(t *testing.T) {
 		{X: 54, Y: 84, W: 6, FontSize: 12, S: "e"},
 	}
 
+	var x float64
+	for _, run := range []struct {
+		text string
+		gap  float64
+	}{
+		{"shrunk", 2.4}, {"space", 2.4}, {"ke", 1.2}, {"rn", 2.4}, {"\ufb01gure", 0},
+	} {
+		for _, ch := range run.text {
+			items = append(items, pdf.Text{X: x, Y: 68, W: 6, FontSize: 12, S: string(ch)})
+			x += 6
+		}
+		x += run.gap
+	}
 	got := pdfTextItemsToString(items)
+	if !strings.Contains(got, "shrunk space kern figure") {
+		t.Fatalf("expected shrunk spaces, intact kern and folded ligature, got %q", got)
+	}
 	if !strings.Contains(got, "Hamiltonian cycles") {
 		t.Fatalf("expected word gap without letter spacing, got %q", got)
 	}
 	if !strings.Contains(got, "\nimpossible") {
 		t.Fatalf("expected line break before impossible, got %q", got)
+	}
+	for i, want := range []string{"ff", "fi", "fl", "ffi", "ffl", "st", "st"} {
+		t.Run("ligature/"+string(rune(0xfb00+i)), func(t *testing.T) {
+			// Before Tf, the library's no-op encoder preserves raw UTF-8.
+			data := pdfWithPageStreams(fmt.Sprintf("BT (%c) Tj ET\n", 0xfb00+i))
+			r, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			limit := int64(len(want))
+			items, err := pdfPageText(r.Page(1), limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := pdfTextItemsToStringBounded(items, limit); err != nil || got != want {
+				t.Fatalf("folded text = (%q, %v), want %q", got, err, want)
+			}
+			if _, err := pdfPageText(r.Page(1), limit-1); !errors.Is(err, ErrExtractionLimit) {
+				t.Fatalf("short budget error = %v", err)
+			}
+		})
 	}
 }
