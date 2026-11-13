@@ -857,9 +857,7 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 
 	// Start workers
 	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			maxBytes := options.TextMaxBytes()
 
 			for p := range paths {
@@ -870,7 +868,7 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 					mu.Unlock()
 				}
 			}
-		}()
+		})
 	}
 
 	processed := 0
