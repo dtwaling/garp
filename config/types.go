@@ -10,8 +10,7 @@ import (
 var DocumentTypes = []string{
 	"txt", "md", "html", "xml", "csv", "yaml", "yml",
 	"eml", "mbox", "msg",
-	"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-	"odt", "ods", "odp", "rtf",
+	"pdf", "doc", "docx", "odt", "rtf",
 	"log", "cfg", "conf", "ini", "sh", "bat",
 }
 

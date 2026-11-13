@@ -209,6 +209,17 @@ func TestYamlBothExtensionsPresent(t *testing.T) {
 	}
 }
 
+func TestDocumentTypesAreDefaultSearched(t *testing.T) {
+	// A document type must be reachable by a default search; formats with no
+	// default glob and no extractor do not belong in the registry.
+	defaults := globSet(BuildRipgrepFileTypes(false))
+	for _, ext := range DocumentTypes {
+		if !defaults["*."+ext] {
+			t.Errorf("DocumentTypes lists %q, which BuildRipgrepFileTypes(false) does not search", ext)
+		}
+	}
+}
+
 func TestIsLiteralTextFileClassifiesSearchedFormats(t *testing.T) {
 	markup := []string{"html", "htm", "xhtml", "shtml", "xml", "eml", "mbox", "msg", "pdf", "doc", "docx", "odt", "rtf"}
 	searched := make(map[string]bool)
