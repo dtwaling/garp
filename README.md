@@ -190,8 +190,10 @@ A positive `--pathscope` pattern whose first segment names a direct child of
 `--startdir` (for example `child/`, `child/**`, `child/src/`, or bare `child`)
 searches that child even when an ignore file above it (`.gitignore`, `.ignore`,
 or Git `exclude`) ignores the directory itself. This lets you target an ignored
-workspace child directory without `--no-ignore`. Inherited file rules such as
-`*.log` and the child's own ignore files still apply, and ignored directories
+workspace child directory without `--no-ignore`. For an ordinary child,
+inherited file rules such as `*.log` and the child's own ignore files still
+apply. If the child is a nested Git repository, its contents use that
+repository's own ignore rules; parent rules do not carry in. Ignored directories
 deeper than the direct child stay skipped. `!` patterns, patterns that start
 with `**`, bare patterns that contain `.`, and `-g` / `--iglob` globs never
 exempt a directory.
