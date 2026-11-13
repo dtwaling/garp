@@ -551,10 +551,11 @@ built from a clean tree and committed on their own.
   Before this release, every non-code document padded commas, so only
   `name, email` matched. Markup/email/extracted formats still add a space after
   commas.
-- A `--not` term that starts or ends with a non-word character (for example
-  `<user@example.com>`, `&amp;`, `>`, or `(note)`) excludes a file only where
-  that edge touches a letter, digit, or `_`: `--not '&amp;'` excludes `x&amp;y`
-  but not `a &amp; b`. Exclude a word inside the token instead
+- For content exclusions, a `--not` term that starts or ends with an ASCII
+  non-word character (for example `<user@example.com>`, `&amp;`, `>`, or `(note)`)
+  excludes a file only where that edge touches an adjacent ASCII letter, digit,
+  or `_`: `--not '&amp;'` excludes `x&amp;y` but not `a &amp; b`.
+  Exclude a word inside the token instead
   (`--not user@example.com`, `--not amp`). A term that starts with `-` must
   follow `--` (`--not -- -----`).
 - Line numbers count `\n` only. In a file with lone-CR (classic Mac) line
