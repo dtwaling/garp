@@ -775,7 +775,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 						}
 						return false
 					}
-					searchText = cleanSearchContent(mappedContent{text: extractedText}, config.IsCodeFile(filePath)).text
+					searchText = cleanSearchContent(mappedContent{text: extractedText}, config.IsLiteralTextFile(filePath)).text
 					analysis, ok := analyzeRankedText(searchText, query, se.Distance, se.Strict)
 					if ok {
 						match.setAnalysis(analysis)
@@ -836,7 +836,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 						}
 						return false
 					}
-					searchText = cleanSearchContent(mappedContent{text: extractedText}, config.IsCodeFile(filePath)).text
+					searchText = cleanSearchContent(mappedContent{text: extractedText}, config.IsLiteralTextFile(filePath)).text
 					analysis, ok := analyzeRankedText(searchText, query, se.Distance, se.Strict)
 					if ok {
 						match.setAnalysis(analysis)
@@ -1181,9 +1181,10 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		}
 
 		// Clean content and extract excerpts (make excerpt window reflect distance).
-		// Code files use the minimal code-safe cleaner so source tokens survive (see CleanContentCode).
-		isCode := config.IsCodeFile(filePath)
-		mapped := cleanStage3Content(content, isCode)
+		// Code and plain-text documents use the literal cleaner so visible tokens survive;
+		// only markup, email, and extracted formats strip noise (see config.IsLiteralTextFile).
+		literal := config.IsLiteralTextFile(filePath)
+		mapped := cleanStage3Content(content, literal)
 		boundedClean := mapped.text
 		if len(boundedClean) > 64*1024 {
 			boundedClean = boundedClean[:64*1024]
@@ -1220,7 +1221,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		// Pass Distance unchanged to preserve Stage 2 parity, including zero.
 		// NewSearchEngine supplies the default of 5000; legacy excerpt helpers
 		// use unconstrainedDistance to disable their proximity bound.
-		spans = extractRankedMappedExcerptSpansQuery(mapped, query, maxExcerpts, match.termCount, minTerms, se.Distance)
+		spans = extractRankedMappedExcerptSpansQuery(mapped, query, maxExcerpts, match.termCount, minTerms, se.Distance, literal)
 		excerpts = excerptSpanTexts(spans)
 
 		if len(excerpts) == 0 {
@@ -1232,7 +1233,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		// by pulling in neighboring sentences to provide more context. This helps fill the UI box
 		// when there is little content returned.
 		if len(excerpts) == 1 && len(excerpts[0]) < 160 {
-			expanded := expandShortExcerptSpan(spans[0], 600)
+			expanded := expandShortExcerptSpan(spans[0], 600, literal)
 			if len(expanded.text) > len(excerpts[0]) {
 				spans[0] = expanded
 				excerpts[0] = expanded.text

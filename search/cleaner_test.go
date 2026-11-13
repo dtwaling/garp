@@ -257,7 +257,7 @@ func TestInlineWildcardFallbackSentenceUsesCompiledQuery(t *testing.T) {
 	clean := "Before. Call ms-option-api now. After."
 	query := compileQuery([]string{"ms-*-api"}, PartialModeOff)
 	span := testExcerptSpan(clean, query, 0, "Call ms-option-api now.")
-	got := expandShortExcerptSpan(span, 100)
+	got := expandShortExcerptSpan(span, 100, true)
 	if !strings.Contains(got.text, "Call ms-option-api now.") {
 		t.Fatalf("expanded fallback = %q, want wildcard-matching sentence", got.text)
 	}
@@ -332,7 +332,7 @@ func TestOrdinaryExcerptRejectsClippedNeighborMatch(t *testing.T) {
 		term:       0,
 	}}
 
-	text, got := formatExcerptText("prefix suffix", 3, len("prefix suffix"), 0, matches)
+	text, got := formatExcerptText("prefix suffix", 3, len("prefix suffix"), 0, matches, true)
 	if text != "fix suffix" {
 		t.Fatalf("excerpt text = %q, want %q", text, "fix suffix")
 	}
@@ -346,7 +346,7 @@ func TestShortExcerptExpansionCarriesNeighborMatches(t *testing.T) {
 	query := compileQuery([]string{"api", "omega"}, PartialModeOff)
 	span := testExcerptSpan(clean, query, 0, "Anchor api.")
 
-	expanded := expandShortExcerptSpan(span, 100)
+	expanded := expandShortExcerptSpan(span, 100, true)
 	if got, want := len(expanded.matches), 2; got != want {
 		t.Fatalf("expanded matches = %#v, want %d exact matches", expanded.matches, want)
 	}
@@ -373,7 +373,7 @@ func TestShortExcerptExpansionPreservesMatchesAndBounds(t *testing.T) {
 			if tt.all {
 				span.matches = append([]excerptMatch(nil), span.sourceMatches...)
 			}
-			expanded := expandShortExcerptSpan(span, tt.target)
+			expanded := expandShortExcerptSpan(span, tt.target, true)
 			if tt.bounded && !reflect.DeepEqual(expanded, span) {
 				t.Fatalf("oversized covering range replaced bounded excerpt: %#v", expanded)
 			}
@@ -393,7 +393,7 @@ func TestShortExcerptExpansionUsesSourceRangeForRepeatedText(t *testing.T) {
 	span.right = secondAPI.source.end
 	span.matches = []excerptMatch{secondAPI}
 
-	expanded := expandShortExcerptSpan(span, len("Repeat api."))
+	expanded := expandShortExcerptSpan(span, len("Repeat api."), true)
 	if want := strings.Index(clean, "Repeat api.") + len("Repeat api. "); expanded.left != want {
 		t.Fatalf("expanded left = %d, want second repeated sentence at %d", expanded.left, want)
 	}
@@ -404,32 +404,38 @@ func TestShortExcerptExpansionRejectsMyAPISubstring(t *testing.T) {
 	query := compileQuery([]string{"api"}, PartialModeOff)
 	span := testExcerptSpan(clean, query, 0, "True api.")
 
-	expanded := expandShortExcerptSpan(span, 100)
+	expanded := expandShortExcerptSpan(span, 100, true)
 	if got, want := highlightExcerptSpan(expanded), "myapi context. True \033[1;31mapi\033[0m."; got != want {
 		t.Fatalf("expanded highlight = %q, want %q", got, want)
 	}
 }
 
-func TestShortExcerptExpansionMapsDividerNormalization(t *testing.T) {
-	clean := "Anchor api. ----- Neighbor omega."
+func TestExcerptFormattingMapsDividerNormalization(t *testing.T) {
+	clean := "Anchor api. ---- ----- ===== ##### snake_____case |-----|-----| Neighbor omega."
 	query := compileQuery([]string{"api", "-----", "omega"}, PartialModeOff)
 	span := testExcerptSpan(clean, query, 0, "Anchor api.")
 
-	expanded := expandShortExcerptSpan(span, 100)
-	if strings.Contains(expanded.text, "-----") {
-		t.Fatalf("expanded text retained divider: %q", expanded.text)
-	}
-	if got := highlightExcerptSpan(expanded); !strings.Contains(got, "\033[1;31momega\033[0m") {
-		t.Fatalf("normalized neighbor match lost: %q", got)
-	}
-	for _, match := range expanded.matches {
-		if match.term == 1 {
-			t.Fatalf("removed divider retained fabricated match metadata: %#v", expanded.matches)
+	for _, literal := range []bool{false, true} {
+		want := "Anchor api. ---- snake case | | | Neighbor omega."
+		if literal {
+			want = clean
+		}
+		ordinary, multipart := span, span
+		ordinary.text, ordinary.matches = formatExcerptText(clean, 0, len(clean), 0, span.sourceMatches, literal)
+		multipart.text, multipart.matches = formatMultipartExcerptText(clean, 0, len(clean), span.sourceMatches, literal)
+		for _, formatted := range []excerptSpan{ordinary, multipart, expandShortExcerptSpan(span, 100, literal)} {
+			if formatted.text != want {
+				t.Fatalf("literal=%t: excerpt=%q, want %q", literal, formatted.text, want)
+			}
+			highlighted := highlightExcerptSpan(formatted)
+			if !strings.Contains(highlighted, "\033[1;31momega\033[0m") || strings.Contains(highlighted, "\033[1;31m-----\033[0m") != literal {
+				t.Fatalf("literal=%t: incorrect mapped highlights: %q", literal, highlighted)
+			}
 		}
 	}
 
 	notFound := excerptSpan{text: "original", sourceText: "no matches here."}
-	if got := expandShortExcerptSpan(notFound, 100).text; got != "original" {
+	if got := expandShortExcerptSpan(notFound, 100, false).text; got != "original" {
 		t.Fatalf("not-found expansion = %q, want original", got)
 	}
 }
@@ -1114,7 +1120,8 @@ func TestNormalizeMappedWhitespacePreservesOffsets(t *testing.T) {
 
 func TestEngineCleaningConsistency(t *testing.T) {
 	const raw = "header\n> alpha beta gamma hidden\nalpha beta visible\n"
-	for _, kind := range []string{"txt", "go", "pdf", "readerAt"} {
+	for _, kind := range []string{"html", "txt", "md", "go", "pdf", "readerAt"} {
+		literal := kind == "go" || kind == "txt" || kind == "md"
 		for _, terms := range [][]string{{"alpha", "beta", "gamma"}, {"gamma"}} {
 			for _, strict := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/%s/strict=%v", kind, strings.Join(terms, "-"), strict), func(t *testing.T) {
@@ -1142,7 +1149,7 @@ func TestEngineCleaningConsistency(t *testing.T) {
 						t.Fatal(err)
 					}
 					wantTerms := terms
-					if kind != "go" {
+					if !literal {
 						if strict || len(terms) == 1 {
 							wantTerms = nil
 						} else {
@@ -1173,11 +1180,12 @@ func TestEngineCleaningConsistency(t *testing.T) {
 					if result.Score != score || result.TermCount != len(wantTerms) || !slices.Equal(result.MatchedTerms, wantTerms) || result.ChunkScores[0] != score || result.ChunkTermCounts[0] != len(wantTerms) {
 						t.Fatalf("Stage 2/3 metadata disagree: %+v", result)
 					}
-					if kind != "go" && (strings.Contains(result.CleanContent, "gamma") || strings.Contains(strings.Join(result.RawExcerpts, " "), "hidden")) {
+					if !literal && (strings.Contains(result.CleanContent, "gamma") || strings.Contains(strings.Join(result.RawExcerpts, " "), "hidden")) {
 						t.Fatalf("hidden content survived: %+v", result)
 					}
-					if kind == "txt" && !slices.Equal(result.StartLines, []int{3}) {
-						t.Fatalf("lines=%v, want [3]", result.StartLines)
+					wantLines := map[string][]int{"html": {3}, "txt": {2}, "md": {2}, "go": {2}}
+					if want, ok := wantLines[kind]; ok && !slices.Equal(result.StartLines, want) {
+						t.Fatalf("lines=%v, want %v", result.StartLines, want)
 					}
 				})
 			}
@@ -1186,15 +1194,17 @@ func TestEngineCleaningConsistency(t *testing.T) {
 }
 
 func TestFileAllWordsCleaningConsistency(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "fixture.txt")
-	if err := os.WriteFile(path, []byte("header\n> alpha beta gamma hidden\nalpha beta visible\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	for _, terms := range [][]string{{"alpha", "beta"}, {"alpha", "gamma"}, {"gamma"}} {
-		got, err := CheckFileContainsAllWords(path, terms, 1000, true)
-		want := slices.Equal(terms, []string{"alpha", "beta"})
-		if err != nil || got != want {
-			t.Fatalf("terms=%v: got %v, %v; want %v", terms, got, err, want)
+	for _, ext := range []string{"html", "txt", "md"} {
+		path := filepath.Join(t.TempDir(), "fixture."+ext)
+		if err := os.WriteFile(path, []byte("header\n> alpha beta gamma hidden\nalpha beta visible\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		for _, terms := range [][]string{{"alpha", "beta"}, {"alpha", "gamma"}, {"gamma"}} {
+			got, err := CheckFileContainsAllWords(path, terms, 1000, true)
+			want := ext != "html" || slices.Equal(terms, []string{"alpha", "beta"})
+			if err != nil || got != want {
+				t.Fatalf("ext=%s terms=%v: got %v, %v; want %v", ext, terms, got, err, want)
+			}
 		}
 	}
 }
@@ -1399,7 +1409,7 @@ func TestEngineIgnoresMarkupInExclusionsAndExcerpts(t *testing.T) {
 		"<!DOCTYPE root [\n<!ENTITY note 'secret < 80%'>\n]>alpha",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "notes.md")
+			path := filepath.Join(t.TempDir(), "notes.html")
 			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -1445,6 +1455,52 @@ func TestEngineSearchesTextBetweenStrayAngleBrackets(t *testing.T) {
 		results, err := engine.ExtractAndBuildResults(matches)
 		if err != nil || len(results) != 1 || !slices.Equal(results[0].StartLines, []int{1}) || !strings.Contains(strings.Join(results[0].RawExcerpts, " "), "secret beta") {
 			t.Fatalf("results=%+v err=%v, want one excerpt with secret beta at line 1", results, err)
+		}
+	}
+}
+
+func TestEngineLiteralTextFormatsPreserveTokens(t *testing.T) {
+	const raw = "intro\n> quoted rule here\nmail <user@example.com> now\nname `<kind>-<topic>.md` ok\nhash SHA256 and UTF8\npair name,email\n-----\n=====\n#####\n_____\n"
+	for _, ext := range []string{"txt", "md", "csv", "yaml", "yml", "log", "cfg", "conf", "ini", "sh", "bat", "cmd", "tex", "rst", "asciidoc", "go", "html", "htm", "xml"} {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "fixture."+ext), []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		literal := ext != "html" && ext != "htm" && ext != "xml"
+		for _, tc := range []struct {
+			name, term string
+			line       int
+			excludes   []string
+		}{
+			{"quoted", "quoted", 2, nil},
+			{"<user@example.com>", "<user@example.com>", 3, nil},
+			{"<kind>-<topic>.md", "<kind>-<topic>.md", 4, nil},
+			{"SHA256", "SHA256", 5, nil},
+			{"UTF8", "UTF8", 5, nil},
+			{"name,email", "name,email", 6, nil},
+			{"-----", "-----", 7, nil},
+			{"=====", "=====", 8, nil},
+			{"#####", "#####", 9, nil},
+			{"_____", "_____", 10, nil},
+			{"comma-space", "name, email", 0, nil},
+			{"not", "intro", 0, []string{"SHA256"}},
+		} {
+			t.Run(ext+"/"+tc.name, func(t *testing.T) {
+				engine := NewSearchEngine([]string{tc.term}, tc.excludes, []string{"-g", "*." + ext}, false, 1, 1000)
+				engine.StartDir = root
+				engine.Silent = true
+				results, err := engine.Execute()
+				want := 0
+				if literal == (tc.line > 0) {
+					want = 1
+				}
+				if err != nil || len(results) != want {
+					t.Fatalf("results=%+v err=%v, want %d results", results, err, want)
+				}
+				if literal && want == 1 && (len(results[0].RawExcerpts) == 0 || !strings.Contains(results[0].RawExcerpts[0], tc.term) || !slices.Equal(results[0].StartLines, []int{tc.line})) {
+					t.Fatalf("result=%+v, want verbatim %q at line %d", results[0], tc.term, tc.line)
+				}
+			})
 		}
 	}
 }

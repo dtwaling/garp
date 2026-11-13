@@ -42,13 +42,28 @@ var CodeFilenames = []string{
 
 // IsCodeFile reports whether a file should be treated as source code -- by extension
 // (CodeTypes) or, for extensionless files like Dockerfiles, by name (CodeFilenames).
-// Used both to gate discovery and to pick the code-safe content cleaner.
+// Used to gate discovery; IsLiteralTextFile picks the content cleaner.
 func IsCodeFile(filename string) bool {
 	ext := strings.ToLower(strings.TrimPrefix(getFileExtension(filename), "."))
 	if slices.Contains(CodeTypes, ext) {
 		return true
 	}
 	return IsCodeFilename(filename)
+}
+
+// MarkupTypes lists the only formats whose text carries markup, email-quoting,
+// or binary-extraction noise. Content cleaning strips it only for these formats.
+var MarkupTypes = []string{"html", "htm", "xhtml", "shtml", "xml", "eml", "mbox", "msg", "pdf", "doc", "docx", "odt", "rtf"}
+
+// IsLiteralTextFile reports whether content is matched literally, with only
+// control-character and whitespace normalization. Every other extension defaults
+// to literal so the cleaner never drops text it does not recognize as markup.
+func IsLiteralTextFile(filename string) bool {
+	if IsCodeFile(filename) {
+		return true
+	}
+	ext := strings.ToLower(strings.TrimPrefix(getFileExtension(filename), "."))
+	return !slices.Contains(MarkupTypes, ext)
 }
 
 // IsCodeFilename reports whether the file's base name matches a special code filename in
