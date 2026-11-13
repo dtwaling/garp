@@ -1026,11 +1026,33 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		}
 	}
 
-	// Fallback: bounded shared legacy-stream decoding.
+	// Fallback: bounded shared legacy-stream decoding. Read up to three extra
+	// bytes only to distinguish a split UTF-8 rune from a Windows-1252 high byte.
 	fallbackMax := min(limit, 2*1024*1024)
-	data, readErr := io.ReadAll(io.NewSectionReader(r, 0, min(size, fallbackMax)))
+	readSize := min(size, fallbackMax)
+	if fallbackMax < size {
+		readSize = min(size, fallbackMax+int64(utf8.UTFMax-1))
+	}
+	raw, readErr := io.ReadAll(io.NewSectionReader(r, 0, readSize))
 	if readErr != nil {
 		return "", readErr
+	}
+	data := raw[:min(int64(len(raw)), fallbackMax)]
+	// Never decode lookahead bytes, and leave NUL-bearing binary/UTF-16 data
+	// untouched. Trim only a verified split rune after an otherwise UTF-8 prefix.
+	if len(data) < len(raw) && bytes.IndexByte(data, 0) < 0 {
+		for tailStart := len(data) - 1; tailStart >= 0 && tailStart >= len(data)-(utf8.UTFMax-1); tailStart-- {
+			if !utf8.RuneStart(data[tailStart]) {
+				continue
+			}
+			if !utf8.FullRune(data[tailStart:]) && utf8.Valid(data[:tailStart]) {
+				r, width := utf8.DecodeRune(raw[tailStart:])
+				if r != utf8.RuneError && width > len(data)-tailStart {
+					data = data[:tailStart]
+				}
+			}
+			break
+		}
 	}
 	return decodeLegacyStreamText(data, false), nil
 }
