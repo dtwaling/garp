@@ -71,7 +71,7 @@ garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,d
 - Machine-readable output: `--json` (structured envelope), `--plain` (line-oriented),
   and `--pathonly` (distinct matching file paths, one per line) designed for scripting
   and MCP tool callers
-- Smart content cleaning: strips HTML/CSS/JS, email headers, control chars
+- Format-aware content cleaning: markup, email, and extracted documents are stripped of tags, entities, CSS/JS, and quote markers; plain-text, config, and code files are matched literally (see [Content cleaning](#content-cleaning))
 - Binary document support: .eml, .mbox, .pdf, .doc/.docx/.odt, .rtf, .msg
 - Code file search with `--code`
 - Advanced exclusion with `--not` for extensions and words
@@ -392,10 +392,6 @@ Container build files (matched by name, since they're usually extensionless): `D
 `Dockerfile.*` (e.g. `Dockerfile.dev`), `Containerfile`, and `*.dockerfile`. `--only dockerfile`
 restricts to just this family.
 
-> Code files use a minimal, code-safe content cleaner: angle brackets, operators, and tokens
-> like `<?php`, `$obj->prop`, and `TList<T>` are preserved (the document cleaner would strip
-> them as markup). This keeps both matching and excerpts faithful to the source.
-
 **Binary extraction (pure Go)**
 
 | Format | Library |
@@ -418,6 +414,24 @@ restricts to just this family.
 > pages yield no text, and unopenable files are skipped. There is no page-count
 > or per-search PDF limit.
 
+### Content cleaning
+
+- **Literal (control characters and whitespace normalized only):** code files plus
+  `.txt .md .csv .yaml .yml .log .cfg .conf .ini .sh .bat .cmd .tex .rst .asciidoc`,
+  and any other extension selected with `-t` that is not listed below.
+  Angle-bracket tokens (`<user@example.com>`, `<kind>-<topic>.md`, `TList<T>`),
+  `>` blockquote/redirect lines, divider lines, entities, and tokens like `SHA256`
+  are searchable and appear verbatim in excerpts with source `start_line`.
+  Excerpts also preserve embedded divider runs (`|-----|-----|`, `snake_____case`),
+  including in code files; these are no longer collapsed for display.
+- **Markup / email / extracted:**
+  `.html .htm .xhtml .shtml .xml .eml .mbox .msg .pdf .doc .docx .odt .rtf`.
+  Tags, comments, CDATA, declarations, processing instructions, entities,
+  `script`/`style` bodies, `>`-quoted lines, and `-----` dividers are removed.
+  Uppercase/digit run-ons are split (`PDF32` -> `PDF 32`) and a space is added
+  after commas. Positive terms and `--not` exclusions match this cleaned text
+  in every stage.
+
 ## How it works
 
 1. **Discovery** -- walks the directory tree (respecting `--startdir` and `--pathscope`
@@ -425,7 +439,7 @@ restricts to just this family.
 2. **Filter** -- parallel workers check each candidate for all search terms within
    the proximity window.
 3. **Extract** -- pure-Go extractors pull text from binary formats.
-4. **Clean** -- strips markup, control chars, CSS/JS blocks, email headers.
+4. **Clean** -- strips tags, entities, CSS/JS, and quote markers from markup, email, and extracted documents; plain-text and code files keep their text (control characters and whitespace normalized).
 5. **Output** -- TUI with highlighted excerpts, or `--json`/`--plain` for programmatic use.
 
 ## Architecture
@@ -495,6 +509,22 @@ built from a clean tree and committed on their own.
 | `home` / `end` | First / last result |
 | `pgup` / `pgdown` | Scroll 5 lines |
 | `q`, `Ctrl+C` | Quit |
+
+## Known limitations
+
+- Markdown and other literal formats are not rendered: inline HTML and comments
+  in `.md` (for example `<!-- note -->`) are searchable, and a `--not` term inside
+  them excludes the file.
+- In markup/extracted formats, quoted `>` lines are dropped and `SHA256`-style
+  tokens are indexed as `SHA 256`. Search the split form, or a literal format,
+  to find them.
+- Classification is by extension only. A markup file with a literal extension
+  (for example, HTML saved as `.txt`) is searched with its tags.
+- Literal formats keep commas exactly as written, so a query must use the file's
+  comma form: `name,email` matches `name,email`, but `name, email` does not.
+  Before this release, every non-code document padded commas, so only
+  `name, email` matched. Markup/email/extracted formats still add a space after
+  commas.
 
 ## FAQ
 

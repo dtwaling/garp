@@ -513,7 +513,7 @@ func TestPartialEmittedLinesKeepOccurrenceThroughExpansion(t *testing.T) {
 	if len(spans) != 1 || !strings.Contains(spans[0].text, "ms-last-api") {
 		t.Fatalf("expected later partial-match cluster: %#v", spans)
 	}
-	spans[0] = expandShortExcerptSpan(spans[0], 600)
+	spans[0] = expandShortExcerptSpan(spans[0], 600, true)
 	if got := computeExcerptSpanLinesQuery(raw, spans, query, 5000); !slices.Equal(got, []int{103}) {
 		t.Fatalf("expanded partial anchors = %v, want [103]", got)
 	}
@@ -766,7 +766,7 @@ func TestStage3RawAnchorSurvivesDisplayChanges(t *testing.T) {
 			t.Fatalf("code=%t: missing raw seed: %#v", isCode, spans)
 		}
 		anchor := spans[0].rawStart
-		spans[0] = expandShortExcerptSpan(spans[0], 1000)
+		spans[0] = expandShortExcerptSpan(spans[0], 1000, isCode)
 		if spans[0].rawStart != anchor || !spans[0].rawStartValid {
 			t.Fatal("expansion changed the seed anchor")
 		}

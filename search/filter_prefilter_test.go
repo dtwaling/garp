@@ -970,7 +970,7 @@ func cleanedAdmissionFixtures(t *testing.T) map[string]string {
 	text := "Please review PDF32 for 2026Report balance\ndetails, foo<script>x</script>bar R&amp;D\n" +
 		literalAuditPhrase + " again\nx a*b c*d e*f g*h i*j y\n ? \n"
 	fixtures := make(map[string]string)
-	for _, ext := range []string{"txt", "md", "html", "go", "docx", "odt", "eml", "mbox", "rtf", "doc"} {
+	for _, ext := range []string{"txt", "md", "yaml", "sh", "html", "htm", "go", "docx", "odt", "eml", "mbox", "rtf", "doc"} {
 		path := filepath.Join(dir, "sample."+ext)
 		data := []byte(text)
 		switch ext {
@@ -1041,7 +1041,7 @@ func TestPrefiltersAdmitEveryCleanedMatch(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cleaned := cleanSearchContent(mappedContent{text: text}, config.IsCodeFile(path)).text
+			cleaned := cleanSearchContent(mappedContent{text: text}, config.IsLiteralTextFile(path)).text
 			for _, tc := range []struct {
 				terms []string
 				mode  PartialMode

@@ -208,3 +208,31 @@ func TestYamlBothExtensionsPresent(t *testing.T) {
 		t.Errorf("BuildRipgrepFileTypes(false) must include both *.yaml and *.yml; got %q", docs)
 	}
 }
+
+func TestIsLiteralTextFileClassifiesSearchedFormats(t *testing.T) {
+	markup := []string{"html", "htm", "xhtml", "shtml", "xml", "eml", "mbox", "msg", "pdf", "doc", "docx", "odt", "rtf"}
+	searched := make(map[string]bool)
+	for glob := range globSet(BuildRipgrepFileTypes(false)) {
+		searched[strings.TrimPrefix(glob, "*.")] = true
+	}
+	for _, ext := range DocumentTypes {
+		searched[ext] = true
+	}
+	for ext := range searched {
+		for _, name := range []string{"notes." + ext, "DIR/NOTES." + strings.ToUpper(ext)} {
+			if got, want := IsLiteralTextFile(name), !slices.Contains(markup, ext); got != want {
+				t.Errorf("IsLiteralTextFile(%q) = %v, want %v", name, got, want)
+			}
+		}
+	}
+	for _, ext := range MarkupTypes {
+		if !searched[ext] {
+			t.Errorf("MarkupTypes contains unsearched extension %q", ext)
+		}
+	}
+	for _, name := range []string{"main.go", "page.php", "Dockerfile", ".env.example", "README"} {
+		if !IsLiteralTextFile(name) {
+			t.Errorf("IsLiteralTextFile(%q) = false, want true", name)
+		}
+	}
+}

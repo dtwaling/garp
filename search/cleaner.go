@@ -298,7 +298,7 @@ var (
 	// otherwise close at the first >. A first ?> always closes immediately.
 	htmlTagRegex = markupTagPattern{tags: true}
 
-	// Text that may be prose -- every non-code document. Element and processing-
+	// Text that may be prose inside markup formats (config.MarkupTypes). Element and processing-
 	// instruction tags, including quoted values, must close on their own line,
 	// so <80%, <--, heredocs (<<EOF), multi-line <placeholder ...> prose and
 	// unbalanced quotes cannot erase later lines. Only <!...> may span lines.
@@ -364,7 +364,8 @@ func CleanContent(content string) string {
 	return cleanSearchContent(mappedContent{text: content}, false).text
 }
 
-// CleanContentCode is a minimal cleaner for source code. Unlike CleanContent it does NOT strip
+// CleanContentCode is the literal cleaner for source code and plain-text documents
+// (config.IsLiteralTextFile). Unlike CleanContent it does NOT strip
 // HTML/markup, CSS/JS blocks, entities, or email quoting -- those transforms corrupt code:
 // PHP "<?php ... ?>" and "$obj->prop", Delphi generics "TList<T>", and comparisons like
 // "if a < b then" all contain angle brackets the document cleaner would treat as tags and delete.
@@ -378,25 +379,26 @@ func CleanContentCode(content string) string {
 // cleanStage3Content applies the Stage 3 cleaning pipeline once while carrying
 // raw byte offsets through every transformation. Strip line-oriented noise
 // before normalizing controls so quote/divider boundaries are still available.
-func cleanStage3Content(raw string, isCode bool) mappedContent {
+func cleanStage3Content(raw string, literal bool) mappedContent {
 	m := mappedContent{text: raw, offsets: make([]int, len(raw))}
 	for i := range m.offsets {
 		m.offsets[i] = i
 	}
-	return cleanSearchContent(m, isCode)
+	return cleanSearchContent(m, literal)
 }
 
 // cleanSearchContent is shared by Stage 2 analysis and Stage 3 extraction.
+// literal selects the control/whitespace-only path.
 // A nil offset slice avoids building correspondence that analysis never uses.
-func cleanSearchContent(m mappedContent, isCode bool) mappedContent {
-	if !isCode {
+func cleanSearchContent(m mappedContent, literal bool) mappedContent {
+	if !literal {
 		m = stripDelimitedMarkup(m, " ", markupTagPattern{})
 		m = m.replace(textTagRegex, " ").replace(htmlEntityRegex, " ")
 		m = m.replace(junkSymbolsRegex, "").replace(emailQuotingRegex, "")
 		m = m.replace(quoteLineStartRegex, "").replace(quoteMidRegex, " ")
 	}
 	m = normalizeMappedWhitespace(m)
-	if !isCode {
+	if !literal {
 		m = m.replace(letterDigitRegex, "$1 $2").replace(digitLetterRegex, "$1 $2")
 		m = m.replace(commaMissingSpace, ", $1")
 	}
@@ -718,15 +720,17 @@ func normalizeExcerptBounds(source string, left, right int) (int, int) {
 	return left, right
 }
 
-func formatExcerptText(source string, left, right, budget int, matches []excerptMatch) (string, []excerptMatch) {
-	return formatExcerptTextBoundaryMatches(source, left, right, budget, matches, false)
+func formatExcerptText(source string, left, right, budget int, matches []excerptMatch, literal bool) (string, []excerptMatch) {
+	return formatExcerptTextBoundaryMatches(source, left, right, budget, matches, false, literal)
 }
 
-func formatMultipartExcerptText(source string, left, right int, matches []excerptMatch) (string, []excerptMatch) {
-	return formatExcerptTextBoundaryMatches(source, left, right, 0, matches, true)
+func formatMultipartExcerptText(source string, left, right int, matches []excerptMatch, literal bool) (string, []excerptMatch) {
+	return formatExcerptTextBoundaryMatches(source, left, right, 0, matches, true, literal)
 }
 
-func formatExcerptTextBoundaryMatches(source string, left, right, budget int, matches []excerptMatch, clampBoundaries bool) (string, []excerptMatch) {
+// literal must match the source's cleaning mode, including during expansion:
+// code and plain-text dividers are content, not display noise.
+func formatExcerptTextBoundaryMatches(source string, left, right, budget int, matches []excerptMatch, clampBoundaries, literal bool) (string, []excerptMatch) {
 	left, right = normalizeExcerptBounds(source, left, right)
 	raw := source[left:right]
 	trimmed := strings.TrimSpace(raw)
@@ -759,7 +763,9 @@ func formatExcerptTextBoundaryMatches(source string, left, right, budget int, ma
 	text := trimmed
 	text = strings.ReplaceAll(text, "\n", " ")
 	text = strings.ReplaceAll(text, "\t", " ")
-	text, local = replaceExcerptText(text, dividerRegex, " ", local)
+	if !literal {
+		text, local = replaceExcerptText(text, dividerRegex, " ", local)
+	}
 	text, local = replaceExcerptText(text, whitespaceRegex, " ", local)
 	if budget > 0 && len(text) > budget {
 		text, local = truncateExcerpt(text, local, budget)
@@ -976,12 +982,12 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 // zero; NewSearchEngine defaults Distance to 5000. unconstrainedDistance disables
 // the bound for legacy helpers (all negative distances retain that behavior).
 func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetTerms int, minTerms int, isCode bool, distance int) []excerptSpan {
-	return extractRankedMappedExcerptSpansQuery(cleanStage3Content(content, isCode), query, maxExcerpts, targetTerms, minTerms, distance)
+	return extractRankedMappedExcerptSpansQuery(cleanStage3Content(content, isCode), query, maxExcerpts, targetTerms, minTerms, distance, isCode)
 }
 
 // extractRankedMappedExcerptSpansQuery consumes the same single cleaning result
 // used for Stage 3's display content. Offsets always refer to the original input.
-func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQuery, maxExcerpts, targetTerms, minTerms, distance int) []excerptSpan {
+func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQuery, maxExcerpts, targetTerms, minTerms, distance int, literal bool) []excerptSpan {
 	cleaned := mapped.text
 
 	if maxExcerpts <= 0 {
@@ -1166,7 +1172,7 @@ func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQu
 
 			if span <= budget {
 				formatLeft, formatRight := normalizeExcerptBounds(cleaned, window.left, window.right)
-				ex, matches := formatExcerptText(cleaned, formatLeft, formatRight, budget, allExactMatches)
+				ex, matches := formatExcerptText(cleaned, formatLeft, formatRight, budget, allExactMatches, literal)
 				if _, ok := seen[ex]; !ok && ex != "" {
 					seen[ex] = struct{}{}
 					excerpts = append(excerpts, excerptSpan{
@@ -1213,7 +1219,7 @@ func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQu
 					}
 				}
 				for _, part := range merged {
-					frag, fragMatches := formatMultipartExcerptText(cleaned, part.start, part.end, allExactMatches)
+					frag, fragMatches := formatMultipartExcerptText(cleaned, part.start, part.end, allExactMatches, literal)
 					if frag != "" {
 						shift := 0
 						if len(parts) > 0 {
@@ -1268,7 +1274,7 @@ func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQu
 			left, right := expandToBoundaries(cleaned, loc.start, loc.end, maxContext)
 			left, right = normalizeExcerptBounds(cleaned, left, right)
 
-			ex, matches := formatExcerptText(cleaned, left, right, 0, allExactMatches)
+			ex, matches := formatExcerptText(cleaned, left, right, 0, allExactMatches, literal)
 			if ex == "" {
 				continue
 			}
@@ -1334,7 +1340,7 @@ func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQu
 		left, right := expandToBoundaries(cleaned, loc.start, loc.end, maxContext)
 		left, right = normalizeExcerptBounds(cleaned, left, right)
 
-		ex, matches := formatExcerptText(cleaned, left, right, 0, allExactMatches)
+		ex, matches := formatExcerptText(cleaned, left, right, 0, allExactMatches, literal)
 		if ex != "" {
 			return []excerptSpan{{
 				text: ex, left: left, right: right, matches: matches,
@@ -1356,7 +1362,7 @@ func submatchRange(loc []int) (int, int) {
 	return loc[0], loc[1]
 }
 
-func expandShortExcerptSpan(span excerptSpan, target int) excerptSpan {
+func expandShortExcerptSpan(span excerptSpan, target int, literal bool) excerptSpan {
 	sentences := sourceSentenceSpans(span.sourceText, span.sourceMatches)
 	if len(sentences) == 0 || len(span.matches) == 0 || len(span.sourceMatches) == 0 {
 		return span
@@ -1396,6 +1402,7 @@ func expandShortExcerptSpan(span excerptSpan, target int) excerptSpan {
 			sentences[right].end,
 			0,
 			span.sourceMatches,
+			literal,
 		)
 		expanded.text = text
 		expanded.left = sentences[left].start

@@ -539,8 +539,8 @@ func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []s
 }
 
 // discoveryAdmitsTextFile applies the cleaned-text admission proof to Stage 1.
-// Its query contains only the primary term's necessary matchers. For non-code
-// files a boundary-free raw gate scan runs first; only a gate hit pays for the
+// Its query contains only the primary term's necessary matchers. For markup
+// formats a boundary-free raw gate scan runs first; only a gate hit pays for the
 // exact pass through cleanerSpacingReader.
 func discoveryAdmitsTextFile(path string, admission, gate compiledQuery, provable bool, maxBytes int64) bool {
 	f, st, err := openRegularSearchFile(path)
@@ -554,7 +554,7 @@ func discoveryAdmitsTextFile(path string, admission, gate compiledQuery, provabl
 	_ = adviseSequential(f)
 	defer adviseDontNeed(f)
 	scan := discoveryScanner{chunk: int(min(st.Size()+1, discoveryChunkSize))}
-	if config.IsCodeFile(path) {
+	if config.IsLiteralTextFile(path) {
 		return scan.admits(io.LimitReader(f, maxBytes), admission)
 	}
 	if gate.matchers != nil {
@@ -983,7 +983,7 @@ func streamContainsRankedWordsDecidedQuery(filePath string, query compiledQuery,
 	_ = adviseSequential(f)
 	defer f.Close()
 
-	found, complete, readErr := streamMatchesCleanedQuery(f, query, strict, maxBytes, config.IsCodeFile(filePath))
+	found, complete, readErr := streamMatchesCleanedQuery(f, query, strict, maxBytes, config.IsLiteralTextFile(filePath))
 	_ = adviseDontNeed(f)
 	return decideStreamQueryResult(found, complete, readErr, true)
 }
@@ -1025,7 +1025,7 @@ func streamContainsQueryDecidedWithCap(filePath string, query compiledQuery, str
 		completeAtLimit = false
 	}
 
-	found, complete, readErr := streamMatchesCleanedQuery(f, query, strict, maxBytes, config.IsCodeFile(filePath))
+	found, complete, readErr := streamMatchesCleanedQuery(f, query, strict, maxBytes, config.IsLiteralTextFile(filePath))
 	_ = adviseDontNeed(f)
 	return decideStreamQueryResult(found, complete, readErr, completeAtLimit)
 }
@@ -1228,16 +1228,16 @@ var errUnprovableMiss = errors.New("prefilter miss cannot prove a cleaned-text m
 
 // streamMatchesCleanedQuery permits a conclusive miss only when the bounded
 // stream cannot satisfy prefilterAdmissionQuery after cleanerSpacingReader
-// (non-code). Cleaning never joins raw tokens: spaceless matches survive the
+// (markup formats). Cleaning never joins raw tokens: spaceless matches survive the
 // spacing replay, and phrase matches imply every usable piece is present.
 // Thus an authoritative cleaned-text match cannot be a decided prefilter miss.
 // Stage 1 admits a text file unless that same proof succeeds.
-func streamMatchesCleanedQuery(r io.Reader, query compiledQuery, strict bool, maxBytes int64, isCode bool) (found, complete bool, err error) {
+func streamMatchesCleanedQuery(r io.Reader, query compiledQuery, strict bool, maxBytes int64, literal bool) (found, complete bool, err error) {
 	aq, ok := prefilterAdmissionQuery(query)
 	if !ok {
 		return false, false, errUnprovableMiss
 	}
-	if isCode {
+	if literal {
 		return streamMatchesQuery(r, aq, strict, maxBytes)
 	}
 	sr := &cleanerSpacingReader{r: io.LimitReader(r, maxBytes)}
@@ -1626,7 +1626,7 @@ func readStage2SearchText(filePath string, maxBytes int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return cleanSearchContent(mappedContent{text: string(content)}, config.IsCodeFile(filePath)).text, nil
+	return cleanSearchContent(mappedContent{text: string(content)}, config.IsLiteralTextFile(filePath)).text, nil
 }
 
 // readTextPrefix reads only the active searchable prefix while reporting the
