@@ -372,9 +372,13 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			if page.V.IsNull() {
 				return
 			}
-			content := page.Content()
 			remaining := limit - int64(b.Len())
-			pageText, perr := pdfTextItemsToStringBounded(content.Text, remaining)
+			items, perr := pdfPageText(page, remaining)
+			if perr != nil {
+				pageErr = perr
+				return
+			}
+			pageText, perr := pdfTextItemsToStringBounded(items, remaining)
 			if perr != nil {
 				pageErr = perr
 				return
@@ -436,6 +440,269 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		return s, nil
 	}
 	return "", nil
+}
+
+/*
+The PDF matrix and page interpreter below are adapted from
+
+	github.com/ledongthuc/pdf, page.go (5959a4027728).
+
+Copyright 2014 The Go Authors. All rights reserved.
+
+Upstream BSD license:
+Copyright (c) 2009 The Go Authors. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+  - Redistributions of source code must retain the above copyright
+
+notice, this list of conditions and the following disclaimer.
+  - Redistributions in binary form must reproduce the above
+
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+  - Neither the name of Google Inc. nor the names of its
+
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+type pdfMatrix [3][3]float64
+
+var pdfIdentity = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
+
+func (x pdfMatrix) mul(y pdfMatrix) pdfMatrix {
+	var z pdfMatrix
+	for i := 0; i < 3; i++ {
+		for j := 0; j < 3; j++ {
+			for k := 0; k < 3; k++ {
+				z[i][j] += x[i][k] * y[k][j]
+			}
+		}
+	}
+	return z
+}
+
+type pdfFontMetrics struct {
+	name        string
+	enc         pdf.TextEncoding
+	first, last int
+	widths      pdf.Value
+}
+
+func (f *pdfFontMetrics) width(code int) float64 {
+	if f == nil || code < f.first || code > f.last {
+		return 0
+	}
+	return f.widths.Index(code - f.first).Float64()
+}
+
+type pdfTextState struct {
+	Tc, Th, Tl, Tfs, Trise float64
+	Tf                     *pdfFontMetrics
+	Tm, Tlm, CTM           pdfMatrix
+}
+
+var errPDFPageBudget = errors.New("pdf page text budget")
+
+// pdfPageText mirrors ledongthuc/pdf's Page.Content text operators and panic
+// behavior, but resolves font metrics once per page instead of once per glyph.
+// Keep byte-indexed widths and TJ's synthetic newline for extraction parity.
+func pdfPageText(p pdf.Page, maxBytes int64) (text []pdf.Text, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if r != errPDFPageBudget {
+				panic(r)
+			}
+			text, err = nil, fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, maxBytes)
+		}
+	}()
+	if p.V.IsNull() || p.V.Key("Contents").Kind() == pdf.Null {
+		return nil, nil
+	}
+	strm := p.V.Key("Contents")
+	fonts := make(map[string]*pdfFontMetrics)
+	var enc pdf.TextEncoding
+	g := pdfTextState{Th: 1, CTM: pdfIdentity}
+	var rawBytes int64
+	// Whitespace and empty TJ arrays also emit items. Bound those allocations
+	// independently, while allowing ordinary whitespace after an exact budget.
+	maxItems := max(maxBytes, 4096)
+	showText := func(s string) {
+		decoded := s
+		if enc != nil {
+			decoded = enc.Decode(s)
+		}
+		n := 0
+		for _, ch := range decoded {
+			rawBytes += int64(len(strings.TrimSpace(string(ch))))
+			if rawBytes > maxBytes || int64(len(text)) >= maxItems {
+				panic(errPDFPageBudget)
+			}
+			var w0 float64
+			if n < len(s) {
+				w0 = g.Tf.width(int(s[n]))
+			}
+			n++
+			var name string
+			if g.Tf != nil {
+				name = g.Tf.name
+			}
+			trm := pdfMatrix{{g.Tfs * g.Th, 0, 0}, {0, g.Tfs, 0}, {0, g.Trise, 1}}.mul(g.Tm).mul(g.CTM)
+			text = append(text, pdf.Text{Font: name, FontSize: trm[0][0], X: trm[2][0], Y: trm[2][1], W: w0 / 1000 * trm[0][0], S: string(ch)})
+			tx := (w0/1000*g.Tfs + g.Tc) * g.Th
+			g.Tm = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
+		}
+	}
+	var stack []pdfTextState
+	pdf.Interpret(strm, func(stk *pdf.Stack, op string) {
+		args := make([]pdf.Value, stk.Len())
+		for i := len(args) - 1; i >= 0; i-- {
+			args[i] = stk.Pop()
+		}
+		switch op {
+		case "cm":
+			if len(args) != 6 {
+				panic("bad g.Tm")
+			}
+			var m pdfMatrix
+			for i := 0; i < 6; i++ {
+				m[i/2][i%2] = args[i].Float64()
+			}
+			m[2][2] = 1
+			g.CTM = m.mul(g.CTM)
+		case "re":
+			if len(args) != 4 {
+				panic("bad re")
+			}
+		case "q":
+			stack = append(stack, g)
+		case "Q":
+			n := len(stack) - 1
+			g = stack[n]
+			stack = stack[:n]
+		case "BT":
+			g.Tm = pdfIdentity
+			g.Tlm = g.Tm
+		case "T*":
+			g.Tlm = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {0, -g.Tl, 1}}.mul(g.Tlm)
+			g.Tm = g.Tlm
+		case "Tc":
+			if len(args) != 1 {
+				panic("bad g.Tc")
+			}
+			g.Tc = args[0].Float64()
+		case "TD":
+			if len(args) != 2 {
+				panic("bad Td")
+			}
+			g.Tl = -args[1].Float64()
+			fallthrough
+		case "Td":
+			if len(args) != 2 {
+				panic("bad Td")
+			}
+			tx, ty := args[0].Float64(), args[1].Float64()
+			g.Tlm = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {tx, ty, 1}}.mul(g.Tlm)
+			g.Tm = g.Tlm
+		case "Tf":
+			if len(args) != 2 {
+				panic("bad TL")
+			}
+			name := args[0].Name()
+			f, ok := fonts[name]
+			if !ok {
+				font := p.Font(name)
+				base := font.BaseFont()
+				if i := strings.Index(base, "+"); i >= 0 {
+					base = base[i+1:]
+				}
+				f = &pdfFontMetrics{name: base, enc: font.Encoder(), first: font.FirstChar(), last: font.LastChar(), widths: font.V.Key("Widths")}
+				fonts[name] = f
+			}
+			g.Tf, enc = f, f.enc
+			g.Tfs = args[1].Float64()
+		case "\"":
+			if len(args) != 3 {
+				panic("bad \" operator")
+			}
+			g.Tc = args[1].Float64()
+			args = args[2:]
+			fallthrough
+		case "'":
+			if len(args) != 1 {
+				panic("bad ' operator")
+			}
+			g.Tlm = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {0, -g.Tl, 1}}.mul(g.Tlm)
+			g.Tm = g.Tlm
+			fallthrough
+		case "Tj":
+			if len(args) != 1 {
+				panic("bad Tj operator")
+			}
+			showText(args[0].RawString())
+		case "TJ":
+			v := args[0]
+			for i := 0; i < v.Len(); i++ {
+				x := v.Index(i)
+				if x.Kind() == pdf.String {
+					showText(x.RawString())
+				} else {
+					tx := -x.Float64() / 1000 * g.Tfs * g.Th
+					g.Tm = pdfMatrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
+				}
+			}
+			showText("\n")
+		case "TL":
+			if len(args) != 1 {
+				panic("bad TL")
+			}
+			g.Tl = args[0].Float64()
+		case "Tm":
+			if len(args) != 6 {
+				panic("bad g.Tm")
+			}
+			var m pdfMatrix
+			for i := 0; i < 6; i++ {
+				m[i/2][i%2] = args[i].Float64()
+			}
+			m[2][2] = 1
+			g.Tm, g.Tlm = m, m
+		case "Tr":
+			if len(args) != 1 {
+				panic("bad Tr")
+			}
+		case "Ts":
+			if len(args) != 1 {
+				panic("bad Ts")
+			}
+			g.Trise = args[0].Float64()
+		case "Tw":
+			if len(args) != 1 {
+				panic("bad g.Tw")
+			}
+		case "Tz":
+			if len(args) != 1 {
+				panic("bad Tz")
+			}
+			g.Th = args[0].Float64() / 100
+		}
+	})
+	return text, nil
 }
 
 func pdfTextItemsToString(items []pdf.Text) string {

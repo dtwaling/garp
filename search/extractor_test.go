@@ -765,6 +765,105 @@ func TestPDFReaderAtPlainTextFallbackBudgets(t *testing.T) {
 	}
 }
 
+type readCountingReaderAt struct {
+	io.ReaderAt
+	reads int
+}
+
+func (r *readCountingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	r.reads++
+	return r.ReaderAt.ReadAt(p, off)
+}
+
+func pdfWithIndirectWidths(stream string) []byte {
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(stream), stream),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Times-Roman /FirstChar 32 /LastChar 126 /Widths 6 0 R >>",
+		"[" + strings.Repeat("500 ", 95) + "]",
+	}
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.4\n")
+	var offsets []int
+	for i, obj := range objects {
+		offsets = append(offsets, b.Len())
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, obj)
+	}
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f\n", len(objects)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n\n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	return b.Bytes()
+}
+
+func TestPDFPageTextMatchesContentAndResolvesFontsOncePerPage(t *testing.T) {
+	var reads []int
+	for _, n := range []int{10, 1000} {
+		data := pdfWithIndirectWidths(fmt.Sprintf("q 1 0 0 1 10 0 cm BT /F1 10 Tf 2 Tc 110 Tz 1 Ts 72 720 Td (%s) Tj [(x) -333 (y)] TJ 14 TL T* (next) ' 1 0 (quote) \" /F1 10 Tf 0 Tr 2 Tw 1 0 0 1 20 30 Tm 0 -14 TD (end) Tj ET 0 0 1 1 re Q\n", strings.Repeat("a", n)))
+		reader, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		page := reader.Page(1)
+		want := page.Content().Text
+		got, err := pdfPageText(page, DefaultMaxExtractedBytes)
+		if err != nil || len(got) != len(want) {
+			t.Fatalf("%d glyphs: items = %d, want %d; err = %v", n, len(got), len(want), err)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%d glyphs, item %d: got %+v, want %+v", n, i, got[i], want[i])
+			}
+		}
+		if _, err := pdfPageText(page, int64(n)); !errors.Is(err, ErrExtractionLimit) {
+			t.Fatalf("%d glyphs: budget error = %v", n, err)
+		}
+		counter := &readCountingReaderAt{ReaderAt: bytes.NewReader(data)}
+		text, err := (&PDFExtractor{}).ExtractReaderAt(counter, int64(len(data)), 0)
+		if err != nil || text == "" {
+			t.Fatalf("extraction = (%q, %v)", text, err)
+		}
+		reads = append(reads, counter.reads)
+	}
+	if reads[0] != reads[1] {
+		t.Fatalf("ReadAt calls scale with glyph count: %v", reads)
+	}
+	t.Logf("ReadAt calls for 10 and 1000 glyphs: %v", reads)
+
+	for _, stream := range []string{"re", "Tr", "Q", "cm", "Tc", "TD", "Td", "Tf", "\"", "'", "Tj", "TJ", "TL", "Tm", "Ts", "Tw", "Tz"} {
+		t.Run("panic/"+stream, func(t *testing.T) {
+			data := pdfWithPageStreams(stream + "\n")
+			reader, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			panics := func(f func()) (value any) {
+				defer func() { value = recover() }()
+				f()
+				return nil
+			}
+			want := panics(func() { reader.Page(1).Content() })
+			got := panics(func() { _, _ = pdfPageText(reader.Page(1), DefaultMaxExtractedBytes) })
+			if want == nil || fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("panic = %v, want %v", got, want)
+			}
+		})
+	}
+	for _, stream := range []string{"(" + strings.Repeat(" ", 4097) + ") Tj", strings.Repeat("[] TJ ", 4097)} {
+		t.Run("whitespace item budget", func(t *testing.T) {
+			data := pdfWithPageStreams("BT /F1 12 Tf " + stream + " ET\n")
+			text, err := (&PDFExtractor{}).ExtractReaderAt(bytes.NewReader(data), int64(len(data)), 1)
+			if text != "" || !errors.Is(err, ErrExtractionLimit) {
+				t.Fatalf("extraction = (%q, %v), want extraction limit", text, err)
+			}
+		})
+	}
+}
+
 // forbiddenSectorReader rejects reads of nested payload, while permitting the
 // directory sector after it. Discarding a nested read later is still a failure.
 type forbiddenSectorReader struct {
