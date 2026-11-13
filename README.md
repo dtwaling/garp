@@ -186,6 +186,18 @@ ancestor pattern can cover the root. If no root intersects it, validation fails
 before search. Use `./src` for explicit root-relative matching. On Windows, a
 leading slash that is not an absolute path is root-relative.
 
+A positive `--pathscope` pattern whose first segment names a direct child of
+`--startdir` (for example `child/`, `child/**`, `child/src/`, or bare `child`)
+searches that child even when an ignore file above it (`.gitignore`, `.ignore`,
+or Git `exclude`) ignores the directory itself. This lets you target an ignored
+workspace child directory without `--no-ignore`. For an ordinary child,
+inherited file rules such as `*.log` and the child's own ignore files still
+apply. If the child is a nested Git repository, its contents use that
+repository's own ignore rules; parent rules do not carry in. Ignored directories
+deeper than the direct child stay skipped. `!` patterns, patterns that start
+with `**`, bare patterns that contain `.`, and `-g` / `--iglob` globs never
+exempt a directory.
+
 ### Partial word matching and inline globs
 
 By default, garp uses whole-word matching with plural support. `--partial` enables
@@ -383,10 +395,10 @@ the excerpt blocks in `--plain`, and the excerpt lists shown in the TUI.
 
 **Code (with `--code`)**
 
-`.go`, `.py`, `.js`, `.ts`, `.java`, `.cpp`, `.c`, `.rs`, `.rb`, `.cs`, `.swift`,
-`.kt`, `.scala`, `.sql`, `.php`, `.phtml`, `.json`
-
-Delphi / Object Pascal: `.pas`, `.dpr`, `.dpk`, `.inc`, `.dfm`, `.fmx`, `.dproj`, `.groupproj`
+`.go`, `.py`, `.js`, `.ts`, `.java`, `.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`,
+`.m`, `.mm`, `.cs`, `.rs`, `.rb`, `.swift`, `.kt`, `.scala`, `.clj`, `.pl`, `.r`,
+`.sql`, `.php`, `.phtml`, `.json`, `.pas`, `.dpr`, `.dpk`, `.inc`, `.dfm`, `.fmx`,
+`.dproj`, `.groupproj`
 
 Container build files (matched by name, since they're usually extensionless): `Dockerfile`,
 `Dockerfile.*` (e.g. `Dockerfile.dev`), `Containerfile`, and `*.dockerfile`. `--only dockerfile`
@@ -413,6 +425,20 @@ restricts to just this family.
 > as `Truncated`. Parser panics on malformed PDFs are recovered -- unreadable
 > pages yield no text, and unopenable files are skipped. There is no page-count
 > or per-search PDF limit.
+>
+> PDF text comes from each page's own content stream. Text drawn inside a Form
+> XObject (a `/Do` sub-stream, common for embedded figures and their labels) is
+> not extracted. A word break is emitted after each `TJ` text run as a newline
+> glyph decoded through the run's font. When that font's encoding maps code 10
+> to a glyph (TeX OT1 fonts map it to `/Omega`), an Ohm sign (U+2126) follows
+> the run in excerpts, for example `alpha` followed by U+2126. The run's own
+> words stay searchable.
+
+Spreadsheet and presentation formats (`.xls`, `.xlsx`, `.ppt`, `.pptx`, `.ods`,
+`.odp`) are not extracted in v0.10.0 and are not searched by default; extractor
+support is planned for v1.0. An explicit `-t xlsx` (or another of these types)
+searches the raw file bytes as literal text, which rarely matches compressed
+content.
 
 ### Content cleaning
 
@@ -525,6 +551,15 @@ built from a clean tree and committed on their own.
   Before this release, every non-code document padded commas, so only
   `name, email` matched. Markup/email/extracted formats still add a space after
   commas.
+- For content exclusions, a `--not` term that starts or ends with an ASCII
+  non-word character (for example `<user@example.com>`, `&amp;`, `>`, or `(note)`)
+  excludes a file only where that edge touches an adjacent ASCII letter, digit,
+  or `_`: `--not '&amp;'` excludes `x&amp;y` but not `a &amp; b`.
+  Exclude a word inside the token instead
+  (`--not user@example.com`, `--not amp`). A term that starts with `-` must
+  follow `--` (`--not -- -----`).
+- Line numbers count `\n` only. In a file with lone-CR (classic Mac) line
+  endings, every match reports `start_line` 1.
 
 ## FAQ
 
