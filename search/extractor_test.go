@@ -3,6 +3,7 @@ package search
 import (
 	"archive/zip"
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -894,64 +895,121 @@ func (r *readCountingReaderAt) ReadAt(p []byte, off int64) (int, error) {
 	return r.ReaderAt.ReadAt(p, off)
 }
 
-func pdfWithIndirectWidths(stream string) []byte {
+func pdfWithIndirectWidths(t *testing.T, stream string, compressed bool) []byte {
+	t.Helper()
+	// Map lowercase glyph codes to uppercase text, not their raw-byte reading.
+	const cmap = `begincmap
+1 begincodespacerange <00> <ff> endcodespacerange
+1 beginbfchar <0a> <000a> endbfchar
+1 beginbfrange <61> <7a> <0041> endbfrange
+endcmap
+`
 	objects := []string{
 		"<< /Type /Catalog /Pages 2 0 R >>",
 		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
 		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
 		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(stream), stream),
-		"<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Times-Roman /FirstChar 32 /LastChar 126 /Widths 6 0 R >>",
+		"<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Times-Roman /FirstChar 32 /LastChar 126 /Widths 6 0 R /ToUnicode 7 0 R >>",
 		"[" + strings.Repeat("500 ", 95) + "]",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(cmap), cmap),
+	}
+	if compressed {
+		// Objects 5 (font) and 6 (widths) are reached only via type-2 xrefs.
+		header := fmt.Sprintf("5 0 6 %d ", len(objects[4])+1)
+		var packed bytes.Buffer
+		zw := zlib.NewWriter(&packed)
+		if _, err := io.WriteString(zw, header+objects[4]+" "+objects[5]); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		objects = append(objects, fmt.Sprintf("<< /Type /ObjStm /N 2 /First %d /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream", len(header), packed.Len(), packed.Bytes()))
 	}
 	var b bytes.Buffer
-	b.WriteString("%PDF-1.4\n")
-	var offsets []int
+	b.WriteString("%PDF-1.5\n")
+	offsets := make([]int, len(objects)+1)
 	for i, obj := range objects {
-		offsets = append(offsets, b.Len())
+		if compressed && (i == 4 || i == 5) {
+			continue
+		}
+		offsets[i+1] = b.Len()
 		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, obj)
 	}
 	xref := b.Len()
-	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f\n", len(objects)+1)
-	for _, off := range offsets {
-		fmt.Fprintf(&b, "%010d 00000 n\n", off)
+	if compressed {
+		offsets = append(offsets, xref) // Object 9 is the xref stream itself.
+		entries := make([]byte, 7*len(offsets))
+		for id, off := range offsets {
+			e := entries[7*id : 7*(id+1)]
+			e[0] = 1
+			binary.BigEndian.PutUint32(e[1:5], uint32(off))
+			switch id {
+			case 0:
+				e[0] = 0
+				binary.BigEndian.PutUint16(e[5:], 65535)
+			case 5, 6:
+				e[0] = 2
+				binary.BigEndian.PutUint32(e[1:5], 8)
+				binary.BigEndian.PutUint16(e[5:], uint16(id-5))
+			}
+		}
+		fmt.Fprintf(&b, "9 0 obj\n<< /Type /XRef /Size %d /Root 1 0 R /W [1 4 2] /Length %d >>\nstream\n%s\nendstream\nendobj\n", len(offsets), len(entries), entries)
+	} else {
+		fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f\n", len(offsets))
+		for _, off := range offsets[1:] {
+			fmt.Fprintf(&b, "%010d 00000 n\n", off)
+		}
+		fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\n", len(offsets))
 	}
-	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	fmt.Fprintf(&b, "startxref\n%d\n%%%%EOF\n", xref)
 	return b.Bytes()
 }
 
 func TestPDFPageTextMatchesContentAndResolvesFontsOncePerPage(t *testing.T) {
-	var reads []int
-	for _, n := range []int{10, 1000} {
-		data := pdfWithIndirectWidths(fmt.Sprintf("q 1 0 0 1 10 0 cm BT /F1 10 Tf 2 Tc 110 Tz 1 Ts 72 720 Td (%s) Tj [(x) -333 (y)] TJ 14 TL T* (next) ' 1 0 (quote) \" /F1 10 Tf 0 Tr 2 Tw 1 0 0 1 20 30 Tm 0 -14 TD (end) Tj ET 0 0 1 1 re Q\n", strings.Repeat("a", n)))
-		reader, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		page := reader.Page(1)
-		want := page.Content().Text
-		got, err := pdfPageText(page, DefaultMaxExtractedBytes)
-		if err != nil || len(got) != len(want) {
-			t.Fatalf("%d glyphs: items = %d, want %d; err = %v", n, len(got), len(want), err)
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("%d glyphs, item %d: got %+v, want %+v", n, i, got[i], want[i])
+	for _, tc := range []struct {
+		name       string
+		compressed bool
+	}{
+		{"object stream", true},
+		{"plain indirect", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var reads []int
+			for _, n := range []int{10, 1000} {
+				data := pdfWithIndirectWidths(t, fmt.Sprintf("q 1 0 0 1 10 0 cm BT /F1 10 Tf 2 Tc 110 Tz 1 Ts 72 720 Td (%s) Tj [(x) -333 (y)] TJ 14 TL T* (next) ' 1 0 (quote) \" /F1 10 Tf 0 Tr 2 Tw 1 0 0 1 20 30 Tm 0 -14 TD (end) Tj ET 0 0 1 1 re Q\n", strings.Repeat("a", n)), tc.compressed)
+				reader, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				page := reader.Page(1)
+				want := page.Content().Text
+				got, err := pdfPageText(page, DefaultMaxExtractedBytes)
+				if err != nil || len(got) != len(want) {
+					t.Fatalf("%d glyphs: items = %d, want %d; err = %v", n, len(got), len(want), err)
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Fatalf("%d glyphs, item %d: got %+v, want %+v", n, i, got[i], want[i])
+					}
+				}
+				if _, err := pdfPageText(page, int64(n)); !errors.Is(err, ErrExtractionLimit) {
+					t.Fatalf("%d glyphs: budget error = %v", n, err)
+				}
+				counter := &readCountingReaderAt{ReaderAt: bytes.NewReader(data)}
+				text, err := (&PDFExtractor{}).ExtractReaderAt(counter, int64(len(data)), 0)
+				wantText := strings.Repeat("A ", n) + "X Y\nN E X T\nQUOTE\nEND"
+				if err != nil || text != wantText {
+					t.Fatalf("extraction = (%q, %v), want %q", text, err, wantText)
+				}
+				reads = append(reads, counter.reads)
 			}
-		}
-		if _, err := pdfPageText(page, int64(n)); !errors.Is(err, ErrExtractionLimit) {
-			t.Fatalf("%d glyphs: budget error = %v", n, err)
-		}
-		counter := &readCountingReaderAt{ReaderAt: bytes.NewReader(data)}
-		text, err := (&PDFExtractor{}).ExtractReaderAt(counter, int64(len(data)), 0)
-		if err != nil || text == "" {
-			t.Fatalf("extraction = (%q, %v)", text, err)
-		}
-		reads = append(reads, counter.reads)
+			if reads[0] != reads[1] {
+				t.Fatalf("ReadAt calls scale with glyph count: %v", reads)
+			}
+			t.Logf("ReadAt calls for 10 and 1000 glyphs: %v", reads)
+		})
 	}
-	if reads[0] != reads[1] {
-		t.Fatalf("ReadAt calls scale with glyph count: %v", reads)
-	}
-	t.Logf("ReadAt calls for 10 and 1000 glyphs: %v", reads)
 
 	for _, stream := range []string{"re", "Tr", "Q", "cm", "Tc", "TD", "Td", "Tf", "\"", "'", "Tj", "TJ", "TL", "Tm", "Ts", "Tw", "Tz"} {
 		t.Run("panic/"+stream, func(t *testing.T) {
