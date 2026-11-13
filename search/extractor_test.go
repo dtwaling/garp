@@ -487,6 +487,8 @@ func cp1252MSG() []byte {
 		[2][]byte{[]byte("Men\xfa caf\xe9" + strings.Repeat(" ", 4087)), []byte("Le caf\xe9 cr\xe8me ordered" + strings.Repeat(" ", 4075))})
 }
 
+var binaryCatalogMSG = []byte("\x01\x01\x00\x04\x00\x00arithmetic exception, numeric overflow\x00\x00\x02\x00\x00\x00invalid database key\x00\x00")
+
 func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 	hiddenHTML := utf16LE("<html><style>cssneedle</style><script>jsneedle()</script><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</body></html>")
 	for _, tc := range []struct {
@@ -504,6 +506,12 @@ func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{[]byte("<html><body><p>Le caf\xe9 cr\xe8me au lait</p></body></html>"), nil}), "Le café crème au lait", ""},
 		{"non-CFB 8-bit fallback", []byte("arithmetic exception, numeric overflow"), "arithmetic exception, numeric overflow", ""},
+		{"binary CP1252 HTML excludes UTF-16LE mojibake", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{[]byte("<html><body><p>cp1252htmlmarker caf\xe9 text \x93quoted\x94</p></body></html>"), nil}), "cp1252htmlmarker caf\u00e9 text \u201cquoted\u201d", "\u683c\u6d74\u3e6c\u623c\u646f\u3e79"},
+		{"non-CFB UTF-8 Tcl catalog", []byte("namespace eval ::tk {\n	::msgcat::mcset de \"&Open...\" \"\u00d6&ffnen...\"\n}\n"), "\u00d6&ffnen...", "\u616e\u656d\u7073\u6361"},
+		{"non-CFB CP1252 text", []byte("Men\xfa caf\xe9 cr\xe8me"), "Men\u00fa caf\u00e9 cr\u00e8me", "\u654d"},
+		{"non-CFB binary catalog", binaryCatalogMSG, "arithmetic exception, numeric overflow invalid database key", "\u7261\u7469\u6d68\u7465\u6369"},
 		{"binary UTF-16LE HTML drops hidden blocks", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
 			[2][]byte{hiddenHTML, nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle"},
@@ -626,6 +634,10 @@ func TestDOCExtractorReadsEightBitAndUTF16LEStreams(t *testing.T) {
 			if err != nil || !strings.Contains(got, tc.want) || strings.ContainsAny(got, "<>") {
 				t.Fatalf("extraction = (%q, %v), want containing %q without angle brackets", got, err, tc.want)
 			}
+			isHighRune := func(r rune) bool { return r >= 0x3000 }
+			if strings.IndexFunc(tc.want, isHighRune) < 0 && strings.IndexFunc(got, isHighRune) >= 0 {
+				t.Errorf("extraction = %q, must not contain spurious high runes", got)
+			}
 		})
 	}
 }
@@ -650,6 +662,25 @@ func TestWordPieceTextCapsOverlappingPieces(t *testing.T) {
 			if ok != tc.ok || len(got) > 64 || !utf8.ValidString(got) ||
 				(ok && !strings.HasPrefix(got, "subject body text subject")) || (!ok && got != "") {
 				t.Fatalf("piece text = (%q, %t), want ok=%t and bounded UTF-8", got, ok, tc.ok)
+			}
+		})
+	}
+}
+
+func TestHasUTF16LECadence(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"CP1252 text", []byte("caf\xe9 text"), false},
+		{"zero-padded CP1252 HTML", []byte("<p>caf\xe9</p>" + strings.Repeat("\x00", 4083)), false},
+		{"binary catalog", binaryCatalogMSG, false},
+		{"UTF-16LE CJK HTML", utf16LE("<p>" + strings.Repeat("\u6771\u4eac\u90fd", 30) + "</p>"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasUTF16LECadence(tc.data); got != tc.want {
+				t.Fatalf("cadence = %t, want %t", got, tc.want)
 			}
 		})
 	}

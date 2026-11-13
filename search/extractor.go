@@ -253,7 +253,7 @@ type DOCExtractor struct{}
 // - Open OLE/CFB and read at most 2 MiB in total from the WordDocument, 1Table and 0Table streams
 // - Prefer the root Word 97-2003 FIB piece table (Windows-1252 or UTF-16LE pieces)
 // - Otherwise decode each stream via decodeLegacyStreamText: UTF-16 when a BOM or dominant NUL lane proves it,
-// else both the printable-ASCII and UTF-16LE readings
+// else the printable-ASCII reading, plus UTF-16LE only with odd-lane NUL cadence
 // - If CFB parsing fails or no stream yields text, salvage printable ASCII from a bounded prefix
 func (e *DOCExtractor) ExtractText(data []byte) (string, error) {
 	return e.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
@@ -902,8 +902,8 @@ func absFloat(v float64) float64 {
 
 // MSGExtractor extracts Subject and body text from .msg files (Outlook OLE/CFB messages).
 // MAPI property types select decoding: Unicode 001F as UTF-16LE, ANSI 001E as UTF-8 or
-// Windows-1252. Binary 0102 (HTML only) is detected UTF-16, else ANSI plus a UTF-16LE
-// reading when the bytes are invalid UTF-8 or contain NULs.
+// Windows-1252. Binary 0102 (HTML only) is detected UTF-16, else ANSI,
+// plus a UTF-16LE reading only with odd-lane NUL cadence.
 // HTML is used only without a plain body. Non-CFB input, or a message with no Subject/body
 // text, falls back to bounded legacy-stream decoding.
 type MSGExtractor struct{}
@@ -965,11 +965,12 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 				if s, ok := tryDecodeUTF16BestEffort(b); ok {
 					return strings.TrimSpace(s)
 				}
-				// Retain both readings for invalid UTF-8 or NUL-containing streams:
-				// non-Latin UTF-16LE can be valid UTF-8, but its HTML tags have NULs.
+				// Retain both readings only when odd-lane NULs show UTF-16LE cadence:
+				// non-Latin UTF-16LE can be valid UTF-8, but its markup has NUL high bytes.
+				// 8-bit HTML gets the single ANSI reading.
 				// Strip each reading's tags before combining, while markup is intact.
 				// Leave entities encoded for the final HTML pass to decode once.
-				if !utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0 {
+				if hasUTF16LECadence(b) {
 					text := stripReadingMarkup(decodeANSIText(b)) + "\n" +
 						stripReadingMarkup(utf16LEReadingWithMarkup(b, true))
 					return strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
@@ -1077,9 +1078,9 @@ func utf16LEReadingWithMarkup(b []byte, keepMarkup bool) string {
 	return out.String()
 }
 
-// decodeLegacyStreamText is the shared Stage 1/2/3 legacy-stream rule. Without
-// encoding evidence, retain both readings; Word's piece table is the exact
-// alternative for distinguishing mixed 8-bit and UTF-16LE text from binary noise.
+// decodeLegacyStreamText is the shared Stage 1/2/3 legacy-stream rule: UTF-16 when
+// a BOM or dense NUL lane proves it; otherwise one 8-bit reading, plus a UTF-16LE
+// reading only when odd-lane NULs dominate. Word 97 files use the piece table first.
 func decodeLegacyStreamText(b []byte, binary bool) string {
 	if s, ok := tryDecodeUTF16BestEffort(b); ok {
 		if binary {
@@ -1088,10 +1089,39 @@ func decodeLegacyStreamText(b []byte, binary bool) string {
 		return strings.TrimSpace(whitespaceRegex.ReplaceAllString(s, " "))
 	}
 	if !binary {
-		return strings.TrimSpace(stripReadingMarkup(salvagePrintableASCII(b, false)) + "\n" +
-			stripReadingMarkup(utf16LEReadingWithMarkup(b, true)))
+		text := stripReadingMarkup(legacyEightBitText(b))
+		if hasUTF16LECadence(b) {
+			text += "\n" + stripReadingMarkup(utf16LEReadingWithMarkup(b, true))
+		}
+		return strings.TrimSpace(text)
 	}
-	return strings.TrimSpace(salvagePrintableASCII(b, binary) + "\n" + utf16LEReading(b))
+	text := salvagePrintableASCII(b, binary)
+	if hasUTF16LECadence(b) {
+		text += "\n" + utf16LEReading(b)
+	}
+	return strings.TrimSpace(text)
+}
+
+// legacyEightBitText decodes NUL-free streams as UTF-8, else Windows-1252,
+// and salvages printable ASCII from streams containing NULs (binary data).
+func legacyEightBitText(b []byte) string {
+	if bytes.IndexByte(b, 0) >= 0 {
+		return salvagePrintableASCII(b, false)
+	}
+	s := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, decodeANSIText(b))
+	return strings.TrimSpace(whitespaceRegex.ReplaceAllString(s, " "))
+}
+
+// hasUTF16LECadence reports NULs concentrated in the odd (high-byte) lane, the
+// signature of UTF-16LE ASCII-range code units, ignoring trailing NUL padding.
+func hasUTF16LECadence(b []byte) bool {
+	even, odd := utf16ZeroLanes(bytes.TrimRight(b, "\x00"))
+	return odd > 4*even
 }
 
 // tryDecodeUTF16BestEffort requires a BOM or a dominant NUL lane before decoding.
