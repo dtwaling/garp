@@ -538,9 +538,11 @@ built from a clean tree and committed on their own.
 
 ## Known limitations
 
-- Markdown and other literal formats are not rendered: inline HTML and comments
-  in `.md` (for example `<!-- note -->`) are searchable, and a `--not` term inside
-  them excludes the file.
+- Markdown and other literal formats are not rendered: text inside inline HTML
+  and HTML comments in `.md` (for example `<!-- note -->`) is part of the
+  searchable text. A search term can match there, and a word you exclude on the
+  command line with `--not <word>` excludes the file if it appears there. File
+  contents are never read as flags.
 - In markup/extracted formats, quoted `>` lines are dropped and `SHA256`-style
   tokens are indexed as `SHA 256`. Search the split form, or a literal format,
   to find them.
