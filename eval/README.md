@@ -139,6 +139,7 @@ in both files.
 8. **Frozen key.** Query/gold or manifest changes alter recorded SHA-256
    hashes; the gate refuses with `baseline stale: run make eval-baseline`
    until the previous release is re-scored against the changed key.
+   The gate also refuses baselines with missing or different previous release ref/version metadata.
 
 Independent readers used for authoring and confirmed by the second judge:
 

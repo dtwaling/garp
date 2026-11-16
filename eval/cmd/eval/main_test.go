@@ -198,6 +198,8 @@ func TestRun(t *testing.T) {
 			}},
 			{name: "query stale", status: 2, message: "baseline stale: run make eval-baseline", mutate: func(r *report.Results) { r.Harness.QuerySHA256["docs"] = "changed" }},
 			{name: "manifest stale", status: 2, message: "baseline stale: run make eval-baseline", mutate: func(r *report.Results) { r.Harness.ManifestSHA256["code"] = "changed" }},
+			{name: "ref stale", status: 2, message: "baseline stale: recorded for ref", mutate: func(r *report.Results) { r.Systems.Previous.Ref = "other-ref" }},
+			{name: "version stale", status: 2, message: "baseline stale: recorded for ref", mutate: func(r *report.Results) { r.Systems.Previous.Version = "other-version" }},
 			{name: "missing candidate", status: 2, message: "baseline missing candidate metrics: docs", mutate: func(r *report.Results) { delete(r.Corpora["docs"].Aggregate, "candidate") }},
 		} {
 			t.Run(tc.name, func(t *testing.T) {

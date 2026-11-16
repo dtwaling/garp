@@ -7,6 +7,7 @@ import (
 
 func gateResults() Results {
 	r := Results{Harness: Harness{QuerySHA256: map[string]string{}, ManifestSHA256: map[string]string{}}, Corpora: map[string]Corpus{}}
+	r.Systems.Previous = Previous{Ref: "v0.10.0", Version: "garp v0.10.0"}
 	for _, name := range []string{"docs", "code"} {
 		r.Harness.QuerySHA256[name] = "query-" + name
 		r.Harness.ManifestSHA256[name] = "manifest-" + name
@@ -53,6 +54,24 @@ func TestGate(t *testing.T) {
 func TestStale(t *testing.T) {
 	if err := Stale(gateResults(), gateResults()); err != nil {
 		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, ref, version string
+		stale              bool
+	}{
+		{"matching release", "v0.10.0", "garp v0.10.0", false},
+		{"ref mismatch", "v0.9.0", "garp v0.10.0", true},
+		{"version mismatch", "v0.10.0", "garp v0.9.0", true},
+		{"empty ref", "", "garp v0.10.0", true},
+		{"empty version", "v0.10.0", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			baseline, current := gateResults(), gateResults()
+			baseline.Systems.Previous = Previous{Ref: tc.ref, Version: tc.version}
+			if err := Stale(baseline, current); (err != nil) != tc.stale {
+				t.Fatalf("stale=%v: %v", tc.stale, err)
+			}
+		})
 	}
 	for _, corpus := range []string{"docs", "code"} {
 		for _, kind := range []string{"query", "manifest"} {

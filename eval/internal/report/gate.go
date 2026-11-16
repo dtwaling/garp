@@ -3,7 +3,8 @@ package report
 import "fmt"
 
 // Stale refuses comparisons unless both corpora have matching query and
-// manifest hashes. Missing hashes cannot establish a comparable baseline.
+// manifest hashes and the previous release ref/version match. Missing hashes
+// or release metadata cannot establish a comparable baseline.
 func Stale(baseline, current Results) error {
 	for _, name := range []string{"docs", "code"} {
 		for _, pair := range [][2]string{
@@ -14,6 +15,10 @@ func Stale(baseline, current Results) error {
 				return fmt.Errorf("baseline stale: run make eval-baseline")
 			}
 		}
+	}
+	before, after := baseline.Systems.Previous, current.Systems.Previous
+	if before.Ref == "" || before.Version == "" || before != after {
+		return fmt.Errorf("baseline stale: recorded for ref %q version %q, run uses ref %q version %q; run make eval-baseline", before.Ref, before.Version, after.Ref, after.Version)
 	}
 	return nil
 }

@@ -166,6 +166,11 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		} else if !*noGate {
 			return fail(fmt.Errorf("baseline missing: run make eval-baseline"))
 		}
+		pv, err := systems.GarpVersion(*previous)
+		if err != nil {
+			return fail(err)
+		}
+		result.Systems.Previous = report.Previous{Version: pv, Ref: *previousRef}
 		if !*noGate {
 			if err := report.Stale(*baseline, result); err != nil {
 				return fail(err)
@@ -177,10 +182,6 @@ func run(argv []string, stdout, stderr io.Writer) int {
 			}
 		}
 		cv, err := systems.GarpVersion(*candidate)
-		if err != nil {
-			return fail(err)
-		}
-		pv, err := systems.GarpVersion(*previous)
 		if err != nil {
 			return fail(err)
 		}
