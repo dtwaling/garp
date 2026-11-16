@@ -1,0 +1,1442 @@
+{
+  "corpus": "code",
+  "token_budget": 2000,
+  "queries": [
+    {
+      "id": "code-g-001",
+      "root": "garp",
+      "kind": "synonym",
+      "need": "Find the function that reads the .gitignore and .ignore files of a subdirectory and layers them onto the rules inherited from its parents.",
+      "args": [
+        "gitignore",
+        "ignore",
+        "nested",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "search/ignore.go",
+          "lines": [
+            110,
+            127
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "app/cli.go",
+        "app/cli_test.go",
+        "docs/skills/garp-search/SKILL.md",
+        "search/ignore_test.go",
+        "search/path_policy_test.go",
+        "search/root_set.go",
+        "search/root_set_test.go",
+        "search/walk_test.go"
+      ]
+    },
+    {
+      "id": "code-g-002",
+      "root": "garp",
+      "kind": "proximity",
+      "need": "Find where garp bounds how long extraction of a single binary document may take before giving up on that file.",
+      "args": [
+        "timeout",
+        "binary",
+        "extract",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "search/engine.go",
+          "lines": [
+            566,
+            595
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "app/cli.go",
+        "app/cli_output_test.go",
+        "app/cli_parser_test.go",
+        "app/cli_test.go",
+        "app/tui_test.go",
+        "docs/skills/garp-search/SKILL.md",
+        "search/engine_test.go",
+        "search/extractor.go",
+        "search/ranking_test.go"
+      ]
+    },
+    {
+      "id": "code-g-003",
+      "root": "garp",
+      "kind": "synonym",
+      "need": "Find where the directory walk decides whether to descend into a directory: ignore rules, repository boundaries and always-skipped directory names.",
+      "args": [
+        "prune",
+        "walk",
+        "gitignore",
+        "--distance",
+        "400"
+      ],
+      "gold": [
+        {
+          "file": "search/walk.go",
+          "lines": [
+            68,
+            104
+          ]
+        },
+        {
+          "file": "config/types.go",
+          "lines": [
+            91,
+            143
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "docs/plans/2026-05-09-startdir-pathscope.md",
+        "docs/skills/garp-search/SKILL.md",
+        "search/ignore.go",
+        "search/ignore_test.go",
+        "search/path_other.go",
+        "search/path_policy_test.go",
+        "search/path_windows.go",
+        "search/walk_test.go"
+      ]
+    },
+    {
+      "id": "code-g-004",
+      "root": "garp",
+      "kind": "single",
+      "need": "Find how the maximum file size option value (with K/M/G suffixes) is parsed and capped.",
+      "args": [
+        "max-filesize"
+      ],
+      "gold": [
+        {
+          "file": "search/scope.go",
+          "lines": [
+            10,
+            53
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "app/cli.go",
+        "app/cli_output_test.go",
+        "app/cli_parser_test.go",
+        "app/cli_test.go",
+        "app/tui.go",
+        "app/tui_test.go",
+        "docs/skills/garp-search/SKILL.md",
+        "search/engine.go",
+        "search/filter_test.go"
+      ]
+    },
+    {
+      "id": "code-g-005",
+      "root": "garp",
+      "kind": "synonym",
+      "need": "Find where the smart-forms option decides which word endings (plural, past tense, -ing and similar) a query term may also match.",
+      "args": [
+        "inflection",
+        "suffix",
+        "plural"
+      ],
+      "gold": [
+        {
+          "file": "search/term_matcher.go",
+          "lines": [
+            401,
+            409
+          ]
+        },
+        {
+          "file": "search/term_matcher.go",
+          "lines": [
+            631,
+            637
+          ]
+        },
+        {
+          "file": "search/filter.go",
+          "lines": [
+            742,
+            767
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "app/terminal_sanitize_test.go",
+        "app/tui.go",
+        "app/tui_test.go",
+        "search/filter_test.go",
+        "search/ignore.go",
+        "search/path_other.go",
+        "search/smart_forms_discovery_test.go",
+        "search/term_matcher_test.go"
+      ]
+    },
+    {
+      "id": "code-g-006",
+      "root": "garp",
+      "kind": "proximity",
+      "need": "Find the code that truncates an excerpt to a byte budget without cutting a multi-byte UTF-8 character in half.",
+      "args": [
+        "budget",
+        "utf8",
+        "cut",
+        "--distance",
+        "200"
+      ],
+      "gold": [
+        {
+          "file": "search/cleaner.go",
+          "lines": [
+            677,
+            708
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "app/terminal_sanitize_test.go",
+        "app/tui.go",
+        "internal/terminaltext/sanitize.go",
+        "search/cleaner_test.go",
+        "search/engine.go",
+        "search/extractor.go",
+        "search/extractor_test.go",
+        "search/ignore.go",
+        "search/term_matcher.go"
+      ]
+    },
+    {
+      "id": "code-g-007",
+      "root": "garp",
+      "kind": "proximity",
+      "need": "Find the ranking routine that scans term occurrences for the best windows where all query terms fall within the allowed distance.",
+      "args": [
+        "occurrences",
+        "window",
+        "strict",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "search/ranking.go",
+          "lines": [
+            57,
+            124
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "app/cli.go",
+        "app/tui.go",
+        "docs/skills/garp-search/SKILL.md",
+        "search/cleaner_test.go",
+        "search/engine.go",
+        "search/filter.go",
+        "search/lines.go",
+        "search/lines_test.go",
+        "search/term_matcher_test.go"
+      ]
+    },
+    {
+      "id": "code-g-008",
+      "root": "garp",
+      "kind": "synonym",
+      "need": "Find how a worker waiting for an extraction slot is admitted and how its time limit starts and expires.",
+      "args": [
+        "timeout",
+        "expiry",
+        "slot",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "search/engine.go",
+          "lines": [
+            170,
+            215
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "app/cli.go",
+        "app/cli_output_test.go",
+        "app/cli_parser_test.go",
+        "app/cli_test.go",
+        "app/tui_test.go",
+        "docs/skills/garp-search/SKILL.md",
+        "search/engine_test.go",
+        "search/ranking_test.go"
+      ]
+    },
+    {
+      "id": "code-g-009",
+      "root": "garp",
+      "kind": "single",
+      "need": "Find the validator that rejects start directory arguments containing wildcards or shell metacharacters.",
+      "args": [
+        "startdir"
+      ],
+      "gold": [
+        {
+          "file": "search/scope.go",
+          "lines": [
+            55,
+            82
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "app/cli.go",
+        "app/cli_output_test.go",
+        "app/cli_parser_test.go",
+        "app/cli_test.go",
+        "app/terminal_output_test.go",
+        "app/terminal_sanitize_test.go",
+        "app/tui.go",
+        "app/tui_test.go",
+        "docs/plans/2026-05-09-startdir-pathscope.md",
+        "search/engine_test.go",
+        "search/ranking.go",
+        "search/root_set.go"
+      ]
+    },
+    {
+      "id": "code-g-010",
+      "root": "garp",
+      "kind": "proximity",
+      "need": "Find how garp locates the real git directory for a linked worktree whose .git is a pointer file.",
+      "args": [
+        "gitdir",
+        "commondir",
+        "pointer",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "search/ignore.go",
+          "lines": [
+            198,
+            253
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "search/ignore_test.go",
+        "search/walk_test.go"
+      ]
+    },
+    {
+      "id": "code-g-011",
+      "root": "garp",
+      "kind": "synonym",
+      "need": "Find where untrusted text has terminal escape sequences and control characters removed before it is displayed.",
+      "args": [
+        "escape",
+        "sequences",
+        "untrusted"
+      ],
+      "gold": [
+        {
+          "file": "internal/terminaltext/sanitize.go",
+          "lines": [
+            12,
+            153
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "app/cli.go",
+        "app/terminal_sanitize_test.go",
+        "search/extractor_test.go",
+        "search/filter_prefilter_test.go",
+        "search/filter_test.go",
+        "search/path_policy_test.go"
+      ]
+    },
+    {
+      "id": "code-g-012",
+      "root": "garp",
+      "kind": "proximity",
+      "need": "Find how a line of an ignore file is parsed into a rule: negation with a leading bang, directory-only trailing slash, and anchoring.",
+      "args": [
+        "negated",
+        "directoryonly",
+        "anchored",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "search/ignore.go",
+          "lines": [
+            322,
+            379
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "docs/skills/garp-search/SKILL.md",
+        "search/ignore_test.go",
+        "search/path_policy.go",
+        "search/path_policy_test.go",
+        "search/path_policy_windows_test.go",
+        "search/root_set.go",
+        "search/root_set_test.go",
+        "search/walk_test.go"
+      ]
+    },
+    {
+      "id": "code-g-013",
+      "root": "garp",
+      "kind": "single",
+      "need": "Find the list of directory names the walker always skips, such as dependency and cache folders.",
+      "args": [
+        "node_modules"
+      ],
+      "gold": [
+        {
+          "file": "config/types.go",
+          "lines": [
+            91,
+            143
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "config/types_test.go",
+        "search/engine_test.go",
+        "search/path_policy_test.go",
+        "search/root_set_test.go",
+        "search/walk_test.go"
+      ]
+    },
+    {
+      "id": "code-g-014",
+      "root": "garp",
+      "kind": "synonym",
+      "need": "Find where a gitignore wildcard pattern containing double-star is converted into a regular expression.",
+      "args": [
+        "globstar",
+        "glob",
+        "regexp"
+      ],
+      "gold": [
+        {
+          "file": "search/ignore.go",
+          "lines": [
+            495,
+            579
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "app/cli.go",
+        "search/cleaner.go",
+        "search/filter.go",
+        "search/ignore_test.go",
+        "search/path_policy.go",
+        "search/path_policy_test.go",
+        "search/path_policy_windows_test.go",
+        "search/root_set_test.go",
+        "search/term_matcher.go",
+        "search/walk_test.go"
+      ]
+    },
+    {
+      "id": "code-g-015",
+      "root": "garp",
+      "kind": "proximity",
+      "need": "Find how the default maximum number of results is resolved for JSON and plain output.",
+      "args": [
+        "maxresults",
+        "json",
+        "plain",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "app/cli.go",
+          "lines": [
+            555,
+            566
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "app/cli_output_test.go",
+        "app/cli_parser_test.go",
+        "app/cli_test.go",
+        "docs/skills/garp-search/SKILL.md",
+        "search/engine.go",
+        "search/engine_test.go",
+        "search/filter_prefilter_test.go",
+        "search/term_matcher_test.go"
+      ]
+    },
+    {
+      "id": "code-g-016",
+      "root": "garp",
+      "kind": "single",
+      "need": "Find the warning garp prints when binary files were skipped because extraction exceeded the time limit.",
+      "args": [
+        "file-timeout-binary"
+      ],
+      "gold": [
+        {
+          "file": "app/cli.go",
+          "lines": [
+            1014,
+            1020
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "app/cli_output_test.go",
+        "app/cli_parser_test.go",
+        "app/cli_test.go",
+        "docs/skills/garp-search/SKILL.md",
+        "search/engine.go",
+        "search/engine_test.go",
+        "search/extractor.go",
+        "search/filter.go",
+        "search/ranking_test.go"
+      ]
+    },
+    {
+      "id": "code-g-017",
+      "root": "garp",
+      "kind": "synonym",
+      "need": "Find where search terms are normalised and deduplicated case-insensitively before matching.",
+      "args": [
+        "normalize",
+        "dedupe",
+        "terms"
+      ],
+      "gold": [
+        {
+          "file": "search/term_matcher.go",
+          "lines": [
+            84,
+            109
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "app/tui.go",
+        "config/types.go",
+        "docs/plans/2026-05-09-startdir-pathscope.md",
+        "docs/skills/garp-search/SKILL.md",
+        "internal/terminaltext/sanitize.go",
+        "search/edge_cases_test.go",
+        "search/filter.go",
+        "search/ignore.go",
+        "search/scope.go",
+        "search/scope_test.go"
+      ]
+    },
+    {
+      "id": "code-g-018",
+      "root": "garp",
+      "kind": "single",
+      "need": "Find the validation of the comma-separated path scope option, including rejecting parent-directory segments.",
+      "args": [
+        "pathscope"
+      ],
+      "gold": [
+        {
+          "file": "search/scope.go",
+          "lines": [
+            93,
+            142
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "README.md",
+        "app/cli.go",
+        "app/cli_output_test.go",
+        "app/cli_parser_test.go",
+        "app/cli_test.go",
+        "app/tui.go",
+        "app/tui_test.go",
+        "docs/plans/2026-05-09-startdir-pathscope.md",
+        "docs/skills/garp-search/SKILL.md",
+        "search/engine.go",
+        "search/engine_test.go",
+        "search/filter.go",
+        "search/root_set.go",
+        "search/root_set_test.go",
+        "search/walk.go"
+      ]
+    },
+    {
+      "id": "code-r-001",
+      "root": "ripgrep",
+      "kind": "proximity",
+      "need": "Find how ripgrep locates the global gitignore file named by core.excludesFile in the user git configuration.",
+      "args": [
+        "excludesfile",
+        "gitconfig",
+        "xdg_config_home",
+        "--distance",
+        "400"
+      ],
+      "gold": [
+        {
+          "file": "crates/ignore/src/gitignore.rs",
+          "lines": [
+            536,
+            619
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "FAQ.md",
+        "GUIDE.md",
+        "crates/ignore/src/dir.rs",
+        "crates/ignore/src/overrides.rs",
+        "crates/ignore/src/walk.rs",
+        "crates/printer/src/json.rs",
+        "crates/printer/src/summary.rs",
+        "crates/regex/src/config.rs"
+      ]
+    },
+    {
+      "id": "code-r-002",
+      "root": "ripgrep",
+      "kind": "synonym",
+      "need": "Find which external programs ripgrep runs to decompress archive files by extension when searching compressed files.",
+      "args": [
+        "gzip",
+        "unzip",
+        "glob",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/cli/src/decompress.rs",
+          "lines": [
+            488,
+            530
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "FAQ.md",
+        "GUIDE.md",
+        "README.md",
+        "crates/cli/src/process.rs",
+        "crates/core/flags/defs.rs",
+        "crates/globset/README.md",
+        "crates/globset/src/serde_impl.rs",
+        "tests/misc.rs"
+      ]
+    },
+    {
+      "id": "code-r-003",
+      "root": "ripgrep",
+      "kind": "single",
+      "need": "Find how a human readable size such as 2M is turned into a number of bytes.",
+      "args": [
+        "suffix"
+      ],
+      "gold": [
+        {
+          "file": "crates/cli/src/human.rs",
+          "lines": [
+            71,
+            100
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "benchsuite/runs/2016-09-17-ubuntu1604-ec2/raw.csv",
+        "benchsuite/runs/2016-09-20-ubuntu1604-ec2/raw.csv",
+        "benchsuite/runs/2016-09-22-archlinux-cheetah/raw.csv",
+        "benchsuite/runs/2016-12-24-archlinux-cheetah-glibc-jemalloc/raw.csv",
+        "benchsuite/runs/2016-12-24-archlinux-cheetah-glibc-system/raw.csv",
+        "benchsuite/runs/2016-12-24-archlinux-cheetah-musl-jemalloc/raw.csv",
+        "benchsuite/runs/2018-01-08-archlinux-cheetah/raw.csv",
+        "crates/core/flags/defs.rs",
+        "crates/core/flags/doc/help.rs",
+        "crates/globset/src/glob.rs",
+        "crates/globset/src/lib.rs",
+        "crates/ignore/src/gitignore.rs",
+        "crates/ignore/src/overrides.rs",
+        "crates/regex/src/literal.rs"
+      ]
+    },
+    {
+      "id": "code-r-004",
+      "root": "ripgrep",
+      "kind": "proximity",
+      "need": "Find the routine that converts escape sequences like backslash-n and hex byte escapes in a command line argument into raw bytes.",
+      "args": [
+        "unescape",
+        "hexadecimal",
+        "bytes",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/cli/src/escape.rs",
+          "lines": [
+            37,
+            69
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "FAQ.md",
+        "crates/cli/src/lib.rs",
+        "crates/core/flags/defs.rs",
+        "crates/core/flags/lowargs.rs",
+        "crates/printer/src/color.rs",
+        "crates/printer/src/stats.rs",
+        "crates/printer/src/util.rs",
+        "crates/searcher/src/line_buffer.rs",
+        "crates/searcher/src/lines.rs"
+      ]
+    },
+    {
+      "id": "code-r-005",
+      "root": "ripgrep",
+      "kind": "synonym",
+      "need": "Find how ripgrep obtains the name of the machine it runs on, for Unix and Windows.",
+      "args": [
+        "machine",
+        "hostname",
+        "unix",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/cli/src/hostname.rs",
+          "lines": [
+            3,
+            75
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        ".github/workflows/ci.yml",
+        "benchsuite/runs/2022-12-16-archlinux-duff/README.md",
+        "crates/cli/src/lib.rs",
+        "crates/core/flags/defs.rs",
+        "crates/core/flags/hiargs.rs",
+        "crates/core/flags/lowargs.rs",
+        "crates/core/flags/mod.rs",
+        "crates/printer/src/hyperlink.rs",
+        "crates/printer/src/lib.rs"
+      ]
+    },
+    {
+      "id": "code-r-006",
+      "root": "ripgrep",
+      "kind": "proximity",
+      "need": "Find when ripgrep is willing to use memory maps and the cases where it refuses.",
+      "args": [
+        "memory",
+        "maps",
+        "--distance",
+        "400"
+      ],
+      "gold": [
+        {
+          "file": "crates/searcher/src/searcher/mmap.rs",
+          "lines": [
+            58,
+            96
+          ]
+        },
+        {
+          "file": "crates/core/flags/hiargs.rs",
+          "lines": [
+            221,
+            248
+          ]
+        },
+        {
+          "file": "crates/core/flags/defs.rs",
+          "lines": [
+            3982,
+            4007
+          ]
+        },
+        {
+          "file": "crates/core/flags/lowargs.rs",
+          "lines": [
+            651,
+            672
+          ]
+        },
+        {
+          "file": "crates/searcher/src/searcher/mod.rs",
+          "lines": [
+            462,
+            498
+          ]
+        },
+        {
+          "file": "README.md",
+          "lines": [
+            198,
+            201
+          ]
+        },
+        {
+          "file": "GUIDE.md",
+          "lines": [
+            767,
+            780
+          ]
+        },
+        {
+          "file": "CHANGELOG.md",
+          "lines": [
+            1688,
+            1689
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "crates/core/search.rs",
+        "crates/matcher/src/lib.rs",
+        "crates/searcher/README.md",
+        "crates/searcher/src/lib.rs",
+        "tests/binary.rs"
+      ]
+    },
+    {
+      "id": "code-r-007",
+      "root": "ripgrep",
+      "kind": "single",
+      "need": "Find the code that prints the warning that searching stopped after a match because a binary byte was found.",
+      "args": [
+        "binary"
+      ],
+      "gold": [
+        {
+          "file": "crates/printer/src/standard.rs",
+          "lines": [
+            1452,
+            1483
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        ".github/ISSUE_TEMPLATE/bug_report.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "CHANGELOG.md",
+        "FAQ.md",
+        "GUIDE.md",
+        "README.md",
+        "RELEASE-CHECKLIST.md",
+        "benchsuite/runs/2016-09-17-ubuntu1604-ec2/raw.csv",
+        "benchsuite/runs/2016-09-20-ubuntu1604-ec2/raw.csv",
+        "benchsuite/runs/2016-09-22-archlinux-cheetah/raw.csv",
+        "benchsuite/runs/2018-01-08-archlinux-cheetah/raw.csv",
+        "crates/core/flags/defs.rs",
+        "crates/core/search.rs",
+        "crates/printer/src/json.rs",
+        "crates/printer/src/summary.rs",
+        "crates/searcher/src/line_buffer.rs",
+        "crates/searcher/src/searcher/core.rs",
+        "crates/searcher/src/searcher/glue.rs",
+        "crates/searcher/src/searcher/mod.rs",
+        "crates/searcher/src/sink.rs",
+        "tests/binary.rs"
+      ]
+    },
+    {
+      "id": "code-r-008",
+      "root": "ripgrep",
+      "kind": "synonym",
+      "need": "Find the user guide explanation of the three ways ripgrep handles files that contain NUL bytes.",
+      "args": [
+        "null",
+        "byte",
+        "detection",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "GUIDE.md",
+          "lines": [
+            713,
+            780
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "crates/core/flags/defs.rs",
+        "crates/core/flags/hiargs.rs",
+        "crates/printer/src/json.rs",
+        "crates/searcher/src/line_buffer.rs",
+        "crates/searcher/src/searcher/mod.rs",
+        "crates/searcher/src/testutil.rs",
+        "tests/binary.rs",
+        "tests/feature.rs",
+        "tests/regression.rs"
+      ]
+    },
+    {
+      "id": "code-r-009",
+      "root": "ripgrep",
+      "kind": "proximity",
+      "need": "Find the user guide description of which ignore files take precedence over which when they conflict.",
+      "args": [
+        "gitignore",
+        "rgignore",
+        "precedence",
+        "--distance",
+        "400"
+      ],
+      "gold": [
+        {
+          "file": "GUIDE.md",
+          "lines": [
+            174,
+            255
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "README.md",
+        "crates/core/flags/defs.rs",
+        "crates/ignore/src/dir.rs",
+        "crates/ignore/src/lib.rs",
+        "crates/ignore/src/overrides.rs",
+        "crates/ignore/src/walk.rs",
+        "tests/misc.rs",
+        "tests/regression.rs"
+      ]
+    },
+    {
+      "id": "code-r-010",
+      "root": "ripgrep",
+      "kind": "single",
+      "need": "Find how ripgrep reads default flags from a config file named in an environment variable.",
+      "args": [
+        "ripgrep_config_path"
+      ],
+      "gold": [
+        {
+          "file": "crates/core/flags/config.rs",
+          "lines": [
+            15,
+            102
+          ]
+        },
+        {
+          "file": "crates/core/flags/parse.rs",
+          "lines": [
+            87,
+            110
+          ]
+        },
+        {
+          "file": "GUIDE.md",
+          "lines": [
+            541,
+            559
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "FAQ.md",
+        "crates/core/flags/hiargs.rs",
+        "crates/ignore/src/gitignore.rs",
+        "crates/regex/src/config.rs",
+        "crates/searcher/src/searcher/mod.rs",
+        "tests/feature.rs",
+        "tests/util.rs"
+      ]
+    },
+    {
+      "id": "code-r-011",
+      "root": "ripgrep",
+      "kind": "synonym",
+      "need": "Find how the directory walker detects when following a symbolic link would loop back to an ancestor directory.",
+      "args": [
+        "circular",
+        "symlink",
+        "ancestor",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/ignore/src/walk.rs",
+          "lines": [
+            1749,
+            1770
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "crates/core/haystack.rs",
+        "crates/ignore/src/lib.rs",
+        "tests/misc.rs",
+        "tests/regression.rs",
+        "tests/util.rs"
+      ]
+    },
+    {
+      "id": "code-r-012",
+      "root": "ripgrep",
+      "kind": "proximity",
+      "need": "Find the check that skips files larger than the configured maximum and logs which file was ignored.",
+      "args": [
+        "filesize",
+        "ignoring",
+        "bytes",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/ignore/src/walk.rs",
+          "lines": [
+            1772,
+            1794
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "crates/cli/src/lib.rs",
+        "crates/core/flags/defs.rs",
+        "crates/core/flags/hiargs.rs",
+        "crates/core/flags/lowargs.rs",
+        "crates/core/haystack.rs",
+        "crates/printer/src/json.rs",
+        "crates/searcher/src/sink.rs",
+        "tests/misc.rs",
+        "tests/util.rs"
+      ]
+    },
+    {
+      "id": "code-r-013",
+      "root": "ripgrep",
+      "kind": "single",
+      "need": "Find the matcher for user supplied override globs, like the include and exclude command line globs.",
+      "args": [
+        "overrides"
+      ],
+      "gold": [
+        {
+          "file": "crates/ignore/src/overrides.rs",
+          "lines": [
+            1,
+            110
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "GUIDE.md",
+        "crates/core/flags/defs.rs",
+        "crates/core/flags/hiargs.rs",
+        "crates/core/flags/lowargs.rs",
+        "crates/core/search.rs",
+        "crates/ignore/src/dir.rs",
+        "crates/ignore/src/lib.rs",
+        "crates/ignore/src/walk.rs",
+        "crates/pcre2/src/matcher.rs",
+        "crates/printer/src/path.rs"
+      ]
+    },
+    {
+      "id": "code-r-014",
+      "root": "ripgrep",
+      "kind": "proximity",
+      "need": "Find the gitignore matching method that also checks every parent directory of a path for an ignore match.",
+      "args": [
+        "parents",
+        "matched",
+        "path",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/ignore/src/gitignore.rs",
+          "lines": [
+            199,
+            242
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "crates/core/flags/hiargs.rs",
+        "crates/core/main.rs",
+        "crates/ignore/src/dir.rs",
+        "crates/ignore/src/overrides.rs",
+        "crates/ignore/src/types.rs",
+        "crates/ignore/src/walk.rs",
+        "crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+        "crates/printer/src/color.rs",
+        "crates/printer/src/json.rs"
+      ]
+    },
+    {
+      "id": "code-r-015",
+      "root": "ripgrep",
+      "kind": "synonym",
+      "need": "Find how a custom file type can be defined as a group that pulls in the globs of existing types.",
+      "args": [
+        "alias",
+        "include",
+        "type",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/ignore/src/types.rs",
+          "lines": [
+            433,
+            479
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "FAQ.md",
+        "GUIDE.md",
+        "crates/core/flags/defs.rs",
+        "crates/core/flags/mod.rs",
+        "crates/core/flags/parse.rs",
+        "crates/globset/src/fnv.rs",
+        "crates/ignore/src/lib.rs",
+        "crates/printer/src/hyperlink_aliases.rs",
+        "crates/searcher/src/searcher/mod.rs",
+        "tests/regression.rs"
+      ]
+    },
+    {
+      "id": "code-r-016",
+      "root": "ripgrep",
+      "kind": "single",
+      "need": "Find how ripgrep suggests similar flag names when the user mistypes one.",
+      "args": [
+        "jaccard"
+      ],
+      "gold": [
+        {
+          "file": "crates/core/flags/parse.rs",
+          "lines": [
+            404,
+            476
+          ]
+        }
+      ],
+      "judged_nonrelevant": []
+    },
+    {
+      "id": "code-r-017",
+      "root": "ripgrep",
+      "kind": "proximity",
+      "need": "Find how a file is judged hidden, including the extra Windows file attribute check.",
+      "args": [
+        "hidden",
+        "windows",
+        "attributes",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/ignore/src/pathutil.rs",
+          "lines": [
+            5,
+            57
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        ".github/ISSUE_TEMPLATE/bug_report.yml",
+        "CHANGELOG.md",
+        "FAQ.md",
+        "GUIDE.md",
+        "README.md",
+        "crates/core/flags/defs.rs",
+        "crates/ignore/src/dir.rs",
+        "crates/ignore/src/walk.rs",
+        "crates/regex/src/ast.rs"
+      ]
+    },
+    {
+      "id": "code-r-018",
+      "root": "ripgrep",
+      "kind": "synonym",
+      "need": "Find the macros that print non-fatal problems to stderr and make the program exit with an error status.",
+      "args": [
+        "warning",
+        "exit",
+        "status",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/core/messages.rs",
+          "lines": [
+            1,
+            98
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "crates/cli/src/decompress.rs",
+        "crates/cli/src/process.rs",
+        "crates/core/main.rs",
+        "crates/searcher/examples/search-stdin.rs",
+        "tests/binary.rs",
+        "tests/feature.rs",
+        "tests/regression.rs",
+        "tests/util.rs"
+      ]
+    },
+    {
+      "id": "code-r-019",
+      "root": "ripgrep",
+      "kind": "single",
+      "need": "Find the definition of the line buffer binary detection modes that either quit or convert on a special byte.",
+      "args": [
+        "binarydetection"
+      ],
+      "gold": [
+        {
+          "file": "crates/searcher/src/line_buffer.rs",
+          "lines": [
+            42,
+            81
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "crates/core/flags/hiargs.rs",
+        "crates/core/search.rs",
+        "crates/grep/examples/simplegrep.rs",
+        "crates/printer/src/json.rs",
+        "crates/printer/src/standard.rs",
+        "crates/printer/src/summary.rs",
+        "crates/searcher/src/lib.rs",
+        "crates/searcher/src/searcher/core.rs",
+        "crates/searcher/src/searcher/glue.rs",
+        "crates/searcher/src/searcher/mod.rs",
+        "crates/searcher/src/testutil.rs"
+      ]
+    },
+    {
+      "id": "code-r-020",
+      "root": "ripgrep",
+      "kind": "proximity",
+      "need": "Find the transformation that ensures a regex can never match the line terminator, and why it errors outside multiline mode.",
+      "args": [
+        "line",
+        "terminator",
+        "multiline",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/regex/src/strip.rs",
+          "lines": [
+            8,
+            119
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "FAQ.md",
+        "crates/core/flags/defs.rs",
+        "crates/core/flags/hiargs.rs",
+        "crates/core/flags/lowargs.rs",
+        "crates/matcher/src/lib.rs",
+        "crates/pcre2/src/matcher.rs",
+        "crates/printer/src/standard.rs",
+        "crates/regex/src/config.rs",
+        "crates/regex/src/literal.rs",
+        "crates/regex/src/matcher.rs",
+        "crates/searcher/src/line_buffer.rs",
+        "crates/searcher/src/lines.rs",
+        "crates/searcher/src/searcher/glue.rs",
+        "crates/searcher/src/searcher/mod.rs",
+        "crates/searcher/src/sink.rs",
+        "crates/searcher/src/testutil.rs",
+        "tests/multiline.rs"
+      ]
+    },
+    {
+      "id": "code-r-021",
+      "root": "ripgrep",
+      "kind": "single",
+      "need": "Find the error type and its messages for invalid color specifications.",
+      "args": [
+        "unrecognized"
+      ],
+      "gold": [
+        {
+          "file": "crates/printer/src/color.rs",
+          "lines": [
+            22,
+            79
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "crates/core/flags/defs.rs",
+        "crates/core/flags/doc/help.rs",
+        "crates/core/flags/doc/man.rs",
+        "crates/core/flags/parse.rs",
+        "crates/ignore/src/lib.rs",
+        "tests/regression.rs"
+      ]
+    },
+    {
+      "id": "code-r-022",
+      "root": "ripgrep",
+      "kind": "synonym",
+      "need": "Find the struct that accumulates end of search metrics such as elapsed time and bytes searched.",
+      "args": [
+        "metrics",
+        "elapsed",
+        "searches",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/printer/src/stats.rs",
+          "lines": [
+            8,
+            60
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "GUIDE.md",
+        "crates/core/flags/doc/mod.rs",
+        "crates/core/flags/hiargs.rs",
+        "crates/core/main.rs",
+        "crates/printer/src/json.rs",
+        "crates/printer/src/standard.rs",
+        "crates/printer/src/summary.rs",
+        "crates/searcher/README.md",
+        "tests/json.rs"
+      ]
+    },
+    {
+      "id": "code-r-023",
+      "root": "ripgrep",
+      "kind": "proximity",
+      "need": "Find how a set of globs reports which pattern indices match a candidate path.",
+      "args": [
+        "glob",
+        "matches",
+        "candidate",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "crates/globset/src/lib.rs",
+          "lines": [
+            298,
+            411
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "FAQ.md",
+        "GUIDE.md",
+        "crates/cli/src/decompress.rs",
+        "crates/globset/README.md",
+        "crates/globset/benches/bench.rs",
+        "crates/globset/src/glob.rs",
+        "crates/globset/src/pathutil.rs",
+        "crates/ignore/src/gitignore.rs",
+        "crates/ignore/src/overrides.rs",
+        "crates/ignore/src/types.rs",
+        "crates/ignore/src/walk.rs",
+        "crates/matcher/src/lib.rs",
+        "crates/pcre2/src/matcher.rs",
+        "crates/regex/src/matcher.rs"
+      ]
+    },
+    {
+      "id": "code-r-024",
+      "root": "ripgrep",
+      "kind": "synonym",
+      "need": "Find the integration tests explaining why a NUL byte placed after the first buffer is only noticed after a match is printed.",
+      "args": [
+        "capacity",
+        "binary",
+        "notice",
+        "--distance",
+        "400"
+      ],
+      "gold": [
+        {
+          "file": "tests/binary.rs",
+          "lines": [
+            3,
+            59
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "CHANGELOG.md",
+        "GUIDE.md",
+        "crates/core/flags/doc/mod.rs",
+        "crates/core/flags/hiargs.rs",
+        "crates/core/flags/parse.rs",
+        "crates/ignore/src/default_types.rs",
+        "crates/searcher/src/line_buffer.rs",
+        "crates/searcher/src/searcher/glue.rs",
+        "crates/searcher/src/searcher/mod.rs"
+      ]
+    }
+  ]
+}
