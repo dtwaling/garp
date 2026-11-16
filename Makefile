@@ -11,6 +11,8 @@ LDFLAGS=-s -w -X garp/app.version=$(VERSION)
 # Pure Go (CGO_ENABLED=0): static Linux ELF, no glibc dependency.
 BUILD_FLAGS=-trimpath -ldflags "$(LDFLAGS)"
 TRACKED_BINS=bin/garp bin/garp.exe
+EVAL_CACHE ?= $(HOME)/.cache/garp-eval
+EVAL_BASELINE_REF ?= v0.10.0
 DIST_PLATFORMS=linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 # Go stamps vcs.modified=true (+dirty) if ANY tracked or untracked file differs from HEAD,
 # so every build first restores the tracked release binaries (regenerate with `make release`).
@@ -58,6 +60,16 @@ test:
 # Test the nested eval harness without fetching a corpus
 eval-test:
 	cd eval && go test ./...
+
+# Fetch pinned corpora and build the archived previous release, never this tree.
+eval-fetch:
+	cd eval && go mod download
+	go mod download
+	cd eval && go run ./cmd/fetch -cache "$(abspath $(EVAL_CACHE))"
+	rm -rf "$(abspath $(EVAL_CACHE))/src/$(EVAL_BASELINE_REF)"
+	mkdir -p "$(abspath $(EVAL_CACHE))/src/$(EVAL_BASELINE_REF)" "$(abspath $(EVAL_CACHE))/bin"
+	git archive "$(EVAL_BASELINE_REF)" | tar -x -C "$(abspath $(EVAL_CACHE))/src/$(EVAL_BASELINE_REF)"
+	cd "$(abspath $(EVAL_CACHE))/src/$(EVAL_BASELINE_REF)" && go mod download && CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X garp/app.version=$(EVAL_BASELINE_REF:v%=%)" -o "$(abspath $(EVAL_CACHE))/bin/garp-$(EVAL_BASELINE_REF)" .
 
 # Format Go code
 fmt:
@@ -118,6 +130,7 @@ help:
 	@echo "  clean    - Remove build artifacts"
 	@echo "  test     - Run tests"
 	@echo "  eval-test - Unit tests of the eval harness (no corpus)"
+	@echo "  eval-fetch - Fetch pinned eval corpora and build the previous release"
 	@echo "  fmt      - Format Go code"
 	@echo "  tidy     - Run go mod tidy"
 	@echo "  deps     - Install dependencies"
@@ -128,4 +141,4 @@ help:
 	@echo "  uninstall- Remove from ~/.local/bin"
 	@echo "  help     - Show this help"
 
-.PHONY: all build clean dist release test eval-test fmt tidy deps dev run install install-pdfcpu uninstall help
+.PHONY: all build clean dist release test eval-test eval-fetch fmt tidy deps dev run install install-pdfcpu uninstall help

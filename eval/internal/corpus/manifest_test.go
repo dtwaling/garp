@@ -8,6 +8,24 @@ import (
 	"testing"
 )
 
+func TestCommittedManifestsEligible(t *testing.T) {
+	paths, err := filepath.Glob("../../manifests/*.json")
+	if err != nil || len(paths) < 2 {
+		t.Fatalf("need both committed manifests: %v %v", paths, err)
+	}
+	for _, path := range paths {
+		m, _, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range m.Files {
+			if err := Eligible(m.Corpus, f.Path); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
 func TestEligible(t *testing.T) {
 	for _, tc := range []struct {
 		corpus, path string

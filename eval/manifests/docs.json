@@ -1,0 +1,3050 @@
+{
+  "corpus": "docs",
+  "sources": [
+    {
+      "id": "govdocs-thread0",
+      "kind": "zip-range",
+      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/files/govdocs1/threads/thread0.zip",
+      "size": 322469174,
+      "etag": "853266986a1d22c5bc4c5652dac7bb02-39"
+    },
+    {
+      "id": "govdocs-docx",
+      "kind": "zip-range",
+      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/files/govdocs1/by_type/docx.zip",
+      "size": 29033269,
+      "etag": "653527964512c31378d36680cb666a47-4"
+    },
+    {
+      "id": "govdocs-rtf",
+      "kind": "zip-range",
+      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/files/govdocs1/by_type/rtf.zip",
+      "size": 67865288,
+      "etag": "e031aa41946310dd8237e4c9682e95ad-9"
+    },
+    {
+      "id": "sa-easy-ham",
+      "kind": "tar-bz2",
+      "url": "https://spamassassin.apache.org/old/publiccorpus/20030228_easy_ham.tar.bz2",
+      "size": 1612216,
+      "sha256": "2b7b65904bcfcc31d2b5f51946f2d261370b257402cbbd62930b46ab83367438"
+    },
+    {
+      "id": "poi-hsmf",
+      "kind": "raw",
+      "base_url": "https://raw.githubusercontent.com/apache/poi/47dcff769bb395034dddfd59c4609659b6dbc6a4/test-data/hsmf/"
+    }
+  ],
+  "files": [
+    {
+      "path": "govdocs/000117.rtf",
+      "source": "govdocs-rtf",
+      "member": "000/000117.rtf",
+      "size": 33970,
+      "sha256": "8e8be6586bedba58f431474b61810c653e31a17ae31dfd63932546a2106617f3"
+    },
+    {
+      "path": "govdocs/000257.rtf",
+      "source": "govdocs-rtf",
+      "member": "000/000257.rtf",
+      "size": 255469,
+      "sha256": "6dc35bbd95cd9e3e044f0f5e0a684c8494d01f1b06b1e3a3d9e7cf05624a7d3f"
+    },
+    {
+      "path": "govdocs/000258.rtf",
+      "source": "govdocs-rtf",
+      "member": "000/000258.rtf",
+      "size": 325316,
+      "sha256": "88b0d639099d29c0f870cb4b794064f49ad255420644a9214434d82ae9b0a0ce"
+    },
+    {
+      "path": "govdocs/000578.pdf",
+      "source": "govdocs-thread0",
+      "member": "000/000578.pdf",
+      "size": 351558,
+      "sha256": "a446eaa09efb2112eece6464bc7d6ca5eb68ca044037d1c7d5c3975972f41efd"
+    },
+    {
+      "path": "govdocs/000803.rtf",
+      "source": "govdocs-rtf",
+      "member": "000/000803.rtf",
+      "size": 45138,
+      "sha256": "a17e9d43ef603962115a9737ce6b1799b37a507385596d7ae4ab184ecff8f1a1"
+    },
+    {
+      "path": "govdocs/000816.pdf",
+      "source": "govdocs-thread0",
+      "member": "000/000816.pdf",
+      "size": 43914,
+      "sha256": "b3eba9bc82a22181ea6c6b6695f11f07aa2f9e98fa9686a0974c0a0b7dab2a6b"
+    },
+    {
+      "path": "govdocs/001387.pdf",
+      "source": "govdocs-thread0",
+      "member": "001/001387.pdf",
+      "size": 432424,
+      "sha256": "54dbea9dfd7d5b56650c61eaf0a2671247862e989984b74c73582ad327675905"
+    },
+    {
+      "path": "govdocs/001468.rtf",
+      "source": "govdocs-rtf",
+      "member": "001/001468.rtf",
+      "size": 308973,
+      "sha256": "c08f599472438ab83ed5e0f63daa4c486f9bc34349e84d3f12a529bd778edce9"
+    },
+    {
+      "path": "govdocs/001484.pdf",
+      "source": "govdocs-thread0",
+      "member": "001/001484.pdf",
+      "size": 54650,
+      "sha256": "3882cfee5df84f9cc1f395fe00cec843c3e81ff09a8026ea05da818243854ad5"
+    },
+    {
+      "path": "govdocs/001550.rtf",
+      "source": "govdocs-rtf",
+      "member": "001/001550.rtf",
+      "size": 123612,
+      "sha256": "ca863be879fdf2a621db0679f1553bdada42806ccbf40dffd3ede10ccf494b46"
+    },
+    {
+      "path": "govdocs/001857.rtf",
+      "source": "govdocs-rtf",
+      "member": "001/001857.rtf",
+      "size": 6876,
+      "sha256": "829d59419c82dc87888c15d8e626c6f1c8059b3aa3641fb0afb68d726a05cc36"
+    },
+    {
+      "path": "govdocs/001858.rtf",
+      "source": "govdocs-rtf",
+      "member": "001/001858.rtf",
+      "size": 5112,
+      "sha256": "fb56002fbc80cfa332713405e17b3440c4e6677989b63617262907ca00672ec8"
+    },
+    {
+      "path": "govdocs/001963.rtf",
+      "source": "govdocs-rtf",
+      "member": "001/001963.rtf",
+      "size": 7995,
+      "sha256": "a1b106863797af9fd0eefc49219b6ca62fd5796a990d6e3ed816abc20a053294"
+    },
+    {
+      "path": "govdocs/003332.rtf",
+      "source": "govdocs-rtf",
+      "member": "003/003332.rtf",
+      "size": 4776,
+      "sha256": "744e73d188022ba89c9a1c7a7937ab862f64761d2273a3eb325bc0740318bd20"
+    },
+    {
+      "path": "govdocs/003774.txt",
+      "source": "govdocs-thread0",
+      "member": "003/003774.txt",
+      "size": 20033,
+      "sha256": "0cf7ef5054bdbb5311d157c882144b6a9185586ae01319b50293b7e28dc12071"
+    },
+    {
+      "path": "govdocs/004135.rtf",
+      "source": "govdocs-rtf",
+      "member": "004/004135.rtf",
+      "size": 111314,
+      "sha256": "9a75dc31b5a6f3bc35179bbffde8cbbb29c69d0799599ba85a89ba31e25e45b0"
+    },
+    {
+      "path": "govdocs/004156.rtf",
+      "source": "govdocs-rtf",
+      "member": "004/004156.rtf",
+      "size": 425545,
+      "sha256": "e13d88053afe88796091f324d534dbc0764a020e8e157605faadf052fe5f82c3"
+    },
+    {
+      "path": "govdocs/004157.pdf",
+      "source": "govdocs-thread0",
+      "member": "004/004157.pdf",
+      "size": 206783,
+      "sha256": "1423e51e100c4392ed0461d18e4cd0862c1e92e3e81e31101278318113dcdd26"
+    },
+    {
+      "path": "govdocs/004320.rtf",
+      "source": "govdocs-rtf",
+      "member": "004/004320.rtf",
+      "size": 133637,
+      "sha256": "9f3bb8d0da66741c15c901070ce7f9e7a2e40e5b98821dfab0cf4d736f24d064"
+    },
+    {
+      "path": "govdocs/004387.pdf",
+      "source": "govdocs-thread0",
+      "member": "004/004387.pdf",
+      "size": 151860,
+      "sha256": "9032ef5d14b2f8d6f95ddfd470d80c02c0f8c30b275f3d320229e45b2f7f3226"
+    },
+    {
+      "path": "govdocs/005165.rtf",
+      "source": "govdocs-rtf",
+      "member": "005/005165.rtf",
+      "size": 41607,
+      "sha256": "df67f7a4ab911f168e914f557018a2f4ea6f1d45a64d08499b8fc6b77b22966a"
+    },
+    {
+      "path": "govdocs/005442.rtf",
+      "source": "govdocs-rtf",
+      "member": "005/005442.rtf",
+      "size": 37920,
+      "sha256": "dd08ff022f43ed41b15fe3550c31f7c451aa496a133ffa889e89e700fc805e49"
+    },
+    {
+      "path": "govdocs/007636.rtf",
+      "source": "govdocs-rtf",
+      "member": "007/007636.rtf",
+      "size": 151727,
+      "sha256": "1e00740821e8e8d38be3d2d8075422ae7cc3646e52a3c45536c05a659ce77e95"
+    },
+    {
+      "path": "govdocs/007835.txt",
+      "source": "govdocs-thread0",
+      "member": "007/007835.txt",
+      "size": 72629,
+      "sha256": "f7a7d805dbd2622c465677528fba647fe445f0215affae9c54e01e8b4c979503"
+    },
+    {
+      "path": "govdocs/007895.pdf",
+      "source": "govdocs-thread0",
+      "member": "007/007895.pdf",
+      "size": 188207,
+      "sha256": "a730c53404ea1cbcf239e3dde3e9a51df29da2da291dd384ce91011fcbd85a8a"
+    },
+    {
+      "path": "govdocs/008326.rtf",
+      "source": "govdocs-rtf",
+      "member": "008/008326.rtf",
+      "size": 98247,
+      "sha256": "4ad7ba7712e866858112c8ff1ad7b83663d0ab4f8e757f6cf52b0af3bdf8f2ba"
+    },
+    {
+      "path": "govdocs/009047.rtf",
+      "source": "govdocs-rtf",
+      "member": "009/009047.rtf",
+      "size": 90652,
+      "sha256": "5aa1f50ed913ed4a837dcbfcec54e9162d59cc7c3c68f5b304393352a15fd535"
+    },
+    {
+      "path": "govdocs/009120.rtf",
+      "source": "govdocs-rtf",
+      "member": "009/009120.rtf",
+      "size": 128521,
+      "sha256": "52e4cb964cc71c4068407e9742e3e5c78020b1a39bc4532c4e3891ecddd1ccc2"
+    },
+    {
+      "path": "govdocs/009320.html",
+      "source": "govdocs-thread0",
+      "member": "009/009320.html",
+      "size": 1340,
+      "sha256": "8048fd67c44f3cce83716edd8091f3bcc4a7c19a2eeb63243d9d51ffb749efad"
+    },
+    {
+      "path": "govdocs/009353.rtf",
+      "source": "govdocs-rtf",
+      "member": "009/009353.rtf",
+      "size": 29686,
+      "sha256": "fea120d6d950d9a39a275a50057711e534c347d918816980cee98081bb5af17e"
+    },
+    {
+      "path": "govdocs/009360.rtf",
+      "source": "govdocs-rtf",
+      "member": "009/009360.rtf",
+      "size": 22672,
+      "sha256": "95623200167005486d4930caedcebe858083abe84790cf673d1fd47143d6c094"
+    },
+    {
+      "path": "govdocs/009366.rtf",
+      "source": "govdocs-rtf",
+      "member": "009/009366.rtf",
+      "size": 36476,
+      "sha256": "25ac089063e6c717681527ee0dd6f6db8541c7f9ecb79cde2056ce8a9e000362"
+    },
+    {
+      "path": "govdocs/010390.rtf",
+      "source": "govdocs-rtf",
+      "member": "010/010390.rtf",
+      "size": 35437,
+      "sha256": "d47fe5445224f50972e612ad2a583f3a5f431c6e137d5924261d7a4d142e0664"
+    },
+    {
+      "path": "govdocs/010887.rtf",
+      "source": "govdocs-rtf",
+      "member": "010/010887.rtf",
+      "size": 54880,
+      "sha256": "f13b59ac974b5b3e573dd71604ed90b0f8e37c4e24dcfdb19e9194aa2ceac4ce"
+    },
+    {
+      "path": "govdocs/011443.pdf",
+      "source": "govdocs-thread0",
+      "member": "011/011443.pdf",
+      "size": 84639,
+      "sha256": "70bb13aeac3e86ff63ea767897b8b05bcf836407beca126f4a9c0f43133b1d06"
+    },
+    {
+      "path": "govdocs/011840.rtf",
+      "source": "govdocs-rtf",
+      "member": "011/011840.rtf",
+      "size": 20482,
+      "sha256": "280f663d2dbd6e8edbe21b559491bc7a0f209770a7535bac28ca37a604fcf605"
+    },
+    {
+      "path": "govdocs/012599.rtf",
+      "source": "govdocs-rtf",
+      "member": "012/012599.rtf",
+      "size": 71291,
+      "sha256": "729f704062ac4554842f48741cfe023078fd83de26d0188b12b86cf0b9e16b84"
+    },
+    {
+      "path": "govdocs/012819.html",
+      "source": "govdocs-thread0",
+      "member": "012/012819.html",
+      "size": 110137,
+      "sha256": "ec14dfe6604bf96e805385dd06f620ebcabbca14645015408db338d89726c2df"
+    },
+    {
+      "path": "govdocs/013057.rtf",
+      "source": "govdocs-rtf",
+      "member": "013/013057.rtf",
+      "size": 51654,
+      "sha256": "fcbd0202a7dee7fd5ef3a59647d0913ae126da0d0e579b5ec13cddcebe99aba8"
+    },
+    {
+      "path": "govdocs/014475.rtf",
+      "source": "govdocs-rtf",
+      "member": "014/014475.rtf",
+      "size": 44710,
+      "sha256": "15636200fa33fc2ef48964a230b98248f427c584066ccf2e2c33b7e4925f2e03"
+    },
+    {
+      "path": "govdocs/014575.pdf",
+      "source": "govdocs-thread0",
+      "member": "014/014575.pdf",
+      "size": 243434,
+      "sha256": "6b25feb92efe94f1286677a28fd1caa1e0f236a39006afad970ff040d4d88d76"
+    },
+    {
+      "path": "govdocs/014760.docx",
+      "source": "govdocs-docx",
+      "member": "014/014760.docx",
+      "size": 39631,
+      "sha256": "f538e934e60c77ff561cbf91876dc2a252da283d2fe83b5fe620268fe27dcce6"
+    },
+    {
+      "path": "govdocs/014819.pdf",
+      "source": "govdocs-thread0",
+      "member": "014/014819.pdf",
+      "size": 77212,
+      "sha256": "fe8554e443036e8a927094f40ca2f4ff8abb6baec17725fa06a425924df3c5c4"
+    },
+    {
+      "path": "govdocs/015814.html",
+      "source": "govdocs-thread0",
+      "member": "015/015814.html",
+      "size": 14520,
+      "sha256": "de3b6f1a7d9d611c9d2a187b185fa28af4b2b6c781ec0ed7ea20c4a1dcaa0dd1"
+    },
+    {
+      "path": "govdocs/016006.html",
+      "source": "govdocs-thread0",
+      "member": "016/016006.html",
+      "size": 192350,
+      "sha256": "fe468bbf2d5cb0815d4f3b5977c051579ff46403f7dbbcea3743aea1ff69c3dc"
+    },
+    {
+      "path": "govdocs/017091.docx",
+      "source": "govdocs-docx",
+      "member": "017/017091.docx",
+      "size": 37440,
+      "sha256": "6a41ce073ac8fa7f7a03e2d80224b7e34a5b53064733b937f14f43ba1314e368"
+    },
+    {
+      "path": "govdocs/017097.docx",
+      "source": "govdocs-docx",
+      "member": "017/017097.docx",
+      "size": 64325,
+      "sha256": "9d261a88188744a3006314966f6e5c45ce38c8235341854fb6ffca64fa2c565c"
+    },
+    {
+      "path": "govdocs/017444.html",
+      "source": "govdocs-thread0",
+      "member": "017/017444.html",
+      "size": 99012,
+      "sha256": "51f8963455f93ca3649c716c13deeac13c017402c200e8064d3e1cdbdd556a3e"
+    },
+    {
+      "path": "govdocs/017552.rtf",
+      "source": "govdocs-rtf",
+      "member": "017/017552.rtf",
+      "size": 41632,
+      "sha256": "48f4cef35f2fcc0eb6ac97523f2c330432dc72c88fb2be899edd540782f568a4"
+    },
+    {
+      "path": "govdocs/017682.html",
+      "source": "govdocs-thread0",
+      "member": "017/017682.html",
+      "size": 2879,
+      "sha256": "753365726d3a94e0ea35e61e9023b026dc1c4bb6fc6bf33a8c72adf2481c746d"
+    },
+    {
+      "path": "govdocs/018367.docx",
+      "source": "govdocs-docx",
+      "member": "018/018367.docx",
+      "size": 203043,
+      "sha256": "fc72225c1f6185a1f62772e208c8e06827371c8ba1460013011017873a6f46ba"
+    },
+    {
+      "path": "govdocs/018370.docx",
+      "source": "govdocs-docx",
+      "member": "018/018370.docx",
+      "size": 30723,
+      "sha256": "d41910fdcf5b395071c4403a595f4274af0bc3b5d31853ffcc8949633906e4b4"
+    },
+    {
+      "path": "govdocs/018371.docx",
+      "source": "govdocs-docx",
+      "member": "018/018371.docx",
+      "size": 26036,
+      "sha256": "84004cdfe4e109bf155e0dade4cad3c4cea80692096a9ebb31114bdc8b82d7be"
+    },
+    {
+      "path": "govdocs/018708.rtf",
+      "source": "govdocs-rtf",
+      "member": "018/018708.rtf",
+      "size": 47371,
+      "sha256": "58003aee4666daba963cbc79eb773f6d1d45ecad858507f7716ea34f0d0a5e02"
+    },
+    {
+      "path": "govdocs/021524.docx",
+      "source": "govdocs-docx",
+      "member": "021/021524.docx",
+      "size": 16028,
+      "sha256": "a79cda38c7c0afa27e9a8338072526a7d7a5bba1074eca71613523854306ed1b"
+    },
+    {
+      "path": "govdocs/021526.docx",
+      "source": "govdocs-docx",
+      "member": "021/021526.docx",
+      "size": 15610,
+      "sha256": "3f587f9a0e687749672d1e473765899ef2ad1baf53c11a442e5567ebfd3a9c57"
+    },
+    {
+      "path": "govdocs/021528.docx",
+      "source": "govdocs-docx",
+      "member": "021/021528.docx",
+      "size": 14407,
+      "sha256": "c6a3317d74a5a4d849d55d59342c0462956e773b4c5dc9f0bcd6f2cc03599072"
+    },
+    {
+      "path": "govdocs/021833.html",
+      "source": "govdocs-thread0",
+      "member": "021/021833.html",
+      "size": 36557,
+      "sha256": "0e9603e7e5fcb4cb18024db24b272b41d46ddb3b077c68c8f5c98b7966af5401"
+    },
+    {
+      "path": "govdocs/025667.html",
+      "source": "govdocs-thread0",
+      "member": "025/025667.html",
+      "size": 18974,
+      "sha256": "7afeec29ca1dccb33b265800d9cfbfa18e089978c46f4acb82ad14a962138126"
+    },
+    {
+      "path": "govdocs/025835.pdf",
+      "source": "govdocs-thread0",
+      "member": "025/025835.pdf",
+      "size": 418528,
+      "sha256": "6087b2c1701a29a7cc9f56b958e8b8aa013b6a127af5126bd9db567751f8654b"
+    },
+    {
+      "path": "govdocs/026839.pdf",
+      "source": "govdocs-thread0",
+      "member": "026/026839.pdf",
+      "size": 113946,
+      "sha256": "71a16961e7b7b0f4f2a0c126495482fe7b148f8a08a3cade9152a77dca1feda9"
+    },
+    {
+      "path": "govdocs/027462.html",
+      "source": "govdocs-thread0",
+      "member": "027/027462.html",
+      "size": 14800,
+      "sha256": "3f180684d0cf0671f48ef11878507474b33e54abed312de107842ff6ee15f58f"
+    },
+    {
+      "path": "govdocs/032132.txt",
+      "source": "govdocs-thread0",
+      "member": "032/032132.txt",
+      "size": 33392,
+      "sha256": "360ed267039899f6ae4f40ea58dd8be93b5fc3915781b4c7db24797ef710f85a"
+    },
+    {
+      "path": "govdocs/036269.docx",
+      "source": "govdocs-docx",
+      "member": "036/036269.docx",
+      "size": 87806,
+      "sha256": "629719d5110e7ba861fe76aec3f0b74802d4d4234cc993b3c36fc07cfd0b8be8"
+    },
+    {
+      "path": "govdocs/036270.docx",
+      "source": "govdocs-docx",
+      "member": "036/036270.docx",
+      "size": 15901,
+      "sha256": "44580d651a0071bdac893fdc7e149a07815684ac023c7969d7abd9d4816c7939"
+    },
+    {
+      "path": "govdocs/037025.docx",
+      "source": "govdocs-docx",
+      "member": "037/037025.docx",
+      "size": 95167,
+      "sha256": "4473562871eace8234b04c066ef7142e718531be12352dc1cf55046fc05477cc"
+    },
+    {
+      "path": "govdocs/037824.docx",
+      "source": "govdocs-docx",
+      "member": "037/037824.docx",
+      "size": 246717,
+      "sha256": "e31d10fbc0049a64b4036b331152d607b918cf9b532051bb8f9bd3b9ace58759"
+    },
+    {
+      "path": "govdocs/041274.html",
+      "source": "govdocs-thread0",
+      "member": "041/041274.html",
+      "size": 308,
+      "sha256": "b24f2fbcb49fd836ce22ee82eda8beca79069501d84121666a05e34f7aa4d0c6"
+    },
+    {
+      "path": "govdocs/043267.html",
+      "source": "govdocs-thread0",
+      "member": "043/043267.html",
+      "size": 160198,
+      "sha256": "12df2f8b5e96c35f1867573398c76d69b339f0faf0d5738bdd4b2fb66b0bef85"
+    },
+    {
+      "path": "govdocs/047603.html",
+      "source": "govdocs-thread0",
+      "member": "047/047603.html",
+      "size": 21852,
+      "sha256": "a0757ce9763f466aec3051e6ae639b8bb12ce0209d85dc6d32bfdad9bfeb08d8"
+    },
+    {
+      "path": "govdocs/048259.html",
+      "source": "govdocs-thread0",
+      "member": "048/048259.html",
+      "size": 46361,
+      "sha256": "ed2096f23fc57ca571adfa565882011a0c8a662607714eb9067e17355a9d754a"
+    },
+    {
+      "path": "govdocs/049331.doc",
+      "source": "govdocs-thread0",
+      "member": "049/049331.doc",
+      "size": 112640,
+      "sha256": "ee935f715264cfab1270eac97bb20ff508d5517477db2a971d3826c8623af337"
+    },
+    {
+      "path": "govdocs/049978.doc",
+      "source": "govdocs-thread0",
+      "member": "049/049978.doc",
+      "size": 281088,
+      "sha256": "3665687e4ebe196c1d7973262dbc676b022ebddeec24fd77a3daedf9767d36b7"
+    },
+    {
+      "path": "govdocs/051767.txt",
+      "source": "govdocs-thread0",
+      "member": "051/051767.txt",
+      "size": 22964,
+      "sha256": "f08d6a2b1ec83a4fa5d163f4cc1f17e7be4ade5dabd5f27d81f88345ea3e61a1"
+    },
+    {
+      "path": "govdocs/052528.pdf",
+      "source": "govdocs-thread0",
+      "member": "052/052528.pdf",
+      "size": 172017,
+      "sha256": "e4c9608155fb1f61303971a2d946ffade0ad104c2e2801fb18e80bfd7e55be8f"
+    },
+    {
+      "path": "govdocs/052725.pdf",
+      "source": "govdocs-thread0",
+      "member": "052/052725.pdf",
+      "size": 509387,
+      "sha256": "de453928279936375fae5448c12b36c0b2f4a5e6263bf38b2da4127aaba65541"
+    },
+    {
+      "path": "govdocs/053253.pdf",
+      "source": "govdocs-thread0",
+      "member": "053/053253.pdf",
+      "size": 58976,
+      "sha256": "24f2b7004d9e461049e0c7723eeefdfbc3239fa0503583b306c60edbe9104573"
+    },
+    {
+      "path": "govdocs/053267.html",
+      "source": "govdocs-thread0",
+      "member": "053/053267.html",
+      "size": 32262,
+      "sha256": "4f2f7ed4858df7f9dbe313ec35e08a2aa32919200782680157e7936863c963d3"
+    },
+    {
+      "path": "govdocs/054953.html",
+      "source": "govdocs-thread0",
+      "member": "054/054953.html",
+      "size": 2619,
+      "sha256": "c2ea0690297f3d615a16a5231e297a22d1408da624962eb04eb866bc1930a7cf"
+    },
+    {
+      "path": "govdocs/057545.txt",
+      "source": "govdocs-thread0",
+      "member": "057/057545.txt",
+      "size": 28480,
+      "sha256": "3cc26dd9603ae625344cd5eff4ec8e1612e02e0eda77d1fadf13636f491e9ead"
+    },
+    {
+      "path": "govdocs/057730.html",
+      "source": "govdocs-thread0",
+      "member": "057/057730.html",
+      "size": 6343,
+      "sha256": "0302ebf8d6326b2184b6a454cc208bf518a2b38d4928863ef9da3feba353ce73"
+    },
+    {
+      "path": "govdocs/060887.txt",
+      "source": "govdocs-thread0",
+      "member": "060/060887.txt",
+      "size": 10250,
+      "sha256": "475bade7b98df981561256c85eae51e2af850efc8a69850a1dd826ce02ac5dc6"
+    },
+    {
+      "path": "govdocs/063072.txt",
+      "source": "govdocs-thread0",
+      "member": "063/063072.txt",
+      "size": 65453,
+      "sha256": "93c112ce0e0cd6de90dd6f3b494ccb26eb5c164b77a1ba8f4950698db10db229"
+    },
+    {
+      "path": "govdocs/063278.html",
+      "source": "govdocs-thread0",
+      "member": "063/063278.html",
+      "size": 11884,
+      "sha256": "570a447a79c7c14cd1e38d0a2e6d2d8d4658d60b65cb13cd944a3b88e5a544ba"
+    },
+    {
+      "path": "govdocs/063776.txt",
+      "source": "govdocs-thread0",
+      "member": "063/063776.txt",
+      "size": 23258,
+      "sha256": "0a7101ea91faf6447aae3cffb77c44e3ab55c1529a1d1ea1cf3939e5e11d5598"
+    },
+    {
+      "path": "govdocs/064144.html",
+      "source": "govdocs-thread0",
+      "member": "064/064144.html",
+      "size": 46136,
+      "sha256": "44461b4f8654d0405f2d4070df74b208196247f198f8e23dd665216a398479bf"
+    },
+    {
+      "path": "govdocs/066290.txt",
+      "source": "govdocs-thread0",
+      "member": "066/066290.txt",
+      "size": 14224,
+      "sha256": "215a558395cea6998e501ae4171be2038f9d042e31cc7b2f0b7ce32ee150d0dc"
+    },
+    {
+      "path": "govdocs/067773.pdf",
+      "source": "govdocs-thread0",
+      "member": "067/067773.pdf",
+      "size": 29080,
+      "sha256": "8eb4377c3313e302448371bb0bf040e905eadc5ec50849d37d159ce73de6bb44"
+    },
+    {
+      "path": "govdocs/069788.xml",
+      "source": "govdocs-thread0",
+      "member": "069/069788.xml",
+      "size": 221299,
+      "sha256": "4ba9ffe143f4263c58268355386ff629329da43924129eb7a772f3555bee839f"
+    },
+    {
+      "path": "govdocs/071930.pdf",
+      "source": "govdocs-thread0",
+      "member": "071/071930.pdf",
+      "size": 39695,
+      "sha256": "eecef06f7fee9bc92a4c2d0f94a189573ad4d0d59a7a7518b667dacc6faf9dc6"
+    },
+    {
+      "path": "govdocs/073227.pdf",
+      "source": "govdocs-thread0",
+      "member": "073/073227.pdf",
+      "size": 250485,
+      "sha256": "e3c9f5b659c0aa8d938edc22a9d141653b8e9941e7199cb69ef20b33090fbae6"
+    },
+    {
+      "path": "govdocs/077341.txt",
+      "source": "govdocs-thread0",
+      "member": "077/077341.txt",
+      "size": 5975,
+      "sha256": "e27432be703439ab6f7ff84bb5fcbc101c83e6b7e7ba613926b17d710a22375f"
+    },
+    {
+      "path": "govdocs/077996.html",
+      "source": "govdocs-thread0",
+      "member": "077/077996.html",
+      "size": 23993,
+      "sha256": "8f7a08bec052c1f66b0e1f3b4269d46406a1e7974d53915a934c7177cdb2bb95"
+    },
+    {
+      "path": "govdocs/080851.txt",
+      "source": "govdocs-thread0",
+      "member": "080/080851.txt",
+      "size": 14496,
+      "sha256": "57a4e0e454a122a78ad440cd2cfdb7014d47c1d6d4cc7d2a62e580be3e2098e1"
+    },
+    {
+      "path": "govdocs/081779.html",
+      "source": "govdocs-thread0",
+      "member": "081/081779.html",
+      "size": 17614,
+      "sha256": "debca198a437512d6f37c0c421bd7e6285a872f45861f0396d0226360ce5b500"
+    },
+    {
+      "path": "govdocs/083776.pdf",
+      "source": "govdocs-thread0",
+      "member": "083/083776.pdf",
+      "size": 30478,
+      "sha256": "44a66f7735be23756719bbf090ea4d2193915193532bc8758713d2e04cac9cf8"
+    },
+    {
+      "path": "govdocs/085462.pdf",
+      "source": "govdocs-thread0",
+      "member": "085/085462.pdf",
+      "size": 399288,
+      "sha256": "69ff9371d2911608431307a0c7ee5406e01572f83c91f842197035a90b1fe18c"
+    },
+    {
+      "path": "govdocs/086190.txt",
+      "source": "govdocs-thread0",
+      "member": "086/086190.txt",
+      "size": 24188,
+      "sha256": "c2b3b145fe34a287d1fd6e2b2d0eb3e884dd0ba3881aed2fa7200e9ce3fb1663"
+    },
+    {
+      "path": "govdocs/090231.html",
+      "source": "govdocs-thread0",
+      "member": "090/090231.html",
+      "size": 2208,
+      "sha256": "d736f6d6f18aaa5150d751ba0a41d5f1151eef14a6c416d2bfaf2e8194549650"
+    },
+    {
+      "path": "govdocs/090703.doc",
+      "source": "govdocs-thread0",
+      "member": "090/090703.doc",
+      "size": 41984,
+      "sha256": "d5397de81c3428bd61cda06f883bfb74cb32c2053a8beb59d43c908cc0b1589a"
+    },
+    {
+      "path": "govdocs/092145.pdf",
+      "source": "govdocs-thread0",
+      "member": "092/092145.pdf",
+      "size": 102030,
+      "sha256": "984e76169a4b55dd9a3fa0c9690535b869a478bddae2721166354edf98450668"
+    },
+    {
+      "path": "govdocs/097040.pdf",
+      "source": "govdocs-thread0",
+      "member": "097/097040.pdf",
+      "size": 39524,
+      "sha256": "aa4593370d630dcb3066e78342917dae55e96e84796ee1b0bf2007a9462e42a6"
+    },
+    {
+      "path": "govdocs/098846.txt",
+      "source": "govdocs-thread0",
+      "member": "098/098846.txt",
+      "size": 32315,
+      "sha256": "54cf94230aa74b77ecea511bbad8bd29b33e3eb521482cd90dc22dcb7ca23968"
+    },
+    {
+      "path": "govdocs/099989.html",
+      "source": "govdocs-thread0",
+      "member": "099/099989.html",
+      "size": 2462,
+      "sha256": "e5503b79e588c4008fd66d355e7b7cf87bf57aa0618d417dca1529b263f20cac"
+    },
+    {
+      "path": "govdocs/101605.txt",
+      "source": "govdocs-thread0",
+      "member": "101/101605.txt",
+      "size": 30240,
+      "sha256": "057a41af4ed50c3193f263261b285be1d23c571a6da50e3099032b4875bf4969"
+    },
+    {
+      "path": "govdocs/103568.pdf",
+      "source": "govdocs-thread0",
+      "member": "103/103568.pdf",
+      "size": 383779,
+      "sha256": "0e0b267b5995e52736a006300909da147673c4d961a233c46b25914b8f637795"
+    },
+    {
+      "path": "govdocs/105186.pdf",
+      "source": "govdocs-thread0",
+      "member": "105/105186.pdf",
+      "size": 274306,
+      "sha256": "4f4695176ec15ca617e5a9a7240b8dd4aeacc034bde8cc7ecca2204378ff3bf8"
+    },
+    {
+      "path": "govdocs/108189.html",
+      "source": "govdocs-thread0",
+      "member": "108/108189.html",
+      "size": 24151,
+      "sha256": "d3f5f1616e4d5729c112452591c9b61f7bf715447c5b7f71ffc63db0b16c7db3"
+    },
+    {
+      "path": "govdocs/110287.txt",
+      "source": "govdocs-thread0",
+      "member": "110/110287.txt",
+      "size": 1637,
+      "sha256": "288b3397ad492b185126c91649d8e227e151242938d393b824da0d92ebe0ee4c"
+    },
+    {
+      "path": "govdocs/111338.pdf",
+      "source": "govdocs-thread0",
+      "member": "111/111338.pdf",
+      "size": 313680,
+      "sha256": "c732bc8d120f0ab92d12bf488d10f4369312ae223df182aa4e48f403f545b051"
+    },
+    {
+      "path": "govdocs/111807.csv",
+      "source": "govdocs-thread0",
+      "member": "111/111807.csv",
+      "size": 313202,
+      "sha256": "6bac3d23f9bba1ba6ce873cad41908fe131b802fdfbb1b4727ab197ca4e83e01"
+    },
+    {
+      "path": "govdocs/112848.pdf",
+      "source": "govdocs-thread0",
+      "member": "112/112848.pdf",
+      "size": 215175,
+      "sha256": "a4bfba9f9f557c27cbc512a16c24f6b790f27929a40e1ae1e191ad183b40bf1a"
+    },
+    {
+      "path": "govdocs/113559.html",
+      "source": "govdocs-thread0",
+      "member": "113/113559.html",
+      "size": 7335,
+      "sha256": "dabf7c43bb542bb2a7189b7ec26c3eae61dc80f54ef5c5a9f4bdc6045cb6e449"
+    },
+    {
+      "path": "govdocs/116733.docx",
+      "source": "govdocs-docx",
+      "member": "116/116733.docx",
+      "size": 137132,
+      "sha256": "a823c29a18818e8bf2ec9218c1f2001403fa597686be95360162cff7d715f77d"
+    },
+    {
+      "path": "govdocs/117275.doc",
+      "source": "govdocs-thread0",
+      "member": "117/117275.doc",
+      "size": 158208,
+      "sha256": "156c41bb41155637db561ea56c988f966fe76b44ce62a21c6f07c21126292777"
+    },
+    {
+      "path": "govdocs/119417.txt",
+      "source": "govdocs-thread0",
+      "member": "119/119417.txt",
+      "size": 7544,
+      "sha256": "4cf479b79fc15fe1157e281c5f66595e916e4f79bf2763f63407cc16ab128aa3"
+    },
+    {
+      "path": "govdocs/119760.txt",
+      "source": "govdocs-thread0",
+      "member": "119/119760.txt",
+      "size": 5907,
+      "sha256": "d07d0b1687efb5ee71c7cc2fdbf3c679ce0c3c98bc1b5de7e82bad80263f2d81"
+    },
+    {
+      "path": "govdocs/122082.html",
+      "source": "govdocs-thread0",
+      "member": "122/122082.html",
+      "size": 7402,
+      "sha256": "fda18a6766d23b06ef4b038f965a84f437b994da73e63379923efc160d79b304"
+    },
+    {
+      "path": "govdocs/122199.pdf",
+      "source": "govdocs-thread0",
+      "member": "122/122199.pdf",
+      "size": 118890,
+      "sha256": "9b12fafd1cdc6597556951f6d4cac4ac3cda8640d4673461ac95ad2b66a23e19"
+    },
+    {
+      "path": "govdocs/123779.pdf",
+      "source": "govdocs-thread0",
+      "member": "123/123779.pdf",
+      "size": 139743,
+      "sha256": "2556ae5dccafc1913ac398bca8e1531c1966038b570099e60aa265381e92e148"
+    },
+    {
+      "path": "govdocs/128291.docx",
+      "source": "govdocs-docx",
+      "member": "128/128291.docx",
+      "size": 50211,
+      "sha256": "45c479098e0240094972746064e2e0c79c770133585e4f6c74332b39067d8ae0"
+    },
+    {
+      "path": "govdocs/128507.txt",
+      "source": "govdocs-thread0",
+      "member": "128/128507.txt",
+      "size": 62148,
+      "sha256": "7deeed57fd909a809230306fcb679a8e13e67b34a6cb436ba6d495e05ce91b46"
+    },
+    {
+      "path": "govdocs/129941.txt",
+      "source": "govdocs-thread0",
+      "member": "129/129941.txt",
+      "size": 19208,
+      "sha256": "849115e4aba52959bc1c42312faf73d0955733566cdb4b5bd43f1ad624376b65"
+    },
+    {
+      "path": "govdocs/133284.pdf",
+      "source": "govdocs-thread0",
+      "member": "133/133284.pdf",
+      "size": 37066,
+      "sha256": "0506d945fdf62f0b7f652398934b4c4e9e343b1edc9638dd7e0131e86ee0888f"
+    },
+    {
+      "path": "govdocs/135778.pdf",
+      "source": "govdocs-thread0",
+      "member": "135/135778.pdf",
+      "size": 14013,
+      "sha256": "0bb399b7c60b012c9bd2c2ea7d4de10f9cc843b59484ec7956d1bf7766932088"
+    },
+    {
+      "path": "govdocs/137031.pdf",
+      "source": "govdocs-thread0",
+      "member": "137/137031.pdf",
+      "size": 132067,
+      "sha256": "4d9e7f9e9da44b47a067738e9fc41a2b65359b66160002b6a567785d02a82d93"
+    },
+    {
+      "path": "govdocs/139345.pdf",
+      "source": "govdocs-thread0",
+      "member": "139/139345.pdf",
+      "size": 475895,
+      "sha256": "719c644fa63eb382a444a73b2afa0001eeb078826d7fe0f9384bac5481136ba5"
+    },
+    {
+      "path": "govdocs/141890.xml",
+      "source": "govdocs-thread0",
+      "member": "141/141890.xml",
+      "size": 9507,
+      "sha256": "79fc014fda67cb8042bbb13ad4d26b55d2028b702cb530773725fab475650904"
+    },
+    {
+      "path": "govdocs/142669.doc",
+      "source": "govdocs-thread0",
+      "member": "142/142669.doc",
+      "size": 41472,
+      "sha256": "72f5cfaac34eca546dc9f6e49b3b7ea8896e270715b1718ff56b3a8984f9e836"
+    },
+    {
+      "path": "govdocs/143879.pdf",
+      "source": "govdocs-thread0",
+      "member": "143/143879.pdf",
+      "size": 175184,
+      "sha256": "4ab6b43679d81dc2425796ad3dc99b32a4defe234eec2d0c18d957c312d3c8f5"
+    },
+    {
+      "path": "govdocs/144325.pdf",
+      "source": "govdocs-thread0",
+      "member": "144/144325.pdf",
+      "size": 351285,
+      "sha256": "0bc9359da56d6c0e55fa3140e08069dbe0e61ad0bde9e0857a70afb204be997e"
+    },
+    {
+      "path": "govdocs/145153.pdf",
+      "source": "govdocs-thread0",
+      "member": "145/145153.pdf",
+      "size": 263597,
+      "sha256": "68d1030bfe0a33b4f387c9fc9c764f2e764e890d53e5fbc886b49d5ad982d8cd"
+    },
+    {
+      "path": "govdocs/150311.pdf",
+      "source": "govdocs-thread0",
+      "member": "150/150311.pdf",
+      "size": 112152,
+      "sha256": "5c654c0b8c11a45b97bd5f253c37d9012489574f1abd10494b3a0b682cd7edb1"
+    },
+    {
+      "path": "govdocs/151049.txt",
+      "source": "govdocs-thread0",
+      "member": "151/151049.txt",
+      "size": 10050,
+      "sha256": "ca8fc4010e2977c05eeae0885b5a642905efc25f907e9607c33f8c73bfeead26"
+    },
+    {
+      "path": "govdocs/151955.pdf",
+      "source": "govdocs-thread0",
+      "member": "151/151955.pdf",
+      "size": 18377,
+      "sha256": "06118444f8136606417010dc33b8b7c82dc5f8af42e367e9d0500057f19458c4"
+    },
+    {
+      "path": "govdocs/153378.doc",
+      "source": "govdocs-thread0",
+      "member": "153/153378.doc",
+      "size": 38912,
+      "sha256": "49200f26abf7e3cb89f2b91af70eca0a0d17d2c9f3f92acd7007963866e26554"
+    },
+    {
+      "path": "govdocs/154390.pdf",
+      "source": "govdocs-thread0",
+      "member": "154/154390.pdf",
+      "size": 266762,
+      "sha256": "04d061f16134e79aece0a714ef43e53b408bc939b362dfc2d3e2320535ef7bab"
+    },
+    {
+      "path": "govdocs/155586.txt",
+      "source": "govdocs-thread0",
+      "member": "155/155586.txt",
+      "size": 59642,
+      "sha256": "b63c7ae15e3b52a0fc59249a12f24ebb26812fe330219c720f972b1c6252b555"
+    },
+    {
+      "path": "govdocs/157581.doc",
+      "source": "govdocs-thread0",
+      "member": "157/157581.doc",
+      "size": 173056,
+      "sha256": "a11b34ec8f49978f5ff01180131a90ae527edec2fd94e8dd7408159fb2ee7466"
+    },
+    {
+      "path": "govdocs/166104.docx",
+      "source": "govdocs-docx",
+      "member": "166/166104.docx",
+      "size": 29013,
+      "sha256": "891847001dadcad2d84e01a1cf6406fe8aff776d3a63c0dda03355ffdaf20ca8"
+    },
+    {
+      "path": "govdocs/182611.docx",
+      "source": "govdocs-docx",
+      "member": "182/182611.docx",
+      "size": 21475,
+      "sha256": "1b23b56e988717a5e6f9df1262a03c5e10ae1405ec8ca02d2d1ff7f8f9063464"
+    },
+    {
+      "path": "govdocs/185221.pdf",
+      "source": "govdocs-thread0",
+      "member": "185/185221.pdf",
+      "size": 483597,
+      "sha256": "5a1b07f5ea64c0947ef5ca54fdf9b22edbc7606fe2d7e049a357fc5bd406e919"
+    },
+    {
+      "path": "govdocs/189283.pdf",
+      "source": "govdocs-thread0",
+      "member": "189/189283.pdf",
+      "size": 43628,
+      "sha256": "e2f0a6bdbd77158d1d84ee7b9d7e330892d20d017e34d102c5ac1307022f2e5f"
+    },
+    {
+      "path": "govdocs/189317.pdf",
+      "source": "govdocs-thread0",
+      "member": "189/189317.pdf",
+      "size": 21269,
+      "sha256": "6e225d86701a86d48bc90bc08d56c85d19f3d67feffffa9820f3b0d53ef0928e"
+    },
+    {
+      "path": "govdocs/195876.txt",
+      "source": "govdocs-thread0",
+      "member": "195/195876.txt",
+      "size": 1195,
+      "sha256": "5d7aab43e3acbdfe8158acf9f3bfc0fa6df7616f52225bd70472659150733e6a"
+    },
+    {
+      "path": "govdocs/197349.txt",
+      "source": "govdocs-thread0",
+      "member": "197/197349.txt",
+      "size": 3491,
+      "sha256": "1a2a32f42a1163df03eddc3aa2a712dd35e025d91093bb454fb0b0c23f1d06fd"
+    },
+    {
+      "path": "govdocs/201828.xml",
+      "source": "govdocs-thread0",
+      "member": "201/201828.xml",
+      "size": 14742,
+      "sha256": "21963d0ec7959bb0e9c92f6180300e29755f18701e5f30739aea00b99f1cad2b"
+    },
+    {
+      "path": "govdocs/204418.txt",
+      "source": "govdocs-thread0",
+      "member": "204/204418.txt",
+      "size": 128929,
+      "sha256": "8407de28559dd38987d07e4716e98341106aa0d54926d0ace723153965419268"
+    },
+    {
+      "path": "govdocs/206498.doc",
+      "source": "govdocs-thread0",
+      "member": "206/206498.doc",
+      "size": 16896,
+      "sha256": "2f3c8ab2d2b7ca9491507595e92c8d110786c4dbcafeb35083cd4de3a24770cc"
+    },
+    {
+      "path": "govdocs/210687.doc",
+      "source": "govdocs-thread0",
+      "member": "210/210687.doc",
+      "size": 160768,
+      "sha256": "4af008c24552094c449ab3c6d8af7c6066ee3fa18967fbdc4c6094246cae1571"
+    },
+    {
+      "path": "govdocs/210763.pdf",
+      "source": "govdocs-thread0",
+      "member": "210/210763.pdf",
+      "size": 124312,
+      "sha256": "d4e2638522473345d8da674e0b0578ec5fd6b6dc47bce5ba7e42f095fbbd477c"
+    },
+    {
+      "path": "govdocs/212648.docx",
+      "source": "govdocs-docx",
+      "member": "212/212648.docx",
+      "size": 16028,
+      "sha256": "a79cda38c7c0afa27e9a8338072526a7d7a5bba1074eca71613523854306ed1b"
+    },
+    {
+      "path": "govdocs/213125.txt",
+      "source": "govdocs-thread0",
+      "member": "213/213125.txt",
+      "size": 40500,
+      "sha256": "4245f51d4972cf621ccff20d82dac7ab7d89a12e435f84d3db1da66a387698c1"
+    },
+    {
+      "path": "govdocs/214825.docx",
+      "source": "govdocs-docx",
+      "member": "214/214825.docx",
+      "size": 14193,
+      "sha256": "7d2cea1329f7364696857a70c07820ab94a03e9bf8fd3669d90b73cb7c4ee0a9"
+    },
+    {
+      "path": "govdocs/214826.docx",
+      "source": "govdocs-docx",
+      "member": "214/214826.docx",
+      "size": 14779,
+      "sha256": "d33e6d069c441df8f41ad148f169711870853a98efccd6cd9f07a77857c602a4"
+    },
+    {
+      "path": "govdocs/215384.docx",
+      "source": "govdocs-docx",
+      "member": "215/215384.docx",
+      "size": 146116,
+      "sha256": "bca2ddbf5505d604e655246d53d3109064f3206c6081377276513ac9e02abaf3"
+    },
+    {
+      "path": "govdocs/216688.docx",
+      "source": "govdocs-docx",
+      "member": "216/216688.docx",
+      "size": 26990,
+      "sha256": "dc19b383ba8649ea679e7c155fabc7c2d724c221a5fa7f26369c5324bdb80832"
+    },
+    {
+      "path": "govdocs/216689.docx",
+      "source": "govdocs-docx",
+      "member": "216/216689.docx",
+      "size": 67370,
+      "sha256": "ebfb758627faf685655841929460b89b71fba75668dad6885910f6c76ef4e8f5"
+    },
+    {
+      "path": "govdocs/217982.txt",
+      "source": "govdocs-thread0",
+      "member": "217/217982.txt",
+      "size": 1011,
+      "sha256": "726ada614fc09f5168d43533b0b99d7e462b5ae550808cb41e7ebc254b496b61"
+    },
+    {
+      "path": "govdocs/218817.pdf",
+      "source": "govdocs-thread0",
+      "member": "218/218817.pdf",
+      "size": 237824,
+      "sha256": "773ee99a811909b31c90834570fa128a827d53a755ee938fcee418f3c6036512"
+    },
+    {
+      "path": "govdocs/218978.docx",
+      "source": "govdocs-docx",
+      "member": "218/218978.docx",
+      "size": 79337,
+      "sha256": "92838963c0ef3ca7146b9d8f4c7176188ebe814024e52f9f65d3b2ea813b019d"
+    },
+    {
+      "path": "govdocs/219589.txt",
+      "source": "govdocs-thread0",
+      "member": "219/219589.txt",
+      "size": 72188,
+      "sha256": "caf97b42ef504be7dd6d5975dceb063caade9c42fb10de2ac9bc1c83397186c8"
+    },
+    {
+      "path": "govdocs/224039.docx",
+      "source": "govdocs-docx",
+      "member": "224/224039.docx",
+      "size": 26993,
+      "sha256": "2bdfeea80fa7f37f308ecc99d36f349bfa4230c18a92a1332f648b02a5323966"
+    },
+    {
+      "path": "govdocs/224041.docx",
+      "source": "govdocs-docx",
+      "member": "224/224041.docx",
+      "size": 141344,
+      "sha256": "bee40bd8f95f0af74d88c2ca3dbc7ff3dcd8b968c4f6e5758194ae3c4c537bb8"
+    },
+    {
+      "path": "govdocs/224363.docx",
+      "source": "govdocs-docx",
+      "member": "224/224363.docx",
+      "size": 31435,
+      "sha256": "c610594b88aaf4cf23fa1d72c78c0ef908f98f423d28e20dfde0fbc47ec72cb9"
+    },
+    {
+      "path": "govdocs/224553.txt",
+      "source": "govdocs-thread0",
+      "member": "224/224553.txt",
+      "size": 11430,
+      "sha256": "bec431f5db68607778b0a1198ceeea16d2d258ccda3c369127b01140bc276b7c"
+    },
+    {
+      "path": "govdocs/224939.docx",
+      "source": "govdocs-docx",
+      "member": "224/224939.docx",
+      "size": 122629,
+      "sha256": "dffcb8f301f0c0d2177cefc618932797a2c5d26d56e00f4a2ad3727cb7b1c2f6"
+    },
+    {
+      "path": "govdocs/224940.docx",
+      "source": "govdocs-docx",
+      "member": "224/224940.docx",
+      "size": 95272,
+      "sha256": "b02052e08a3b6ea28f52ed9cb0a8631d1c9249c73859660ad964a5d5b58bda52"
+    },
+    {
+      "path": "govdocs/228214.txt",
+      "source": "govdocs-thread0",
+      "member": "228/228214.txt",
+      "size": 1697,
+      "sha256": "b435390e29e5c50973d9c9047e88b2f6f642e593fadfddd264571d87a3728894"
+    },
+    {
+      "path": "govdocs/230731.pdf",
+      "source": "govdocs-thread0",
+      "member": "230/230731.pdf",
+      "size": 35659,
+      "sha256": "6ba9a32a8f19a82380a8c036c62ccc480fa5321d2442285fc2b6e81aef34ed84"
+    },
+    {
+      "path": "govdocs/230900.pdf",
+      "source": "govdocs-thread0",
+      "member": "230/230900.pdf",
+      "size": 386304,
+      "sha256": "31c57d742959cf5e592ab7766a4178dda0d2f50f3976f70fbaf39bacf7b27bd0"
+    },
+    {
+      "path": "govdocs/236054.docx",
+      "source": "govdocs-docx",
+      "member": "236/236054.docx",
+      "size": 36190,
+      "sha256": "b78aab1ed0f286123e074afe4c1fb07b1af829e1dd34357a2a47ea81fd784921"
+    },
+    {
+      "path": "govdocs/236424.pdf",
+      "source": "govdocs-thread0",
+      "member": "236/236424.pdf",
+      "size": 59919,
+      "sha256": "498ec0bd932e0205c7c2eb78705405c334c6abf32e3c321376b5c1a9868a1563"
+    },
+    {
+      "path": "govdocs/239668.pdf",
+      "source": "govdocs-thread0",
+      "member": "239/239668.pdf",
+      "size": 51388,
+      "sha256": "7a6cda5dbec65696b5aac6f3364346988361f5e08277091c7fa287433fd68b20"
+    },
+    {
+      "path": "govdocs/246353.pdf",
+      "source": "govdocs-thread0",
+      "member": "246/246353.pdf",
+      "size": 159161,
+      "sha256": "fdc50ec4d47bb6b3137b7fa9bc67e2f49af8b04a4a36eca873f915ab4bab6608"
+    },
+    {
+      "path": "govdocs/252017.doc",
+      "source": "govdocs-thread0",
+      "member": "252/252017.doc",
+      "size": 54272,
+      "sha256": "697e119eeba7fbf69f3bcffcec3d7169e29c8db095e13aa599a2b9f520a04146"
+    },
+    {
+      "path": "govdocs/256420.txt",
+      "source": "govdocs-thread0",
+      "member": "256/256420.txt",
+      "size": 34666,
+      "sha256": "653b36715ef1af4c3c02bdfdb7f32db9c63cba7d7b28a95a1de3dbd8ddf609fa"
+    },
+    {
+      "path": "govdocs/256492.txt",
+      "source": "govdocs-thread0",
+      "member": "256/256492.txt",
+      "size": 271104,
+      "sha256": "7d0d808cf3d7472ff0d88125726321fc01a2392a53403a98f665fdb474cd4d98"
+    },
+    {
+      "path": "govdocs/257628.pdf",
+      "source": "govdocs-thread0",
+      "member": "257/257628.pdf",
+      "size": 155644,
+      "sha256": "5094092aef31c436ec48fb18dee245a97aebbfa942eb242d88a580a8bd932664"
+    },
+    {
+      "path": "govdocs/260338.pdf",
+      "source": "govdocs-thread0",
+      "member": "260/260338.pdf",
+      "size": 368633,
+      "sha256": "0943122b913f9183210b776cb907cd8cf2b77d6e2eab08a09f5a5b95fb766bca"
+    },
+    {
+      "path": "govdocs/261808.pdf",
+      "source": "govdocs-thread0",
+      "member": "261/261808.pdf",
+      "size": 119780,
+      "sha256": "fddaa8cead2b23e3b9358bcc9bd496ca9e1a8975fd9ac103015f2efddb59e4a4"
+    },
+    {
+      "path": "govdocs/261960.pdf",
+      "source": "govdocs-thread0",
+      "member": "261/261960.pdf",
+      "size": 25194,
+      "sha256": "99f7c7e50d8a89d3a0444e9df104dcbe859ac16a6cb212c1359cb6b10764bb9e"
+    },
+    {
+      "path": "govdocs/265130.pdf",
+      "source": "govdocs-thread0",
+      "member": "265/265130.pdf",
+      "size": 153361,
+      "sha256": "ee5bcc4dad6f8e68d4e1552d4186f02bb82494dc43827d1502e22e67ccc4873e"
+    },
+    {
+      "path": "govdocs/266620.csv",
+      "source": "govdocs-thread0",
+      "member": "266/266620.csv",
+      "size": 67864,
+      "sha256": "a3963b2fc2a781681792f1cd23a893314b59c695303a42b7dfe180e187e1044e"
+    },
+    {
+      "path": "govdocs/266784.pdf",
+      "source": "govdocs-thread0",
+      "member": "266/266784.pdf",
+      "size": 199364,
+      "sha256": "8621854414a37969345f23024e6eb2c30f13d2b420db28b4d6b192cdb140942f"
+    },
+    {
+      "path": "govdocs/267203.pdf",
+      "source": "govdocs-thread0",
+      "member": "267/267203.pdf",
+      "size": 421833,
+      "sha256": "ab3f5a09edce7d5b1fd9f4c1837c7cc15100df9b55bfbb5cf6b6a569da220572"
+    },
+    {
+      "path": "govdocs/272545.pdf",
+      "source": "govdocs-thread0",
+      "member": "272/272545.pdf",
+      "size": 399831,
+      "sha256": "9abfbc3a45146e8204c9a852f238e0f4bda3ad9a218ad0a4379fe7d88907961b"
+    },
+    {
+      "path": "govdocs/275138.doc",
+      "source": "govdocs-thread0",
+      "member": "275/275138.doc",
+      "size": 145408,
+      "sha256": "b83831b7376119b30ba482ab52e85c42281205f7c9f1a01ca03d3b7b74e2d6cd"
+    },
+    {
+      "path": "govdocs/279397.pdf",
+      "source": "govdocs-thread0",
+      "member": "279/279397.pdf",
+      "size": 43874,
+      "sha256": "efb5558e07854639f1e8a9b9aa2a575f7ca8a1128f3b44becb5e30a6952dfa96"
+    },
+    {
+      "path": "govdocs/282386.pdf",
+      "source": "govdocs-thread0",
+      "member": "282/282386.pdf",
+      "size": 180729,
+      "sha256": "5cf920099d2ebd7fa42732199d4b12d4f9f57b651e771e6742c6d05c8da068bd"
+    },
+    {
+      "path": "govdocs/282893.pdf",
+      "source": "govdocs-thread0",
+      "member": "282/282893.pdf",
+      "size": 5068,
+      "sha256": "bf298d3add7e131afeec6b159b812dffd750eb0198ee1db76ae36cbfb73244e2"
+    },
+    {
+      "path": "govdocs/284253.pdf",
+      "source": "govdocs-thread0",
+      "member": "284/284253.pdf",
+      "size": 51537,
+      "sha256": "193d0954df64691ac2de7c35504bbf3a8fd32e9c6a30d66dd4f2d8ab38f001d4"
+    },
+    {
+      "path": "govdocs/285215.doc",
+      "source": "govdocs-thread0",
+      "member": "285/285215.doc",
+      "size": 36864,
+      "sha256": "bdea8e49d7c37ab485cc1d11026f0afd3f45cb9081e352d3ac7b5207cad0df66"
+    },
+    {
+      "path": "govdocs/286538.pdf",
+      "source": "govdocs-thread0",
+      "member": "286/286538.pdf",
+      "size": 133799,
+      "sha256": "a7ebffd2bf4048a92ac9b8fcd3ed94783a4a25a2dd81ae7f87145d47cd99e7f3"
+    },
+    {
+      "path": "govdocs/286891.txt",
+      "source": "govdocs-thread0",
+      "member": "286/286891.txt",
+      "size": 76184,
+      "sha256": "50f9eea6ef6fef5701a16183f90b27671e4855665cc835e678ab5bdd7f8bb8ac"
+    },
+    {
+      "path": "govdocs/287765.pdf",
+      "source": "govdocs-thread0",
+      "member": "287/287765.pdf",
+      "size": 232415,
+      "sha256": "8305cf856e434999a9d7dc52e40d522c41afe0612e4a99d2c2579ad54e0daa28"
+    },
+    {
+      "path": "govdocs/288516.pdf",
+      "source": "govdocs-thread0",
+      "member": "288/288516.pdf",
+      "size": 103276,
+      "sha256": "6caaa8e7d740378304af7061a72d07b4ff7134d04a6f510312478f7b180dbde1"
+    },
+    {
+      "path": "govdocs/297291.txt",
+      "source": "govdocs-thread0",
+      "member": "297/297291.txt",
+      "size": 9180,
+      "sha256": "ae03ddb198ce398fd14dae4ab48022db57259147c8abbaa2bf21339c264b4654"
+    },
+    {
+      "path": "govdocs/298356.pdf",
+      "source": "govdocs-thread0",
+      "member": "298/298356.pdf",
+      "size": 123013,
+      "sha256": "a76e8cf5fe45afc662673fbda275c15a0f2288a6a559d761c10933023c0eb882"
+    },
+    {
+      "path": "govdocs/301340.doc",
+      "source": "govdocs-thread0",
+      "member": "301/301340.doc",
+      "size": 36352,
+      "sha256": "74d1b0a78d30a9d5143fbbb49bc9204c623f392c6e007b97a261a29958d8b9c7"
+    },
+    {
+      "path": "govdocs/301363.pdf",
+      "source": "govdocs-thread0",
+      "member": "301/301363.pdf",
+      "size": 86049,
+      "sha256": "f7b57fe813883b895b06cce3fbfc437ac2be782e7ae3a322a7a3835435fd3760"
+    },
+    {
+      "path": "govdocs/301809.pdf",
+      "source": "govdocs-thread0",
+      "member": "301/301809.pdf",
+      "size": 126620,
+      "sha256": "fd8b97cf0a0a3195de378f0d9ad4ed97437062daaf660a3ee7d3470c800a7489"
+    },
+    {
+      "path": "govdocs/302869.txt",
+      "source": "govdocs-thread0",
+      "member": "302/302869.txt",
+      "size": 65514,
+      "sha256": "802139675896472982690a74160bdc4f9bb3350aca59bbc318a75f98a6f229d4"
+    },
+    {
+      "path": "govdocs/302965.txt",
+      "source": "govdocs-thread0",
+      "member": "302/302965.txt",
+      "size": 186948,
+      "sha256": "e8093873b3e728b0ae70457d6034517145e89c8defd5db1fac13b4b141f67257"
+    },
+    {
+      "path": "govdocs/304613.pdf",
+      "source": "govdocs-thread0",
+      "member": "304/304613.pdf",
+      "size": 320515,
+      "sha256": "4578419db28db398e6a74d13153c49a3b16fadfc195c3c3e00ffa614bd43104f"
+    },
+    {
+      "path": "govdocs/306156.pdf",
+      "source": "govdocs-thread0",
+      "member": "306/306156.pdf",
+      "size": 34483,
+      "sha256": "401c54e24250cccf6ce39b6345e2d2a9b6aead90198605718bcb3812c942c72e"
+    },
+    {
+      "path": "govdocs/307579.txt",
+      "source": "govdocs-thread0",
+      "member": "307/307579.txt",
+      "size": 8053,
+      "sha256": "952f2bcc903810f41b890f8633abc8a7e7cc6f7ecf315621f9322665e7596819"
+    },
+    {
+      "path": "govdocs/308180.doc",
+      "source": "govdocs-thread0",
+      "member": "308/308180.doc",
+      "size": 111616,
+      "sha256": "96ddd046128a91e8f7f158e798f07c89bc28adc5270e955b08141270c3ffbf81"
+    },
+    {
+      "path": "govdocs/308432.pdf",
+      "source": "govdocs-thread0",
+      "member": "308/308432.pdf",
+      "size": 45002,
+      "sha256": "524d7ad509b2c466597a329eea5e8b8eb814829328a42765f87408c41047456f"
+    },
+    {
+      "path": "govdocs/309483.pdf",
+      "source": "govdocs-thread0",
+      "member": "309/309483.pdf",
+      "size": 45593,
+      "sha256": "983150c417e8680d8b1145478867ca8e37ef99820faf57b8020e5d3b8c34fb50"
+    },
+    {
+      "path": "govdocs/309622.pdf",
+      "source": "govdocs-thread0",
+      "member": "309/309622.pdf",
+      "size": 26534,
+      "sha256": "54a97185ee2fb540b6929e4f49bd834485e7bef1c9c739e91eb799a1357d35d4"
+    },
+    {
+      "path": "govdocs/310327.xml",
+      "source": "govdocs-thread0",
+      "member": "310/310327.xml",
+      "size": 6626,
+      "sha256": "b1b6fd11d0b490952c6a2e994ed3411a53e4b198fd2c6723201378f51f515151"
+    },
+    {
+      "path": "govdocs/310941.txt",
+      "source": "govdocs-thread0",
+      "member": "310/310941.txt",
+      "size": 5908,
+      "sha256": "8f965e9e370904b3e45094d7bdbb9860c0517a0d7edbebec19061d26cf28e1f9"
+    },
+    {
+      "path": "govdocs/312772.pdf",
+      "source": "govdocs-thread0",
+      "member": "312/312772.pdf",
+      "size": 236557,
+      "sha256": "d377b1baae7784d4b9a94fb7228034cec1855b085ca0a99c0e098db2d7b48394"
+    },
+    {
+      "path": "govdocs/314521.txt",
+      "source": "govdocs-thread0",
+      "member": "314/314521.txt",
+      "size": 389362,
+      "sha256": "c830dc8a8de5842fdeb5d5e96606306506e5f14f6da9544a462a80a4cfdccb44"
+    },
+    {
+      "path": "govdocs/316866.pdf",
+      "source": "govdocs-thread0",
+      "member": "316/316866.pdf",
+      "size": 16834,
+      "sha256": "b7a646a31338abc63e1dcd03ffe63abf7dcb3bea822830d931101950f3702a41"
+    },
+    {
+      "path": "govdocs/317646.pdf",
+      "source": "govdocs-thread0",
+      "member": "317/317646.pdf",
+      "size": 90444,
+      "sha256": "62426bfab204c93b0c8ebc21851dd563b09098d430818d35ff1e0a9d28659a42"
+    },
+    {
+      "path": "govdocs/320509.doc",
+      "source": "govdocs-thread0",
+      "member": "320/320509.doc",
+      "size": 50176,
+      "sha256": "9a602052f888fcf122b460e36e033609bfb21cc025b776d58be0e9920c9acb76"
+    },
+    {
+      "path": "govdocs/325411.pdf",
+      "source": "govdocs-thread0",
+      "member": "325/325411.pdf",
+      "size": 91371,
+      "sha256": "7ee589587ed8f626cdd81d0daa5a8a02085c58be97b2f4952782cfaa40e7fa8d"
+    },
+    {
+      "path": "govdocs/327809.pdf",
+      "source": "govdocs-thread0",
+      "member": "327/327809.pdf",
+      "size": 20651,
+      "sha256": "13dfad95cb6675c1c0e363bbecec2b674dc02c4612dd4a624ad8cf9acc842e01"
+    },
+    {
+      "path": "govdocs/328128.doc",
+      "source": "govdocs-thread0",
+      "member": "328/328128.doc",
+      "size": 25600,
+      "sha256": "758f45978b5c37c82514302c9fbb014706f71c7137d0a817f4d05033cd36e61f"
+    },
+    {
+      "path": "govdocs/328718.txt",
+      "source": "govdocs-thread0",
+      "member": "328/328718.txt",
+      "size": 621,
+      "sha256": "d872a521323183a9cedd7b7400fef04de97bc442a6a3c931c3af026ad0b972d1"
+    },
+    {
+      "path": "govdocs/328974.pdf",
+      "source": "govdocs-thread0",
+      "member": "328/328974.pdf",
+      "size": 113664,
+      "sha256": "9a179d06470c5f97f5f38848d0e8c13701e8af658571b90b20f7100989ce8cd4"
+    },
+    {
+      "path": "govdocs/329080.txt",
+      "source": "govdocs-thread0",
+      "member": "329/329080.txt",
+      "size": 2219,
+      "sha256": "4a73523d2788af55a7ed489fead3e5e14fd7b8b624dfc2307dd888dd23eaedee"
+    },
+    {
+      "path": "govdocs/331292.pdf",
+      "source": "govdocs-thread0",
+      "member": "331/331292.pdf",
+      "size": 104315,
+      "sha256": "d14c963afbefe40d55c6d0c7bde7ab011841a437aa882a87d56115b6ef2239c7"
+    },
+    {
+      "path": "govdocs/331933.pdf",
+      "source": "govdocs-thread0",
+      "member": "331/331933.pdf",
+      "size": 397243,
+      "sha256": "081c67cd958c6a452519576df805879748b8711a3b28274964c45a8721efda34"
+    },
+    {
+      "path": "govdocs/338347.doc",
+      "source": "govdocs-thread0",
+      "member": "338/338347.doc",
+      "size": 53248,
+      "sha256": "b601ae148daf6ddc39d09e8e61c49eaceafdf1c760532f56b541c87be288f380"
+    },
+    {
+      "path": "govdocs/341709.pdf",
+      "source": "govdocs-thread0",
+      "member": "341/341709.pdf",
+      "size": 93156,
+      "sha256": "0a0366a7cdf396547c48f2b99d39cf43da0fe7f3b48a11dd92e556dbb6eae7c9"
+    },
+    {
+      "path": "govdocs/345908.pdf",
+      "source": "govdocs-thread0",
+      "member": "345/345908.pdf",
+      "size": 91624,
+      "sha256": "ef146ea7c27190cdd55b25d38673c2678a4b708bcae267494374be4f49e67fd0"
+    },
+    {
+      "path": "govdocs/348357.pdf",
+      "source": "govdocs-thread0",
+      "member": "348/348357.pdf",
+      "size": 218935,
+      "sha256": "3ca826b3d69746cf8c493e1f1ab467be6670d5c9ee056301a90c7939f523618a"
+    },
+    {
+      "path": "govdocs/351599.pdf",
+      "source": "govdocs-thread0",
+      "member": "351/351599.pdf",
+      "size": 220489,
+      "sha256": "f55dee15f324306d624e8533b101ced7961aa5a129b39b9a99095cc39ea21b56"
+    },
+    {
+      "path": "govdocs/354930.doc",
+      "source": "govdocs-thread0",
+      "member": "354/354930.doc",
+      "size": 399360,
+      "sha256": "9fd96d8d2aafe30f1a1f69a69a9635d43542518fb3e29f796514fe985724a6da"
+    },
+    {
+      "path": "govdocs/363200.pdf",
+      "source": "govdocs-thread0",
+      "member": "363/363200.pdf",
+      "size": 407945,
+      "sha256": "5d8d988639cc826e16e6763802a4e8a3392d2907d27fd63449fa880e30e5b812"
+    },
+    {
+      "path": "govdocs/365370.xml",
+      "source": "govdocs-thread0",
+      "member": "365/365370.xml",
+      "size": 20857,
+      "sha256": "694cb7fb9d51ba48bb3653b1a7a3e929cd7bcd41d9cb7c0fd0e50ae447049b7c"
+    },
+    {
+      "path": "govdocs/375670.pdf",
+      "source": "govdocs-thread0",
+      "member": "375/375670.pdf",
+      "size": 16854,
+      "sha256": "15a09dbca34d6f67c9b4ec0cd7de6b96bb41091f2e6f5de7d6a7a14da950c73f"
+    },
+    {
+      "path": "govdocs/379900.pdf",
+      "source": "govdocs-thread0",
+      "member": "379/379900.pdf",
+      "size": 157381,
+      "sha256": "3d58aa07c64f667e9f4622e8f4bf71bdfb98e8d974b4c10fe5801d10d5c3e332"
+    },
+    {
+      "path": "govdocs/384606.pdf",
+      "source": "govdocs-thread0",
+      "member": "384/384606.pdf",
+      "size": 184105,
+      "sha256": "e059936ceaff491306f5380a3c826a47670bbd8c0a5ebcf31dd324ee12a793dd"
+    },
+    {
+      "path": "govdocs/387658.doc",
+      "source": "govdocs-thread0",
+      "member": "387/387658.doc",
+      "size": 98816,
+      "sha256": "3b633c6570ff7cf6c5625940161fd8e41857477d56804934eebacdb2876f5379"
+    },
+    {
+      "path": "govdocs/391517.pdf",
+      "source": "govdocs-thread0",
+      "member": "391/391517.pdf",
+      "size": 378181,
+      "sha256": "c5b034fe65e67581633a0ae199a1823082e920e38f40431c86a613d7182495f7"
+    },
+    {
+      "path": "govdocs/400240.pdf",
+      "source": "govdocs-thread0",
+      "member": "400/400240.pdf",
+      "size": 396881,
+      "sha256": "3097d1bb1d558df14f3edaad1110d20c25da23f0e6f0f0e0e5c65d7068445138"
+    },
+    {
+      "path": "govdocs/415435.pdf",
+      "source": "govdocs-thread0",
+      "member": "415/415435.pdf",
+      "size": 4377,
+      "sha256": "7e47f55b21927dcc8fee3e85799d50248ef35a6f3617467438ced9a6acd20885"
+    },
+    {
+      "path": "govdocs/429514.pdf",
+      "source": "govdocs-thread0",
+      "member": "429/429514.pdf",
+      "size": 27549,
+      "sha256": "bacec02e146fc10a744105a006174e13b322caba2885df3b3ee2c6bf595693c0"
+    },
+    {
+      "path": "govdocs/435335.pdf",
+      "source": "govdocs-thread0",
+      "member": "435/435335.pdf",
+      "size": 96903,
+      "sha256": "630ee791b6a2c203187aa047edc495c54a0cdc1a3dafb2bed521b08dedd82196"
+    },
+    {
+      "path": "govdocs/435465.pdf",
+      "source": "govdocs-thread0",
+      "member": "435/435465.pdf",
+      "size": 1189,
+      "sha256": "230a54a9081afc5474ef5b1d63a05c0e6ec545903278996dad2e9e1f108c4673"
+    },
+    {
+      "path": "govdocs/436110.pdf",
+      "source": "govdocs-thread0",
+      "member": "436/436110.pdf",
+      "size": 349263,
+      "sha256": "5011edf10c168997d16b47c439719a7f7a47bf0cbd46e00ca8ae8c00d4f7014a"
+    },
+    {
+      "path": "govdocs/455393.pdf",
+      "source": "govdocs-thread0",
+      "member": "455/455393.pdf",
+      "size": 23567,
+      "sha256": "251a2c23079b6d5e6f1043f3f82841232e02d0ff2e68d604a9be3bf014326fe0"
+    },
+    {
+      "path": "govdocs/457928.pdf",
+      "source": "govdocs-thread0",
+      "member": "457/457928.pdf",
+      "size": 63067,
+      "sha256": "fdd7479b499cb3769a7b85dd39886dab40b09d9d1bb9180a653c396f7ece7550"
+    },
+    {
+      "path": "govdocs/462945.pdf",
+      "source": "govdocs-thread0",
+      "member": "462/462945.pdf",
+      "size": 97375,
+      "sha256": "78217aaf69e30b6c50f43b2c4ab2fc1ca14b9e8f8900face870b7c6b967f5571"
+    },
+    {
+      "path": "govdocs/464159.pdf",
+      "source": "govdocs-thread0",
+      "member": "464/464159.pdf",
+      "size": 231362,
+      "sha256": "dd3671eba617359c2e9403390b399deba2219cdc1b3d518ec800bf1de69e7a0e"
+    },
+    {
+      "path": "govdocs/464166.pdf",
+      "source": "govdocs-thread0",
+      "member": "464/464166.pdf",
+      "size": 4940,
+      "sha256": "5621ac3962ca2a4e0c8b0970f1b69c1a0aa8e62936a9a75be92b56746e939c20"
+    },
+    {
+      "path": "govdocs/469113.doc",
+      "source": "govdocs-thread0",
+      "member": "469/469113.doc",
+      "size": 88064,
+      "sha256": "2dedf4091df9bd40c98b95702652c63f2a6462d690f8b877886aa02bb7d7f6a2"
+    },
+    {
+      "path": "govdocs/471085.pdf",
+      "source": "govdocs-thread0",
+      "member": "471/471085.pdf",
+      "size": 169245,
+      "sha256": "a61651c66c63357752984cd59ca6c6a514c31b64ebbed6d25bedf3099097271d"
+    },
+    {
+      "path": "govdocs/473410.pdf",
+      "source": "govdocs-thread0",
+      "member": "473/473410.pdf",
+      "size": 57112,
+      "sha256": "441767f8a8f98fe702d86e2de3acf6f5d300bffea86a632442c95e36cc20b1b9"
+    },
+    {
+      "path": "govdocs/474348.pdf",
+      "source": "govdocs-thread0",
+      "member": "474/474348.pdf",
+      "size": 246181,
+      "sha256": "0fe30ae7a08d80690d09c2eaccb32eeafaba3fcc464f1c7e06b1182fa2b3cafa"
+    },
+    {
+      "path": "govdocs/476277.csv",
+      "source": "govdocs-thread0",
+      "member": "476/476277.csv",
+      "size": 2821,
+      "sha256": "977fbb0129dd11ca2d9e3a54670b3027a2a40d3c7a25b00c31d873c6838125cd"
+    },
+    {
+      "path": "govdocs/476456.csv",
+      "source": "govdocs-thread0",
+      "member": "476/476456.csv",
+      "size": 7868,
+      "sha256": "b56f9d33439266a69df08213dbc621a62d8a2767e39ea7658b769f2dbba2b53e"
+    },
+    {
+      "path": "govdocs/476931.pdf",
+      "source": "govdocs-thread0",
+      "member": "476/476931.pdf",
+      "size": 278530,
+      "sha256": "5977d756665658fd2b39eedfcf86db2a8de1c1b960c32fcddbb4eaf38ec9b464"
+    },
+    {
+      "path": "govdocs/481301.csv",
+      "source": "govdocs-thread0",
+      "member": "481/481301.csv",
+      "size": 11144,
+      "sha256": "50f0e1c097f637ae59674c53f818fb8955856fb85b0de576c0524abbced95173"
+    },
+    {
+      "path": "govdocs/484131.csv",
+      "source": "govdocs-thread0",
+      "member": "484/484131.csv",
+      "size": 22252,
+      "sha256": "51b8898ecf847b3b2dbb124f92a3ff4a18ce35927fb5811b6c1629bcd2bb3ce6"
+    },
+    {
+      "path": "govdocs/484180.xml",
+      "source": "govdocs-thread0",
+      "member": "484/484180.xml",
+      "size": 11247,
+      "sha256": "35876702da9decd352a78e8c09010c5caf1c11b61a2060870ae9066c0be24155"
+    },
+    {
+      "path": "govdocs/488066.pdf",
+      "source": "govdocs-thread0",
+      "member": "488/488066.pdf",
+      "size": 16047,
+      "sha256": "840fd5c5fd5632810ab2669decfe51060520875bcaf796700fc073bffe69f81e"
+    },
+    {
+      "path": "govdocs/488806.pdf",
+      "source": "govdocs-thread0",
+      "member": "488/488806.pdf",
+      "size": 470469,
+      "sha256": "7cf97d4d3b54fb2128c13d53340673cf9b9e2fd379089d830cb6192ed0ecfa55"
+    },
+    {
+      "path": "govdocs/493112.pdf",
+      "source": "govdocs-thread0",
+      "member": "493/493112.pdf",
+      "size": 97575,
+      "sha256": "e6ace5d7c0d1dedd4f3f4768e905f8bae9d3f47efe047eb43817f14cc407c7f0"
+    },
+    {
+      "path": "govdocs/493376.csv",
+      "source": "govdocs-thread0",
+      "member": "493/493376.csv",
+      "size": 4517,
+      "sha256": "4e2bbc91099b57caf66a7ad7d4a87f39590f847040410369d48cf1a4f2e3a03b"
+    },
+    {
+      "path": "govdocs/494033.pdf",
+      "source": "govdocs-thread0",
+      "member": "494/494033.pdf",
+      "size": 13536,
+      "sha256": "135d91e74f3d6fcd4cb90869ab290c70ebaacaca3d44484fa1e08f93ceaa1811"
+    },
+    {
+      "path": "govdocs/495155.doc",
+      "source": "govdocs-thread0",
+      "member": "495/495155.doc",
+      "size": 398848,
+      "sha256": "6321f362bf3687e69ce036d28f09882211c288b4cc8051c707e5719ea161f9c7"
+    },
+    {
+      "path": "govdocs/499755.doc",
+      "source": "govdocs-thread0",
+      "member": "499/499755.doc",
+      "size": 84480,
+      "sha256": "3d92de23b4ec988626716fe0a46391a8504b5d097b9acb5f3221b783a58a70cb"
+    },
+    {
+      "path": "govdocs/500401.doc",
+      "source": "govdocs-thread0",
+      "member": "500/500401.doc",
+      "size": 153088,
+      "sha256": "51e898dbbc3e4f4cac0df5335e9481ae267468474a0602e0f6bd839bfbd75d0f"
+    },
+    {
+      "path": "govdocs/500459.pdf",
+      "source": "govdocs-thread0",
+      "member": "500/500459.pdf",
+      "size": 453667,
+      "sha256": "8d270df2c57a3ac42e16b25c1198cc5ecb208a806a51e7f2e38f659afb66ea5f"
+    },
+    {
+      "path": "govdocs/503590.pdf",
+      "source": "govdocs-thread0",
+      "member": "503/503590.pdf",
+      "size": 60379,
+      "sha256": "b0f3cf1fa9d495e57f1065fd096989daf2dcbf89042dac92fe8259de82b86d8a"
+    },
+    {
+      "path": "govdocs/503846.pdf",
+      "source": "govdocs-thread0",
+      "member": "503/503846.pdf",
+      "size": 20672,
+      "sha256": "6c571292d0cbae9b3ce1d50067ed9ff68aeb17db5732b21ffd1bc83161da8c09"
+    },
+    {
+      "path": "govdocs/503949.doc",
+      "source": "govdocs-thread0",
+      "member": "503/503949.doc",
+      "size": 46592,
+      "sha256": "a268dd261afeaa0e2475709707f1e515bc9980208e2ea5359364fe8c58850da8"
+    },
+    {
+      "path": "govdocs/510434.doc",
+      "source": "govdocs-thread0",
+      "member": "510/510434.doc",
+      "size": 31232,
+      "sha256": "63ebeeb9c097095ac53d99ff4e44046fe60a87ed41c6758154f96ef5eb72c395"
+    },
+    {
+      "path": "govdocs/514025.pdf",
+      "source": "govdocs-thread0",
+      "member": "514/514025.pdf",
+      "size": 293267,
+      "sha256": "a1ad9af4a4286a15cbf15a92ba274840157372434e0f3b1fc5c98c880c3daab9"
+    },
+    {
+      "path": "govdocs/517210.pdf",
+      "source": "govdocs-thread0",
+      "member": "517/517210.pdf",
+      "size": 46761,
+      "sha256": "58a81bb56d6e837f77084010700582757719962b37a23da457991b3d716eca62"
+    },
+    {
+      "path": "govdocs/517544.pdf",
+      "source": "govdocs-thread0",
+      "member": "517/517544.pdf",
+      "size": 420663,
+      "sha256": "4acea096fece494bae37f6484e35f5962b77b464c96d94ca12914160717d6410"
+    },
+    {
+      "path": "govdocs/518392.doc",
+      "source": "govdocs-thread0",
+      "member": "518/518392.doc",
+      "size": 46080,
+      "sha256": "68bf9f723f34c2ebd5cb38679131976796ebb96e3bd6523f2e118f90c7af066f"
+    },
+    {
+      "path": "govdocs/518561.doc",
+      "source": "govdocs-thread0",
+      "member": "518/518561.doc",
+      "size": 178176,
+      "sha256": "d790b7d7b0a939c971bc4c6f3cf7fb08140285ecc482fd8443526d1b8d9e306a"
+    },
+    {
+      "path": "govdocs/520936.pdf",
+      "source": "govdocs-thread0",
+      "member": "520/520936.pdf",
+      "size": 170974,
+      "sha256": "e3ddb8a4fb2dd25039a67ebd21d00cbcd72bf3f1976507df7a532461796c0ec6"
+    },
+    {
+      "path": "govdocs/521622.pdf",
+      "source": "govdocs-thread0",
+      "member": "521/521622.pdf",
+      "size": 50070,
+      "sha256": "79b8fcd7b4a03df5b3692b7605c368c7575465a0a4f8feffab01fe8ebd1e456b"
+    },
+    {
+      "path": "govdocs/522560.doc",
+      "source": "govdocs-thread0",
+      "member": "522/522560.doc",
+      "size": 96768,
+      "sha256": "345326fbe54848d58d5379dd55e5274529ddd8228669ec5767f7846eff55436e"
+    },
+    {
+      "path": "govdocs/523165.pdf",
+      "source": "govdocs-thread0",
+      "member": "523/523165.pdf",
+      "size": 51922,
+      "sha256": "dbcd61fe264acbc51e1aa5fa2589d7e2d43c9f99fbc34eef78b3197d91be37d3"
+    },
+    {
+      "path": "govdocs/527337.pdf",
+      "source": "govdocs-thread0",
+      "member": "527/527337.pdf",
+      "size": 121728,
+      "sha256": "cc3f1830d758879afcd664487bdc985527e73b7525d984b6d8fb953436b2928d"
+    },
+    {
+      "path": "govdocs/533233.doc",
+      "source": "govdocs-thread0",
+      "member": "533/533233.doc",
+      "size": 142848,
+      "sha256": "11f74997a4b3f101e62c5a05b2131de1622b7f120d444fd2f4c3c8975425a978"
+    },
+    {
+      "path": "govdocs/539951.pdf",
+      "source": "govdocs-thread0",
+      "member": "539/539951.pdf",
+      "size": 50379,
+      "sha256": "9f8f9a0778cab28ccc04bf86eac1f368c6194558b4b43d4f8235138d8d956fe4"
+    },
+    {
+      "path": "govdocs/540804.pdf",
+      "source": "govdocs-thread0",
+      "member": "540/540804.pdf",
+      "size": 97934,
+      "sha256": "2f548a61880ba42289367315bb48fc0dfd52d40e651c2039b66f2f79a006dcf8"
+    },
+    {
+      "path": "govdocs/546009.pdf",
+      "source": "govdocs-thread0",
+      "member": "546/546009.pdf",
+      "size": 16844,
+      "sha256": "1795fd3c8ed8c35d4fad49b19eaee7208915b9c802fdd70bf1823f5a38a4f424"
+    },
+    {
+      "path": "govdocs/547176.pdf",
+      "source": "govdocs-thread0",
+      "member": "547/547176.pdf",
+      "size": 51756,
+      "sha256": "ff33124f2eed910885d667302f27f9107c59da239584bdc550245639e891c5f3"
+    },
+    {
+      "path": "govdocs/552416.pdf",
+      "source": "govdocs-thread0",
+      "member": "552/552416.pdf",
+      "size": 11618,
+      "sha256": "07de361580f2f37409624340f833f7821f78905a4d12ee410e1481d6f3d4cbc2"
+    },
+    {
+      "path": "govdocs/562639.xml",
+      "source": "govdocs-thread0",
+      "member": "562/562639.xml",
+      "size": 28621,
+      "sha256": "15af4f1d2baaa3fb380eaa58b9aebc33813fd703126ce588a7509671ca6d2d21"
+    },
+    {
+      "path": "govdocs/563572.xml",
+      "source": "govdocs-thread0",
+      "member": "563/563572.xml",
+      "size": 6776,
+      "sha256": "d6272843cd8a7dc7f9d23df1a910ec6366fe2643624ef859d2a71b462e9dd101"
+    },
+    {
+      "path": "govdocs/564164.pdf",
+      "source": "govdocs-thread0",
+      "member": "564/564164.pdf",
+      "size": 93327,
+      "sha256": "8c27270d8ff93928af93b5c1f653f9a202d694d9f5323265df278a73b5099a1e"
+    },
+    {
+      "path": "govdocs/565342.csv",
+      "source": "govdocs-thread0",
+      "member": "565/565342.csv",
+      "size": 35356,
+      "sha256": "698f7aab35e470aa577b5f24290a419d328a25601bff8a856423297beb950c1e"
+    },
+    {
+      "path": "govdocs/567030.xml",
+      "source": "govdocs-thread0",
+      "member": "567/567030.xml",
+      "size": 25606,
+      "sha256": "2a9271c70f10c00b8ed1890e76374c68263de06fdf5acdf0aade4b4a4245f5d1"
+    },
+    {
+      "path": "govdocs/567674.pdf",
+      "source": "govdocs-thread0",
+      "member": "567/567674.pdf",
+      "size": 101677,
+      "sha256": "0dcf3ab57eacb4b7047ba2c1a19519c1fa144cc11d2e01d9d2fd0f57f9f70399"
+    },
+    {
+      "path": "govdocs/571315.doc",
+      "source": "govdocs-thread0",
+      "member": "571/571315.doc",
+      "size": 25088,
+      "sha256": "709508d97caca1e3744b948967092c14705ec8c644b68cba2930aa6d08deaaf1"
+    },
+    {
+      "path": "govdocs/576362.pdf",
+      "source": "govdocs-thread0",
+      "member": "576/576362.pdf",
+      "size": 79619,
+      "sha256": "83d612f25016a098a52045a0a7b3612e67e97fa758647bb0b95bbb3d0a6232f8"
+    },
+    {
+      "path": "govdocs/576891.xml",
+      "source": "govdocs-thread0",
+      "member": "576/576891.xml",
+      "size": 12772,
+      "sha256": "c32deb8b83446cbacf083637a85a21453493b9607986b993c99a5c84ca7cb5cb"
+    },
+    {
+      "path": "govdocs/590172.csv",
+      "source": "govdocs-thread0",
+      "member": "590/590172.csv",
+      "size": 34145,
+      "sha256": "3815a0af9864f1cb54afea7c2c5c8c02443075776a3ae7f07a18ddb5da5b8255"
+    },
+    {
+      "path": "govdocs/592365.pdf",
+      "source": "govdocs-thread0",
+      "member": "592/592365.pdf",
+      "size": 72181,
+      "sha256": "df3bccca3352a2ecd956458d3fafda3f3edeb58c30b3e3e8f754577476f07486"
+    },
+    {
+      "path": "govdocs/593689.csv",
+      "source": "govdocs-thread0",
+      "member": "593/593689.csv",
+      "size": 33130,
+      "sha256": "43c81a4f23ee23d0adb5b390d973a97bd25d456ac76743b5a1c5756b8ee901e4"
+    },
+    {
+      "path": "govdocs/598856.pdf",
+      "source": "govdocs-thread0",
+      "member": "598/598856.pdf",
+      "size": 186129,
+      "sha256": "09a34c5806874680db06287c9af933a8b5bdbbaa8d26064dc35e48b8354648e5"
+    },
+    {
+      "path": "govdocs/609091.doc",
+      "source": "govdocs-thread0",
+      "member": "609/609091.doc",
+      "size": 26112,
+      "sha256": "675fc294f3ebde317dc60318f2585355bf56ed5b2e955cf5f9317701fde651ed"
+    },
+    {
+      "path": "govdocs/637310.doc",
+      "source": "govdocs-thread0",
+      "member": "637/637310.doc",
+      "size": 46592,
+      "sha256": "4ac1dc728460d35eb1e2fafc425e5825131addee7b6429f8a1e8a1a9fef0447b"
+    },
+    {
+      "path": "govdocs/644535.pdf",
+      "source": "govdocs-thread0",
+      "member": "644/644535.pdf",
+      "size": 351187,
+      "sha256": "4c49b8e32f6c155448cb8d02ba9629d448f008680d8ebb25f72c54b9e21f078f"
+    },
+    {
+      "path": "govdocs/655313.pdf",
+      "source": "govdocs-thread0",
+      "member": "655/655313.pdf",
+      "size": 164607,
+      "sha256": "fbc89edd08f3136472d27a503cd0f9d5c1a6a1cd0b16442a2d9d63433a5751ee"
+    },
+    {
+      "path": "govdocs/660434.pdf",
+      "source": "govdocs-thread0",
+      "member": "660/660434.pdf",
+      "size": 106276,
+      "sha256": "3fed5ad4ae8ec3d515f557966ff839e2d208984e9278a79c474e8bd0f848580b"
+    },
+    {
+      "path": "govdocs/661496.doc",
+      "source": "govdocs-thread0",
+      "member": "661/661496.doc",
+      "size": 55296,
+      "sha256": "1a45a4685d4101ba53b102e8749824d97abf5290e0866071b7fa29b0498ec787"
+    },
+    {
+      "path": "govdocs/663738.pdf",
+      "source": "govdocs-thread0",
+      "member": "663/663738.pdf",
+      "size": 17231,
+      "sha256": "f9ccf429c13f718a7a368903b561696e688557f158b568542086f9ba401f86cc"
+    },
+    {
+      "path": "govdocs/669536.doc",
+      "source": "govdocs-thread0",
+      "member": "669/669536.doc",
+      "size": 64512,
+      "sha256": "025b614526ad6b3b85d180367fc7f12f0f5dee83b2cf88cdcc88e6f124f77528"
+    },
+    {
+      "path": "govdocs/671710.pdf",
+      "source": "govdocs-thread0",
+      "member": "671/671710.pdf",
+      "size": 85916,
+      "sha256": "91c0ac6df101bdc259bfcf2a5826b6f8d158b116f0ef1647a166dfed4c094882"
+    },
+    {
+      "path": "govdocs/678396.pdf",
+      "source": "govdocs-thread0",
+      "member": "678/678396.pdf",
+      "size": 465022,
+      "sha256": "42c90c824753261934dd2a4aac2a2f56e6e6906754a6dd3294bd73e340554485"
+    },
+    {
+      "path": "govdocs/685208.pdf",
+      "source": "govdocs-thread0",
+      "member": "685/685208.pdf",
+      "size": 92184,
+      "sha256": "6a585d9057ccd5174640f994fe9b2018e07f61ed268a9ae76ee2292b31bc125e"
+    },
+    {
+      "path": "govdocs/687397.pdf",
+      "source": "govdocs-thread0",
+      "member": "687/687397.pdf",
+      "size": 184124,
+      "sha256": "c6bdf104390727c890d0d6ea4b35249fee67009882eed3182a40aa29318a9d8f"
+    },
+    {
+      "path": "govdocs/690293.pdf",
+      "source": "govdocs-thread0",
+      "member": "690/690293.pdf",
+      "size": 364935,
+      "sha256": "8a94cbcd3bd70da9ff4b6e2991097b525232d9e91cbcae4418470dd0e9c7a0a6"
+    },
+    {
+      "path": "govdocs/703559.pdf",
+      "source": "govdocs-thread0",
+      "member": "703/703559.pdf",
+      "size": 76462,
+      "sha256": "b51e2316364894d403d5c7abce3cbca7ae3192bc6a756bf28f0b8cca8e670e3a"
+    },
+    {
+      "path": "govdocs/704296.doc",
+      "source": "govdocs-thread0",
+      "member": "704/704296.doc",
+      "size": 301056,
+      "sha256": "136fff976574deff32d4fcbd530249540d5c12d0c76df2c107bc97e358180adc"
+    },
+    {
+      "path": "govdocs/706047.pdf",
+      "source": "govdocs-thread0",
+      "member": "706/706047.pdf",
+      "size": 93286,
+      "sha256": "27602ee3c6a8e9fffe74521036fc60a72e0a9081717f2ad9457d4e223ab063e4"
+    },
+    {
+      "path": "govdocs/708988.doc",
+      "source": "govdocs-thread0",
+      "member": "708/708988.doc",
+      "size": 33792,
+      "sha256": "99ce66958fecdcc5f2da40ee28dffbac6e36954fad704338413f09c5720ed175"
+    },
+    {
+      "path": "govdocs/709028.pdf",
+      "source": "govdocs-thread0",
+      "member": "709/709028.pdf",
+      "size": 169095,
+      "sha256": "8efc1c5f84e7988b7030a2d9b37b7362a179aecb37e2b108ab90599ed708efb7"
+    },
+    {
+      "path": "govdocs/710097.pdf",
+      "source": "govdocs-thread0",
+      "member": "710/710097.pdf",
+      "size": 42019,
+      "sha256": "58cb199b77667f509be058883f440057b09480856745ccf22f03650986f0b205"
+    },
+    {
+      "path": "govdocs/721523.doc",
+      "source": "govdocs-thread0",
+      "member": "721/721523.doc",
+      "size": 56320,
+      "sha256": "8d38f908642a68546389e54baa76bc13da1ac0abdf3a2ac0cf2cce6083c17148"
+    },
+    {
+      "path": "govdocs/725061.doc",
+      "source": "govdocs-thread0",
+      "member": "725/725061.doc",
+      "size": 50688,
+      "sha256": "d7949b1bd7d039f36d21a6796d96412b4135f886523e5be32a4b6216e06e13da"
+    },
+    {
+      "path": "govdocs/727263.doc",
+      "source": "govdocs-thread0",
+      "member": "727/727263.doc",
+      "size": 195072,
+      "sha256": "f7c574d56e80480ff02b891c8370e8de12dca7a1ae670ca61359b7091446aae4"
+    },
+    {
+      "path": "govdocs/728287.doc",
+      "source": "govdocs-thread0",
+      "member": "728/728287.doc",
+      "size": 47616,
+      "sha256": "1d14f0ab7a8b01f72f28415a4abd0b5da1c24eb233d0f512a22491a73d91c856"
+    },
+    {
+      "path": "govdocs/734451.pdf",
+      "source": "govdocs-thread0",
+      "member": "734/734451.pdf",
+      "size": 153935,
+      "sha256": "e7ca1def9b78d03761423ac84a514300e4b265a138e71238033aa4e91fbb5a23"
+    },
+    {
+      "path": "govdocs/739193.pdf",
+      "source": "govdocs-thread0",
+      "member": "739/739193.pdf",
+      "size": 142665,
+      "sha256": "78943fdce2ef7e6baf918735e074cdf5df16337af6313c67623253fd77dfbfaa"
+    },
+    {
+      "path": "govdocs/744710.pdf",
+      "source": "govdocs-thread0",
+      "member": "744/744710.pdf",
+      "size": 49750,
+      "sha256": "9b96bc23f123040d8ca4d027516d488f4e0ef2ad1fc43fe5bd88fe19c9cf4d9a"
+    },
+    {
+      "path": "govdocs/748968.pdf",
+      "source": "govdocs-thread0",
+      "member": "748/748968.pdf",
+      "size": 53215,
+      "sha256": "75174ff10088558c32765d3e7100f01681b36c774f5613d5b512024b3181732e"
+    },
+    {
+      "path": "govdocs/753360.pdf",
+      "source": "govdocs-thread0",
+      "member": "753/753360.pdf",
+      "size": 33945,
+      "sha256": "1e79b689af200e41684f68971750364da7c88894a8f77d58760f3004e4b95c07"
+    },
+    {
+      "path": "govdocs/759844.pdf",
+      "source": "govdocs-thread0",
+      "member": "759/759844.pdf",
+      "size": 53209,
+      "sha256": "be13da2da5de869ed45307e409a67fa73c830bb473fe34902a2fe8eb50f48194"
+    },
+    {
+      "path": "govdocs/761573.pdf",
+      "source": "govdocs-thread0",
+      "member": "761/761573.pdf",
+      "size": 81581,
+      "sha256": "da2160d543582f32d5349d4ab3b863fba2ebc667a9b14a866ee83bfc0697ac63"
+    },
+    {
+      "path": "govdocs/773506.pdf",
+      "source": "govdocs-thread0",
+      "member": "773/773506.pdf",
+      "size": 443676,
+      "sha256": "8ffdefee70807e4d4b7982b4c030b2934452871d8aa6888058d35350381ef3e4"
+    },
+    {
+      "path": "govdocs/774221.pdf",
+      "source": "govdocs-thread0",
+      "member": "774/774221.pdf",
+      "size": 368289,
+      "sha256": "576546b1392f4014463e643ef726eba2f14313515410bebc387f91389f7d8a69"
+    },
+    {
+      "path": "govdocs/780156.pdf",
+      "source": "govdocs-thread0",
+      "member": "780/780156.pdf",
+      "size": 243906,
+      "sha256": "13928afe134ab3a00e29b3a03145cbf7e65969d0bb4f045facbf9214a706f811"
+    },
+    {
+      "path": "govdocs/789460.pdf",
+      "source": "govdocs-thread0",
+      "member": "789/789460.pdf",
+      "size": 110116,
+      "sha256": "c809d40830ad75411c096adc1ee0b737d6881ec2fa44ada95aa418743435b6ab"
+    },
+    {
+      "path": "govdocs/799816.pdf",
+      "source": "govdocs-thread0",
+      "member": "799/799816.pdf",
+      "size": 51901,
+      "sha256": "d5db7e2b705e59687397f004d2e0df9e021d6ba948d0758a443643fc095aef7b"
+    },
+    {
+      "path": "govdocs/800627.pdf",
+      "source": "govdocs-thread0",
+      "member": "800/800627.pdf",
+      "size": 155587,
+      "sha256": "0d90216306c5ff375da4177726098cb9757f9831d2e70005118b29d94fbd8f7b"
+    },
+    {
+      "path": "govdocs/816545.pdf",
+      "source": "govdocs-thread0",
+      "member": "816/816545.pdf",
+      "size": 41171,
+      "sha256": "c0c7e7af1643fe9ccb40a869e791a4b6e180aafb95dae92e6f52c6986ef6201d"
+    },
+    {
+      "path": "govdocs/842074.pdf",
+      "source": "govdocs-thread0",
+      "member": "842/842074.pdf",
+      "size": 69187,
+      "sha256": "1bf2e5421987f3a4b217d7cfc395cf1aacade6a136dd5a4cf2ecb17886677d26"
+    },
+    {
+      "path": "govdocs/842747.pdf",
+      "source": "govdocs-thread0",
+      "member": "842/842747.pdf",
+      "size": 21100,
+      "sha256": "f44dd2c91e18d86eb4f6afba20b469451c2fcf8da1bf4ea090c45789cfe173ce"
+    },
+    {
+      "path": "govdocs/846869.pdf",
+      "source": "govdocs-thread0",
+      "member": "846/846869.pdf",
+      "size": 140033,
+      "sha256": "aaf8d9049436b9dfe91784fb83fde35f43484fafa8e66d10d998e77662ce60ef"
+    },
+    {
+      "path": "govdocs/850997.pdf",
+      "source": "govdocs-thread0",
+      "member": "850/850997.pdf",
+      "size": 90813,
+      "sha256": "0d22d1754049521661697d593b79a318828d6e946dde6d47b3d85ab2368cabe0"
+    },
+    {
+      "path": "govdocs/852036.pdf",
+      "source": "govdocs-thread0",
+      "member": "852/852036.pdf",
+      "size": 86802,
+      "sha256": "dcee74a4bebe09f67f8aff5f1158dc038b30e84973c7317ef6f6dc2b414c3957"
+    },
+    {
+      "path": "govdocs/852539.pdf",
+      "source": "govdocs-thread0",
+      "member": "852/852539.pdf",
+      "size": 113931,
+      "sha256": "2cd4af3fe6036bb90e689878023f54ee419e133b952d4cce4380cfdb1107ea29"
+    },
+    {
+      "path": "mail/sa-00001.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00001.7c53336b37003a9286aba55d2945844c",
+      "size": 5216,
+      "sha256": "b3c10aa7833c68e55e3865afbdfdfd2171200bd8b8d797a4091f1004d087f98e"
+    },
+    {
+      "path": "mail/sa-00002.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00002.9c4069e25e1ef370c078db7ee85ff9ac",
+      "size": 3376,
+      "sha256": "9f8b61b0348d4312f1c3c130940d7695fa69a3e9ff9bcf21121f23403e3482cb"
+    },
+    {
+      "path": "mail/sa-00003.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00003.860e3c3cee1b42ead714c5c874fe25f7",
+      "size": 3934,
+      "sha256": "b6a4d0a4dc3d1e2b1806c0159941a3d651c6b7e504b2443f483265085cc3992f"
+    },
+    {
+      "path": "mail/sa-00004.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00004.864220c5b6930b209cc287c361c99af1",
+      "size": 3424,
+      "sha256": "57ce4e7971392e99e10429ba41a99035e9e169db7ca263d568d4567c98f7e7eb"
+    },
+    {
+      "path": "mail/sa-00005.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00005.bf27cdeaf0b8c4647ecd61b1d09da613",
+      "size": 3386,
+      "sha256": "3d423e38e9507624f71ce3f4eb10858352b5318f003f1928a261148d6a65c9db"
+    },
+    {
+      "path": "mail/sa-00006.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00006.253ea2f9a9cc36fa0b1129b04b806608",
+      "size": 3211,
+      "sha256": "4eded8f0a952a07ecc3725de16e256d10c256fb4a6b638228ce3e6a7d1222e01"
+    },
+    {
+      "path": "mail/sa-00007.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00007.37a8af848caae585af4fe35779656d55",
+      "size": 3848,
+      "sha256": "91b14bcebb41f5dedc98e6545f652bba2cb672601f9b57dc2729c5d0a56b054b"
+    },
+    {
+      "path": "mail/sa-00008.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00008.5891548d921601906337dcf1ed8543cb",
+      "size": 3558,
+      "sha256": "41da39894b6821063396d285d0fc42c35715740b5d09e4ee91767fb68c8133a8"
+    },
+    {
+      "path": "mail/sa-00009.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00009.371eca25b0169ce5cb4f71d3e07b9e2d",
+      "size": 8625,
+      "sha256": "659d7e4db999e38bf3a443c658c635303f504bb3893db998d85ffb43d607c94b"
+    },
+    {
+      "path": "mail/sa-00010.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00010.145d22c053c1a0c410242e46c01635b3",
+      "size": 3715,
+      "sha256": "b28fd56e81290ebc4199ae73dbf4cfd18fda21d6ffbf914e555c084ff5eebeb4"
+    },
+    {
+      "path": "mail/sa-00011.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00011.fbcde1b4833bdbaaf0ced723edd6e355",
+      "size": 3475,
+      "sha256": "638880a332f797e01a95b10b226197c78376b43644fa075093e120c80dc1cc9e"
+    },
+    {
+      "path": "mail/sa-00012.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00012.48a387bc38d1316a6f6b49e8c2e43a03",
+      "size": 3993,
+      "sha256": "58cebad0308d036b2cf1f31e79a1d719e5f2626747695e7457bfa82749780fbb"
+    },
+    {
+      "path": "mail/sa-00013.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00013.81c34741dbed59c6dde50777e27e7ea3",
+      "size": 3328,
+      "sha256": "195c1658c1e12aeca000e5313e637d525bc3becd57f1e96d4f3a4375f109e1c8"
+    },
+    {
+      "path": "mail/sa-00014.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00014.cb20e10b2bfcb8210a1c310798532a57",
+      "size": 6576,
+      "sha256": "498dc4984862f57c9b7bbfa39708fecaf4744b30f703074d7e51f304e74439eb"
+    },
+    {
+      "path": "mail/sa-00015.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00015.4d7026347ba7478c9db04c70913e68fd",
+      "size": 6808,
+      "sha256": "ee17477629a4a3373b898e6779aa3d347024614850be864e7f0a2058c45f0f6a"
+    },
+    {
+      "path": "mail/sa-00016.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00016.ef397cef16f8041242e3b6560e168053",
+      "size": 2627,
+      "sha256": "b374620887ccf9e32c6e14284a3221835e9baae1f58b228101ee9a4ec5a44051"
+    },
+    {
+      "path": "mail/sa-00017.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00017.08ef2d89f14cf7e2a458b80697eb1837",
+      "size": 3425,
+      "sha256": "3538efea8245ec0ce2bdaac90b9300303dd488002bc82e94c1df5ffa19ec5b6e"
+    },
+    {
+      "path": "mail/sa-00018.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00018.6fee38026193b5adde4b56892a6f14bc",
+      "size": 3077,
+      "sha256": "1df82f1d5e6d2883e9e669519399cfeeb9ca14460613e06d404ac638a67fb634"
+    },
+    {
+      "path": "mail/sa-00019.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00019.5322cb10d8819b39499924d852819c27",
+      "size": 2620,
+      "sha256": "7fad352b06eac7a91f14f3b9505ab003d42fa70308c9c64d0abff8ca7c88de81"
+    },
+    {
+      "path": "mail/sa-00020.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00020.d10651e31fcb92630c6229ec773cfe26",
+      "size": 2434,
+      "sha256": "71cdb562e87b551c5c896d1f4558f6dff3e51251579093e9dfe02c1011e185e1"
+    },
+    {
+      "path": "mail/sa-00021.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00021.607c41268c5b0d66e81b58713a66d12c",
+      "size": 2664,
+      "sha256": "b4d606de851002ada714a91ce04b570ff05dffc90a8d3586224cddd90abddfef"
+    },
+    {
+      "path": "mail/sa-00022.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00022.48098f942c31097d2ef605df44dd8593",
+      "size": 3643,
+      "sha256": "e5b763be780b7fabbbb1d7005de5a6e7e830cc16a134fd5f6a7cc23293e82273"
+    },
+    {
+      "path": "mail/sa-00023.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00023.e0e815ea1d7fd40e7e70b4c0035bef0c",
+      "size": 3750,
+      "sha256": "04cbb6a8757d3ee6ad9c8f12814c6d93d963d85b75811248d801934ee3fa5dc6"
+    },
+    {
+      "path": "mail/sa-00024.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00024.59c2cb781c60594315241e2b50ea70e2",
+      "size": 3701,
+      "sha256": "a51d2004e70b352ff32fde99412e62a1313c780236f44d8952ee025036731cdd"
+    },
+    {
+      "path": "mail/sa-00025.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00025.d685245bdc4444f44fa091e6620b20b3",
+      "size": 3238,
+      "sha256": "92b5d82422efc4ecfced8279d53eef6fae7a056ffbbfd0980b42bd5f79714a5f"
+    },
+    {
+      "path": "mail/sa-00026.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00026.f9755fb0cee92676d7bd76d32bc5f50f",
+      "size": 4467,
+      "sha256": "a4f719e7a30283609571f0b7212e0623fee387faca444fcbfe442891c194d5fa"
+    },
+    {
+      "path": "mail/sa-00027.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00027.4d456dd9ce0afde7629f94dc3034e0bb",
+      "size": 3148,
+      "sha256": "972edaccd1fc7ac3a3f2f73f47c1333e1db700106dc082131449331708617fb3"
+    },
+    {
+      "path": "mail/sa-00028.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00028.ddbae7c7b229813409ae50c47624ddb9",
+      "size": 2541,
+      "sha256": "382f7f4669c130c1ec832f6b9e60a4c3a5e0d749d5b24744e3e5963a1114f7ce"
+    },
+    {
+      "path": "mail/sa-00029.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00029.56d4310a82386b76b9e771523d571e67",
+      "size": 2890,
+      "sha256": "e9820539aad76f825a6b29eb088ee832d4e82c9242eecb1a1650b09a752921c3"
+    },
+    {
+      "path": "mail/sa-00030.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00030.cc78e84cd398ff4a2e9e287263de928f",
+      "size": 5160,
+      "sha256": "7fd7b6d36f99f5d89a2871eaca87fddc88734a4deb210c0dbfd33d644426a783"
+    },
+    {
+      "path": "mail/sa-00031.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00031.ac7e81ff64671b17569d2c6a66648bb2",
+      "size": 2474,
+      "sha256": "4848bd860e4e2f63a727f5688f514a5ad871052808eefe08fdb94fe569973bc6"
+    },
+    {
+      "path": "mail/sa-00032.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00032.57e29a75bca42afb412fc68d5051aa20",
+      "size": 2767,
+      "sha256": "a190df7f29ca6b01dc362570af8cb64f1f4626adb1e73543051677364b43c5a5"
+    },
+    {
+      "path": "mail/sa-00033.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00033.2ceb520d2c6500ccf24357f2ebdce618",
+      "size": 1663,
+      "sha256": "e68f2e166e5f3f6196168ed0577f73ee838283dfffa44f3d3b4958f39b6eb8a5"
+    },
+    {
+      "path": "mail/sa-00034.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00034.1d56abea55f3c516d0ffdd4f1e8b883b",
+      "size": 2156,
+      "sha256": "83fe159a3220cb3e553f5e03d194ced5f4e4feb34202c6159f85a109e7a4877d"
+    },
+    {
+      "path": "mail/sa-00035.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00035.9069e05ad40dd0f98cdae72072ee7186",
+      "size": 2728,
+      "sha256": "8b71b6c572f3626de1f630eb5455d71cee91baf0933904a376ab1763ace2f9fb"
+    },
+    {
+      "path": "mail/sa-00036.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00036.719795e8d4670c6d8095274b18b59749",
+      "size": 2906,
+      "sha256": "88177d3852ff0f4f076ea4c7f19b6c98a02b49313744d7147f1a7f6199743fff"
+    },
+    {
+      "path": "mail/sa-00037.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00037.5a7af2f7bd57a2f50b7cfa05d5e37c29",
+      "size": 4924,
+      "sha256": "936ee3fff725491ab5a7cb7645519b3f859eea70c6bc64383c05811be4ccec82"
+    },
+    {
+      "path": "mail/sa-00038.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00038.cd457af47eb78d4b93c7d94043a43108",
+      "size": 3951,
+      "sha256": "467ad450eac0d8a7dac909ba8c2c211671cb2dd8fb6ab2bf35419776ec0af91f"
+    },
+    {
+      "path": "mail/sa-00039.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00039.be5e34dcebd922928045634015e3ed78",
+      "size": 3834,
+      "sha256": "cbe85543e22b5c6d3071c7ed89a51e08a2216120d90731acd04526c2d332606d"
+    },
+    {
+      "path": "mail/sa-00040.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00040.eec48d76fbc04e9b98c3de0f59af97ac",
+      "size": 2917,
+      "sha256": "89e7b7eec3175ad160721365ae3152952be9c829dceb81d86b1e85bd0790cf6c"
+    },
+    {
+      "path": "mail/sa-00041.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00041.002af69a10eb9b6683a7cff5f3ac14b4",
+      "size": 2714,
+      "sha256": "3caa65c7002791a2d584a7281c6b82cb25bf44215475a581364585ff1095c4c1"
+    },
+    {
+      "path": "mail/sa-00042.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00042.efe6317ef2ebefe739aaeb4f0d51fbdb",
+      "size": 2763,
+      "sha256": "5b77243d5416d983a77f88df974912e96987b65794390a86364c8ba924d94980"
+    },
+    {
+      "path": "mail/sa-00043.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00043.d2673a72d215cbdd747dc98cde41fbd2",
+      "size": 4419,
+      "sha256": "f3f54a8b565ae761f05d789181f21416d76ffcb010f3459761fd0c254b93c8a5"
+    },
+    {
+      "path": "mail/sa-00044.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00044.d087bf5e76ba737908b482cb028b056c",
+      "size": 3448,
+      "sha256": "b47ebb9df0e4310995106dcb05478453bc34755e52d0af4f29c36b73ad7e1856"
+    },
+    {
+      "path": "mail/sa-00045.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00045.f0a8de2cf2b3cf745341b960d7a0119f",
+      "size": 2721,
+      "sha256": "19752a422dbd2437cb40139da34c95198aadcb9474b9c7d9e92837abd634fe3a"
+    },
+    {
+      "path": "mail/sa-00046.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00046.c8491e68aa5652272d6511bb7d848d37",
+      "size": 1206,
+      "sha256": "c15cc7acde52c9f70043e75e349059e047c5c5f98187bd8acf4830a03acc89d4"
+    },
+    {
+      "path": "mail/sa-00047.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00047.39812fcb014cf9c22a2ff4fec61f3c19",
+      "size": 3131,
+      "sha256": "f0f8f08bcad6a193a0c798b176f2168e82cd32308e0f27130011799c364d0715"
+    },
+    {
+      "path": "mail/sa-00048.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00048.1e067f31e83cc6ea3e9103b52f15588e",
+      "size": 3592,
+      "sha256": "9f220ab35f8228ffcbea186918fa16a31e177aa8dbacaedf16d2d4a9a2287e88"
+    },
+    {
+      "path": "mail/sa-00049.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00049.838d44b342e0ab4743507510a8ca206f",
+      "size": 2709,
+      "sha256": "d7dbc7b2b2608ecc74a29b40940c776bc47cd8061ab7e0dde29303eb07a7ce4a"
+    },
+    {
+      "path": "mail/sa-00050.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00050.74d3103c5691914a530dcae2f656a1f5",
+      "size": 7379,
+      "sha256": "87afc055e551319da16317a0a8309303e376d3d5e7d6eec2ee6f9fabdc713292"
+    },
+    {
+      "path": "mail/sa-00051.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00051.03dcdb0e4e6100cfcf0eddbf78fbae17",
+      "size": 2450,
+      "sha256": "04971b9b28539d42267dc27351c9d9d822edc52afcf6feb6812608d3f105e71c"
+    },
+    {
+      "path": "mail/sa-00052.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00052.c6c74aeef6d36423f57807ad4c901dc4",
+      "size": 3222,
+      "sha256": "5e6e21fa1f6d58ff893e392823c2b943e5f55f1d976d9a819f695b38f4c62cc1"
+    },
+    {
+      "path": "mail/sa-00053.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00053.707c625cb618aadafe3e54544fa3ca78",
+      "size": 3032,
+      "sha256": "f78ba0ece4499c62e85706022b4f7c1b9f6ecefd9fbb1ced7abca52b64a18649"
+    },
+    {
+      "path": "mail/sa-00054.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00054.f3e1dc8f3a7fdc5bec424db5e07e8ef8",
+      "size": 2825,
+      "sha256": "fcaea18d67908f60ea401965552652502b5b631beeb0fb47f703d6f48ed832b5"
+    },
+    {
+      "path": "mail/sa-00055.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00055.8481bc92aa3ab9d23ca30c0eaecfc5e4",
+      "size": 2391,
+      "sha256": "a70a1976ad73031901ae9e23660fca999bbf792a2f52e9d60456197b1d163b2d"
+    },
+    {
+      "path": "mail/sa-00056.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00056.b510d34bac037c4c377b1f51dbe5f0d3",
+      "size": 2941,
+      "sha256": "f55c85e19e4596f0681d26834a5b3a97fb4ba063d2a70427a8d8ab1436503c5c"
+    },
+    {
+      "path": "mail/sa-00057.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00057.7c3a836baaa732cd915546442c0fef1a",
+      "size": 3330,
+      "sha256": "6af242f11322cf23dfdbbc35c2ec57ee15c07245760d23b5d50dcfd7a32b3fc7"
+    },
+    {
+      "path": "mail/sa-00058.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00058.ecfc3a7f406355a82abe9d16d3d5733a",
+      "size": 3803,
+      "sha256": "0fbced5229da8bf945be890bfe10ae1e734de28cac1489a60271325845e57f96"
+    },
+    {
+      "path": "mail/sa-00059.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00059.34a8067a36762120b9292004a4d68558",
+      "size": 4530,
+      "sha256": "fb61c45bed2e03a6416bc341195424493f2c50510ae9bcb371529808c21239c8"
+    },
+    {
+      "path": "mail/sa-00060.eml",
+      "source": "sa-easy-ham",
+      "member": "easy_ham/00060.d51949a7342f8adc568483f6e799ee25",
+      "size": 1717,
+      "sha256": "08b1c8cb2aa2a9864b0221097a270864fb09fae70b3d69b590a063bdd988eedc"
+    },
+    {
+      "path": "msg/51873.msg",
+      "source": "poi-hsmf",
+      "member": "51873.msg",
+      "size": 10240,
+      "sha256": "21ccc86ef46abbacfbb9b49a7e5e510fa65befdf2116cd34cd4de8bdd57087a8"
+    },
+    {
+      "path": "msg/53784_fails.msg",
+      "source": "poi-hsmf",
+      "member": "53784_fails.msg",
+      "size": 29696,
+      "sha256": "5b587479a3df9ee9026b600136d77d963224d834771d43b51aaa3149a96f5709"
+    },
+    {
+      "path": "msg/53784_succeeds.msg",
+      "source": "poi-hsmf",
+      "member": "53784_succeeds.msg",
+      "size": 35840,
+      "sha256": "b464f0bbaa8cb9b40b4d0a52f4f9e326344702cad195550c7e189194ca6dd831"
+    },
+    {
+      "path": "msg/58214_extracted_attachment.msg",
+      "source": "poi-hsmf",
+      "member": "58214_extracted_attachment.msg",
+      "size": 23040,
+      "sha256": "f442583a3aae625d2255063558ee9057c6d9b06419aa74d204dce5f20cb23926"
+    },
+    {
+      "path": "msg/58214_with_attachment.msg",
+      "source": "poi-hsmf",
+      "member": "58214_with_attachment.msg",
+      "size": 50688,
+      "sha256": "06a7b97925615e2296fa166db26da8b57d14f2eb3332da36dd6dd23a7a259517"
+    },
+    {
+      "path": "msg/ASCII_CP1251_LCID1049.msg",
+      "source": "poi-hsmf",
+      "member": "ASCII_CP1251_LCID1049.msg",
+      "size": 3584,
+      "sha256": "591eb7aab7d3a16dc64845fec7c211c245eaa6489ba6df39602df5ca93180649"
+    },
+    {
+      "path": "msg/ASCII_UTF-8_CP1252_LCID1031.msg",
+      "source": "poi-hsmf",
+      "member": "ASCII_UTF-8_CP1252_LCID1031.msg",
+      "size": 3584,
+      "sha256": "ddbbbdfa745caf868120d3847a408beb08d441b8f4baf8b86b081e8dd1b7c27d"
+    },
+    {
+      "path": "msg/ASCII_UTF-8_CP1252_LCID1031_HTML.msg",
+      "source": "poi-hsmf",
+      "member": "ASCII_UTF-8_CP1252_LCID1031_HTML.msg",
+      "size": 3584,
+      "sha256": "da9c8731ac16dde690493a8ca0d96323d36ea4300dc7d34614292f18d9b58eb8"
+    },
+    {
+      "path": "msg/HTMLBodyBinary_CP1251.msg",
+      "source": "poi-hsmf",
+      "member": "HTMLBodyBinary_CP1251.msg",
+      "size": 3584,
+      "sha256": "fbab3d7d2ba92ad8cd917c3ce220f5efec19f5a21afab823ed1f9cf1d584792c"
+    },
+    {
+      "path": "msg/HTMLBodyBinary_UTF-8.msg",
+      "source": "poi-hsmf",
+      "member": "HTMLBodyBinary_UTF-8.msg",
+      "size": 3584,
+      "sha256": "6e6a9b5ad0045dae5477608bc67827741f074f61c80d6f005466ae931894d336"
+    },
+    {
+      "path": "msg/attachment_msg_inlineImg.msg",
+      "source": "poi-hsmf",
+      "member": "attachment_msg_inlineImg.msg",
+      "size": 147456,
+      "sha256": "b693cff4adde108a8067c8e3f16b1f7056963f415be09713ef26579434babd3e"
+    },
+    {
+      "path": "msg/attachment_msg_pdf.msg",
+      "source": "poi-hsmf",
+      "member": "attachment_msg_pdf.msg",
+      "size": 71680,
+      "sha256": "439a1fb117edd4c84b780fcf44bf1d5167166694130ced5743a70132a83c6970"
+    },
+    {
+      "path": "msg/attachment_test_msg.msg",
+      "source": "poi-hsmf",
+      "member": "attachment_test_msg.msg",
+      "size": 52224,
+      "sha256": "4f5ab34d4e6bbb04945319dc0decdcfce785779bda618c89ca2eb0fe82e9caf0"
+    },
+    {
+      "path": "msg/blank.msg",
+      "source": "poi-hsmf",
+      "member": "blank.msg",
+      "size": 6656,
+      "sha256": "b9e5b5d8fac07e7be9604a3f9b039b9f824978d8b59cdeb2768d5182a03825c0"
+    },
+    {
+      "path": "msg/bug66335.msg",
+      "source": "poi-hsmf",
+      "member": "bug66335.msg",
+      "size": 134656,
+      "sha256": "1c62deaa6d13dbc521668a7c6c12a689c2fba3d8be290b194e76933938106a26"
+    },
+    {
+      "path": "msg/chinese-traditional.msg",
+      "source": "poi-hsmf",
+      "member": "chinese-traditional.msg",
+      "size": 48129,
+      "sha256": "b84c12748155dc57b41de02c6d43aa47e82b879020df070290633e9fd5ce7fdd"
+    },
+    {
+      "path": "msg/cyrillic_message.msg",
+      "source": "poi-hsmf",
+      "member": "cyrillic_message.msg",
+      "size": 25600,
+      "sha256": "8378273915639c4affdbe74a07105a653e3da752cd61882444deb5df771562c8"
+    },
+    {
+      "path": "msg/example_received_regular.msg",
+      "source": "poi-hsmf",
+      "member": "example_received_regular.msg",
+      "size": 53248,
+      "sha256": "d6da9ebf3cd20ea23df5fbc2225681269e67f6808e93c68bf6a0162ccb642b4c"
+    },
+    {
+      "path": "msg/example_received_unicode.msg",
+      "source": "poi-hsmf",
+      "member": "example_received_unicode.msg",
+      "size": 56832,
+      "sha256": "d1aa06234247d23f1ebe0338488c02c20b98cb2e164c38c2aeef28820bfe95da"
+    },
+    {
+      "path": "msg/example_sent_regular.msg",
+      "source": "poi-hsmf",
+      "member": "example_sent_regular.msg",
+      "size": 53248,
+      "sha256": "2f3abc72e5a1da955b06256fb0e20078ad517b029d07edf4f4346941700e78af"
+    },
+    {
+      "path": "msg/example_sent_unicode.msg",
+      "source": "poi-hsmf",
+      "member": "example_sent_unicode.msg",
+      "size": 53760,
+      "sha256": "04e1aad4a057823127641739614561769efcfc28487efe1e7e96148c6debb91a"
+    },
+    {
+      "path": "msg/keywords.msg",
+      "source": "poi-hsmf",
+      "member": "keywords.msg",
+      "size": 21504,
+      "sha256": "19c1ac9753cc1ee7eab1ebece51d97de64343567dec02cda7bedc30b8511a13a"
+    },
+    {
+      "path": "msg/logsat.com_signatures_valid.msg",
+      "source": "poi-hsmf",
+      "member": "logsat.com_signatures_valid.msg",
+      "size": 23040,
+      "sha256": "c32b01dcae2f347d10b94a560d16d055007c492ac92d174e080e5c97201fda65"
+    },
+    {
+      "path": "msg/message_1979.msg",
+      "source": "poi-hsmf",
+      "member": "message_1979.msg",
+      "size": 29696,
+      "sha256": "33b1251e344a411f69bed26b92bc44f720f38bb5b7fcb3ebeba44cb25f4d54b1"
+    },
+    {
+      "path": "msg/message_1980.msg",
+      "source": "poi-hsmf",
+      "member": "message_1980.msg",
+      "size": 29696,
+      "sha256": "e964500f60c1e46f575acd12494cb469cdd4d256dccb64824bad733ec5272a74"
+    }
+  ]
+}

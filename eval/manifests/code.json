@@ -1,0 +1,1464 @@
+{
+  "corpus": "code",
+  "sources": [
+    {
+      "id": "ripgrep",
+      "kind": "tar-gz",
+      "url": "https://codeload.github.com/BurntSushi/ripgrep/tar.gz/0e8390a66fbcf6eeac1aeb0541b367663a597c79",
+      "size": 582628,
+      "sha256": "7d62d1c0bac59f5175bef81b256f844559d5f91a750fd3ea45bcde5fe0ff4daa",
+      "ref": "14.1.1",
+      "commit": "4649aa9700619f94cf9c66876e9549d83420e16c"
+    },
+    {
+      "id": "garp-v0.10.0",
+      "kind": "git-archive",
+      "ref": "v0.10.0",
+      "commit": "f85a90c24d69e5febf829961c29658d73edfb01c"
+    }
+  ],
+  "files": [
+    {
+      "path": "garp/.github/dependabot.yml",
+      "source": "garp-v0.10.0",
+      "member": ".github/dependabot.yml",
+      "size": 522,
+      "sha256": "3f33cbcafbeb4f881bca3d9757558d00b85c07b590fba9ce8fe5a3e1d275b1c5"
+    },
+    {
+      "path": "garp/README.md",
+      "source": "garp-v0.10.0",
+      "member": "README.md",
+      "size": 31078,
+      "sha256": "aaa10318d0d712544189bc5ea0abfaf896e2f6fbe364cf09dcde6e2419b1011a"
+    },
+    {
+      "path": "garp/app/cli.go",
+      "source": "garp-v0.10.0",
+      "member": "app/cli.go",
+      "size": 41725,
+      "sha256": "841ad63392c112ec1ceb4c85f8a4e53358add515e480535a77d2dfff811f5da4"
+    },
+    {
+      "path": "garp/app/cli_output_test.go",
+      "source": "garp-v0.10.0",
+      "member": "app/cli_output_test.go",
+      "size": 34265,
+      "sha256": "60acc42e7cd188baaaa997db3a2650bea27224de7bea6a5b47392931097e38df"
+    },
+    {
+      "path": "garp/app/cli_parser_test.go",
+      "source": "garp-v0.10.0",
+      "member": "app/cli_parser_test.go",
+      "size": 29448,
+      "sha256": "fdc3791a88f2a4ad35f975fce094a3b0cb03a6f48c7e0039b6b8775b8153d481"
+    },
+    {
+      "path": "garp/app/cli_startdir_windows_test.go",
+      "source": "garp-v0.10.0",
+      "member": "app/cli_startdir_windows_test.go",
+      "size": 1436,
+      "sha256": "b8b9f729d8cb26b2de6ed383eef5b5f4b74e5a1adb9a42f7b1513e3792f555d3"
+    },
+    {
+      "path": "garp/app/cli_test.go",
+      "source": "garp-v0.10.0",
+      "member": "app/cli_test.go",
+      "size": 31405,
+      "sha256": "4d8ed1ec3e53e59c7913af38464b6a048e0b1132ecfd9d6268d72815ac9105de"
+    },
+    {
+      "path": "garp/app/process_usage_unix.go",
+      "source": "garp-v0.10.0",
+      "member": "app/process_usage_unix.go",
+      "size": 816,
+      "sha256": "2cb34f388d01e0494a588ab12ff1dc187f0e51842233462433f07d66666de46f"
+    },
+    {
+      "path": "garp/app/process_usage_unix_test.go",
+      "source": "garp-v0.10.0",
+      "member": "app/process_usage_unix_test.go",
+      "size": 540,
+      "sha256": "9899a0d0b4903fbf8ee5c52cc87f98a0d5985e7a498d185d8ea136a782973eb5"
+    },
+    {
+      "path": "garp/app/process_usage_windows.go",
+      "source": "garp-v0.10.0",
+      "member": "app/process_usage_windows.go",
+      "size": 125,
+      "sha256": "b576243b56f20664047e45d63a9fc9d3933f1b8af673b571b1218fd5e3cb9e44"
+    },
+    {
+      "path": "garp/app/terminal_output_test.go",
+      "source": "garp-v0.10.0",
+      "member": "app/terminal_output_test.go",
+      "size": 1521,
+      "sha256": "dee15fc76217f1de8c3ed3f37e5a33e4e4b261fab6fb3eeb3f89a89a0413bb42"
+    },
+    {
+      "path": "garp/app/terminal_sanitize_test.go",
+      "source": "garp-v0.10.0",
+      "member": "app/terminal_sanitize_test.go",
+      "size": 15270,
+      "sha256": "56fb91d03e6f2b3763fe43626852e9af654637920633e0a52375f9e309f9d764"
+    },
+    {
+      "path": "garp/app/tui.go",
+      "source": "garp-v0.10.0",
+      "member": "app/tui.go",
+      "size": 29592,
+      "sha256": "c645b263f5581e1d67969e274a2bad44a0513a7ddddb1ca213d27f39b360b5f2"
+    },
+    {
+      "path": "garp/app/tui_test.go",
+      "source": "garp-v0.10.0",
+      "member": "app/tui_test.go",
+      "size": 4533,
+      "sha256": "e33ef47b9444881f0c312ea41b38bcd5589073d46a8d22057b056414ea5b8df1"
+    },
+    {
+      "path": "garp/config/types.go",
+      "source": "garp-v0.10.0",
+      "member": "config/types.go",
+      "size": 8157,
+      "sha256": "d78646b64294122dae09015facddf8b036d699a87c566e22946b2f6058bb490d"
+    },
+    {
+      "path": "garp/config/types_test.go",
+      "source": "garp-v0.10.0",
+      "member": "config/types_test.go",
+      "size": 8373,
+      "sha256": "4fdcfd6b9cc6ca9c06eed8cb8836d64b2b6aee68f2202f4f31760d0b516f0b7f"
+    },
+    {
+      "path": "garp/docs/plans/2026-05-09-startdir-pathscope.md",
+      "source": "garp-v0.10.0",
+      "member": "docs/plans/2026-05-09-startdir-pathscope.md",
+      "size": 13578,
+      "sha256": "5e74a21a5a9007ba8b5a69c575af161c5b723a885cebdda5e0dc00c4d693bf59"
+    },
+    {
+      "path": "garp/docs/skills/garp-search/SKILL.md",
+      "source": "garp-v0.10.0",
+      "member": "docs/skills/garp-search/SKILL.md",
+      "size": 9401,
+      "sha256": "c5c2438bee0b5e580f616af614145e8a945d67c620bb2d2b7b630d9fe8cf9a1f"
+    },
+    {
+      "path": "garp/internal/terminaltext/sanitize.go",
+      "source": "garp-v0.10.0",
+      "member": "internal/terminaltext/sanitize.go",
+      "size": 4747,
+      "sha256": "149f6fd3533a83f64d66d411fd126de02d2037406873f0a17717d552805cab1b"
+    },
+    {
+      "path": "garp/main.go",
+      "source": "garp-v0.10.0",
+      "member": "main.go",
+      "size": 81,
+      "sha256": "273ce967d995555b1bad3b7575fe0a30f5d78bfc841f5bc5088a2a45ace77ed6"
+    },
+    {
+      "path": "garp/search/cleaner.go",
+      "source": "garp-v0.10.0",
+      "member": "search/cleaner.go",
+      "size": 54936,
+      "sha256": "d649cde039686f741e56b964e34575070fe0d1f6b7dd089feb2d0930a18e5570"
+    },
+    {
+      "path": "garp/search/cleaner_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/cleaner_test.go",
+      "size": 63209,
+      "sha256": "6f78a859b285a8dea2a5d6b7d1ef1bfd5dade763f110d34fde29f1e398e94224"
+    },
+    {
+      "path": "garp/search/edge_cases_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/edge_cases_test.go",
+      "size": 4097,
+      "sha256": "c0490b4275c66cdaa48e0d6205d27221262e98ac28a4d4162817809c8ce456be"
+    },
+    {
+      "path": "garp/search/engine.go",
+      "source": "garp-v0.10.0",
+      "member": "search/engine.go",
+      "size": 45314,
+      "sha256": "96c08b9808166f8abca9142a59385e264a9f98a762f5440d82bcc08a38d1354e"
+    },
+    {
+      "path": "garp/search/engine_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/engine_test.go",
+      "size": 107687,
+      "sha256": "00fecc1a4d257a02b657f9ba3c296d7e5dbad2a00f6d547bbf4096a55b533c95"
+    },
+    {
+      "path": "garp/search/extractor.go",
+      "source": "garp-v0.10.0",
+      "member": "search/extractor.go",
+      "size": 39683,
+      "sha256": "f9b16b15dc43dd11ab3087db76d94f063dcb42b8cd757782831120a4e2d488ab"
+    },
+    {
+      "path": "garp/search/extractor_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/extractor_test.go",
+      "size": 60013,
+      "sha256": "4d28add2627c6b8916a97b8999ef9e9765b1c76f6809f7f6c865a93f2baa9ebc"
+    },
+    {
+      "path": "garp/search/file_advice_other_unix.go",
+      "source": "garp-v0.10.0",
+      "member": "search/file_advice_other_unix.go",
+      "size": 173,
+      "sha256": "c02472a9f23495e93b465296cdcbeb8df0c60fc777d129df96253b36568b1eca"
+    },
+    {
+      "path": "garp/search/file_advice_unix.go",
+      "source": "garp-v0.10.0",
+      "member": "search/file_advice_unix.go",
+      "size": 367,
+      "sha256": "30da040d73c05792a9afe4a3fde3ed77383d74f07ecbbc09b8c1d18395285a4b"
+    },
+    {
+      "path": "garp/search/file_advice_windows.go",
+      "source": "garp-v0.10.0",
+      "member": "search/file_advice_windows.go",
+      "size": 166,
+      "sha256": "ddda070b3d4e36b4ddf821c0cc08b134077b746007096e6d9d382d788b741f2a"
+    },
+    {
+      "path": "garp/search/filter.go",
+      "source": "garp-v0.10.0",
+      "member": "search/filter.go",
+      "size": 55353,
+      "sha256": "13d0229b03993310a4c7fbaf11d4bd3793f2c9f3d5fe59b912f57ca001616175"
+    },
+    {
+      "path": "garp/search/filter_prefilter_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/filter_prefilter_test.go",
+      "size": 41149,
+      "sha256": "5a8ed1b5cc65f4d1a80844583dac05e2d07b8a8d8375d4e300e2f69ac4779bb8"
+    },
+    {
+      "path": "garp/search/filter_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/filter_test.go",
+      "size": 54068,
+      "sha256": "4781ccb115ce57277ec6f059cf9617329edc58d2a20bda7da100ae8794914584"
+    },
+    {
+      "path": "garp/search/glob_pathological_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/glob_pathological_test.go",
+      "size": 4014,
+      "sha256": "49aab3b13b42dae725a60ee39b900548ca65367804788baddbb2b318d79736d3"
+    },
+    {
+      "path": "garp/search/highlight_partial_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/highlight_partial_test.go",
+      "size": 4446,
+      "sha256": "c7c6998f3990935e93a94f4a342034381376eb834f72da4497c8b93623655659"
+    },
+    {
+      "path": "garp/search/ignore.go",
+      "source": "garp-v0.10.0",
+      "member": "search/ignore.go",
+      "size": 16389,
+      "sha256": "1ba44163f5f63c2841a81ae5a280ae3fc9e8034d33bc469a59eb2cf31a43658a"
+    },
+    {
+      "path": "garp/search/ignore_metadata_other.go",
+      "source": "garp-v0.10.0",
+      "member": "search/ignore_metadata_other.go",
+      "size": 916,
+      "sha256": "8b97e0f878face58f00fc5b9cc4941ed4a3e51ee341749562f2bee5c5a80d9ac"
+    },
+    {
+      "path": "garp/search/ignore_metadata_unix.go",
+      "source": "garp-v0.10.0",
+      "member": "search/ignore_metadata_unix.go",
+      "size": 326,
+      "sha256": "26fc7b1b49019ec6891985f2f941736adff4d6c5dd78d6310cda13a1d9e90edd"
+    },
+    {
+      "path": "garp/search/ignore_metadata_windows.go",
+      "source": "garp-v0.10.0",
+      "member": "search/ignore_metadata_windows.go",
+      "size": 728,
+      "sha256": "8e4f161b6d0d4f6f098bd4ed2769fa31ace306fe4d834e5423f9ff3e3da1e6ff"
+    },
+    {
+      "path": "garp/search/ignore_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/ignore_test.go",
+      "size": 32172,
+      "sha256": "acd0a9a7a4bbaec05490cfef15a70481e31a14a0141c459038c4e4f8406d6397"
+    },
+    {
+      "path": "garp/search/limits_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/limits_test.go",
+      "size": 2531,
+      "sha256": "ded3628b3cc064642dd1af345ecae118dcdc70ea7bccd1ccc9a6fd9f0d67d9ce"
+    },
+    {
+      "path": "garp/search/lines.go",
+      "source": "garp-v0.10.0",
+      "member": "search/lines.go",
+      "size": 12122,
+      "sha256": "79370cf95357f26eb4ddccfa88eab493bb7c0affcb9479712167206385317b04"
+    },
+    {
+      "path": "garp/search/lines_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/lines_test.go",
+      "size": 34474,
+      "sha256": "65d864a8d9577db9d057d42f8851dd302e9e57c32bb85e3362a40bc57b952746"
+    },
+    {
+      "path": "garp/search/open.go",
+      "source": "garp-v0.10.0",
+      "member": "search/open.go",
+      "size": 776,
+      "sha256": "3a6d84b4785029ecc64a109cecede5373ec88693264df07f1135f5b8c5bd06f4"
+    },
+    {
+      "path": "garp/search/open_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/open_test.go",
+      "size": 1555,
+      "sha256": "231f945ff9ea9c37841ccca3953fe1e86efae78845d68ca8b2767309497b30a9"
+    },
+    {
+      "path": "garp/search/open_unix_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/open_unix_test.go",
+      "size": 599,
+      "sha256": "db3f1c69e03fba658ecd653e78f231cb3d05235a743970acc82b452f24ca426a"
+    },
+    {
+      "path": "garp/search/path_other.go",
+      "source": "garp-v0.10.0",
+      "member": "search/path_other.go",
+      "size": 2300,
+      "sha256": "13b1327ef84639b43e329e5303c4e456b98a93f162329674d1eb43575a89e7d8"
+    },
+    {
+      "path": "garp/search/path_policy.go",
+      "source": "garp-v0.10.0",
+      "member": "search/path_policy.go",
+      "size": 22878,
+      "sha256": "4eed34c65a606b2e37090e3538ab5969332f1c513a16304ff2f905a28d2498a9"
+    },
+    {
+      "path": "garp/search/path_policy_other_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/path_policy_other_test.go",
+      "size": 667,
+      "sha256": "9c6222d39a58571de3c13674793f5fe02ac7d7a1532bdfadfa51ecfc778c79a7"
+    },
+    {
+      "path": "garp/search/path_policy_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/path_policy_test.go",
+      "size": 30136,
+      "sha256": "f7871ce9a09a9bd850e2cfb611267cf9a6c01c787e9c91860105538ca276f487"
+    },
+    {
+      "path": "garp/search/path_policy_windows_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/path_policy_windows_test.go",
+      "size": 9623,
+      "sha256": "406fd15b485315df1c8a0f86b4580d5cbc0c83017f45378d7a6899dddef59b68"
+    },
+    {
+      "path": "garp/search/path_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/path_test.go",
+      "size": 3645,
+      "sha256": "13660d1db9571e58ec6fd3196e3edcb80a4bcb24b735054c876287185cfce2e9"
+    },
+    {
+      "path": "garp/search/path_windows.go",
+      "source": "garp-v0.10.0",
+      "member": "search/path_windows.go",
+      "size": 4816,
+      "sha256": "95148b7d165737bc80b6cf167ed46d408c717c104df1783b01ae4fe8a11e5e4c"
+    },
+    {
+      "path": "garp/search/path_windows_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/path_windows_test.go",
+      "size": 4722,
+      "sha256": "03c35f80f5945b96b1a11fcefe1b54b01e9ef9262911f264f259a8c55e29b55b"
+    },
+    {
+      "path": "garp/search/ranking.go",
+      "source": "garp-v0.10.0",
+      "member": "search/ranking.go",
+      "size": 10658,
+      "sha256": "302ddabe6e5d91dea5887aae735c8695d84c2bafdd09c64456798de444299bbb"
+    },
+    {
+      "path": "garp/search/ranking_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/ranking_test.go",
+      "size": 27204,
+      "sha256": "2ee3de29020a9152fc23695f43aef84d3b62a8e789bf54fedb7c4ee3d2bc1632"
+    },
+    {
+      "path": "garp/search/root_set.go",
+      "source": "garp-v0.10.0",
+      "member": "search/root_set.go",
+      "size": 13618,
+      "sha256": "a160333eb1cc33a8c21892a93bd10705e958e6939d75dedebda250be7f5a207f"
+    },
+    {
+      "path": "garp/search/root_set_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/root_set_test.go",
+      "size": 18776,
+      "sha256": "8a6bc7fffd7e9af75d0885313519619f1eb08e8dfb7c9e88fb713b1fa935d560"
+    },
+    {
+      "path": "garp/search/scope.go",
+      "source": "garp-v0.10.0",
+      "member": "search/scope.go",
+      "size": 5103,
+      "sha256": "092c075d147e5436541c193a9d4246b3609f60962fbf6381c2526be9c51a5b6c"
+    },
+    {
+      "path": "garp/search/scope_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/scope_test.go",
+      "size": 10983,
+      "sha256": "b2890e61882434c53406a596da52f2240d77df8980b5cd8bf497e0e3b930b934"
+    },
+    {
+      "path": "garp/search/smart_forms_discovery_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/smart_forms_discovery_test.go",
+      "size": 1908,
+      "sha256": "56b2306ea77a365bf91a7c87343549ae11e9422621ac28ed5bb40c2286a4754a"
+    },
+    {
+      "path": "garp/search/term_matcher.go",
+      "source": "garp-v0.10.0",
+      "member": "search/term_matcher.go",
+      "size": 21577,
+      "sha256": "1f02834ef5ba3d1ea1f8c04899a9b3bbe64896cd2c157b0a405760ebb6478d39"
+    },
+    {
+      "path": "garp/search/term_matcher_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/term_matcher_test.go",
+      "size": 27862,
+      "sha256": "b6712b38b25effa2e18bfa8b6ee3458545bc575a21b99d993816931f8a901a89"
+    },
+    {
+      "path": "garp/search/toctou_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/toctou_test.go",
+      "size": 5519,
+      "sha256": "b06384298fad95e4e4302ec19298154696c653438a90f095c78fabc91c3415f8"
+    },
+    {
+      "path": "garp/search/toctou_unix_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/toctou_unix_test.go",
+      "size": 1143,
+      "sha256": "13d36df69a72c9283bf47ffe88c797a6f4177ecaeb04be30c208edf5e3e8d537"
+    },
+    {
+      "path": "garp/search/walk.go",
+      "source": "garp-v0.10.0",
+      "member": "search/walk.go",
+      "size": 6805,
+      "sha256": "9da058d3a3865f704d3bad072f2f8d2f619e2b2b0a8912cfd3502714f9b37d2e"
+    },
+    {
+      "path": "garp/search/walk_test.go",
+      "source": "garp-v0.10.0",
+      "member": "search/walk_test.go",
+      "size": 34513,
+      "sha256": "6bed32bfcb6cfc36975ea68dd0e6b1cac512a5602c98e9c585bc736c52a67606"
+    },
+    {
+      "path": "ripgrep/.github/FUNDING.yml",
+      "source": "ripgrep",
+      "member": ".github/FUNDING.yml",
+      "size": 21,
+      "sha256": "0c65f392d32a8639ba7986bbb42ca124505b462122382f314c89d84c95dd27f1"
+    },
+    {
+      "path": "ripgrep/.github/ISSUE_TEMPLATE/bug_report.yml",
+      "source": "ripgrep",
+      "member": ".github/ISSUE_TEMPLATE/bug_report.yml",
+      "size": 4116,
+      "sha256": "f91b8c18b6a85ac767788bb29d163d68ea7af098182104a7ecd412b43d8235ae"
+    },
+    {
+      "path": "ripgrep/.github/ISSUE_TEMPLATE/config.yml",
+      "source": "ripgrep",
+      "member": ".github/ISSUE_TEMPLATE/config.yml",
+      "size": 223,
+      "sha256": "696cff05dcd9f57919f652e7aed5ac31434cc0d94b1b8767afaa027dabe5e8ff"
+    },
+    {
+      "path": "ripgrep/.github/ISSUE_TEMPLATE/feature_request.md",
+      "source": "ripgrep",
+      "member": ".github/ISSUE_TEMPLATE/feature_request.md",
+      "size": 589,
+      "sha256": "20967e0bfc8f9f462f75edaa9cee2231cdb6a413e2aa61140a073c4c5bb899de"
+    },
+    {
+      "path": "ripgrep/.github/workflows/ci.yml",
+      "source": "ripgrep",
+      "member": ".github/workflows/ci.yml",
+      "size": 8100,
+      "sha256": "22c8311a0486e8ca43f2cdff0ce91db297a55e56846b5598bca60345e471b118"
+    },
+    {
+      "path": "ripgrep/.github/workflows/release.yml",
+      "source": "ripgrep",
+      "member": ".github/workflows/release.yml",
+      "size": 12376,
+      "sha256": "4e172c26e3f202db777273387d1b2153bc8dd699029e6dc507b5ec8c03b9fe70"
+    },
+    {
+      "path": "ripgrep/CHANGELOG.md",
+      "source": "ripgrep",
+      "member": "CHANGELOG.md",
+      "size": 82502,
+      "sha256": "d60f8cf2583aa295378437ca8856246991107a2c24aec62e329ef6a016bb84f4"
+    },
+    {
+      "path": "ripgrep/FAQ.md",
+      "source": "ripgrep",
+      "member": "FAQ.md",
+      "size": 41724,
+      "sha256": "6e3472472777dcee7a2a834544453256b1f851e58214337e824a3119d45020f1"
+    },
+    {
+      "path": "ripgrep/GUIDE.md",
+      "source": "ripgrep",
+      "member": "GUIDE.md",
+      "size": 40701,
+      "sha256": "9dd96f163700ab5b41296cef3555b535c80c19e2ea25c7925c21b133d96d9537"
+    },
+    {
+      "path": "ripgrep/README.md",
+      "source": "ripgrep",
+      "member": "README.md",
+      "size": 21003,
+      "sha256": "439fd62b6ba5d8ac6bb16740df2251d37b086cf83dada391d73099bb8b81d046"
+    },
+    {
+      "path": "ripgrep/RELEASE-CHECKLIST.md",
+      "source": "ripgrep",
+      "member": "RELEASE-CHECKLIST.md",
+      "size": 2986,
+      "sha256": "9d72ce38aac954225178915dabcbfc39fb395582bdac2462f155b226a0098046"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2016-09-17-ubuntu1604-ec2/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2016-09-17-ubuntu1604-ec2/raw.csv",
+      "size": 64975,
+      "sha256": "0cf6fff0ab0de6b496dc4e61ee079dad2b3b30059a4f33ec01d2689bc33ff406"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2016-09-20-ubuntu1604-ec2/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2016-09-20-ubuntu1604-ec2/raw.csv",
+      "size": 226710,
+      "sha256": "2d938789c70dad1b430b26b8225e55245b7e6f9bae15066590a1951175836d19"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2016-09-22-archlinux-cheetah/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2016-09-22-archlinux-cheetah/raw.csv",
+      "size": 69211,
+      "sha256": "933381ba1a18c6d928d3c71e35e7a006b617fee134cb9ae1a9d29bc34886bf3f"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2016-12-24-archlinux-cheetah-glibc-jemalloc/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2016-12-24-archlinux-cheetah-glibc-jemalloc/raw.csv",
+      "size": 21047,
+      "sha256": "f677d8e91c587e1d1048fe27964698dc6a312ebe80f9653bdb18a3035880ce39"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2016-12-24-archlinux-cheetah-glibc-system/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2016-12-24-archlinux-cheetah-glibc-system/raw.csv",
+      "size": 21028,
+      "sha256": "7dfef06a37bec6e1c3d10672cea72f925046d9eeb28927c57f68f8ab066c9774"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2016-12-24-archlinux-cheetah-musl-jemalloc/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2016-12-24-archlinux-cheetah-musl-jemalloc/raw.csv",
+      "size": 21044,
+      "sha256": "65e133b1fd55c71e039d5cfcd24d950d7604721122a501703919cfe81914cc71"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2016-12-24-archlinux-cheetah-musl-system/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2016-12-24-archlinux-cheetah-musl-system/raw.csv",
+      "size": 21044,
+      "sha256": "5790769a8ec77420660b4c664af5ba9689995d7fd3c7a5c7e2cfc91109197e40"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2016-12-24-archlinux-cheetah/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2016-12-24-archlinux-cheetah/raw.csv",
+      "size": 21026,
+      "sha256": "92a1243ae7a1cf4e4ec4934d5ccb0eede6be5babadfd8f4a1499b10dbda67fef"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2016-12-30-archlinux-cheetah/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2016-12-30-archlinux-cheetah/raw.csv",
+      "size": 21038,
+      "sha256": "faa209061090e40cb62e8b04e141eb4320e0a5c9146f213e71d10f146b0aa7e8"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2018-01-08-archlinux-cheetah/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2018-01-08-archlinux-cheetah/raw.csv",
+      "size": 114939,
+      "sha256": "309738cfedacbace5967306c8f0e88917849f5b7e5def2666908642bf62c885e"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2020-10-14-archlinux-frink/README.md",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2020-10-14-archlinux-frink/README.md",
+      "size": 1043,
+      "sha256": "38225c30b896df7c0c0dc9285783d4cf190bd187c0384c48661de9ca1537cf18"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2020-10-14-archlinux-frink/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2020-10-14-archlinux-frink/raw.csv",
+      "size": 91922,
+      "sha256": "3a19a287d887e8513e8fcbe674bb77f41697fda5778deb8329a7ada7343a851b"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2022-12-16-archlinux-duff/README.md",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2022-12-16-archlinux-duff/README.md",
+      "size": 1124,
+      "sha256": "d5b951891c7c4fd3ac5869ccc862885fa5d812d5cc18b8c70dfab153995f7ba6"
+    },
+    {
+      "path": "ripgrep/benchsuite/runs/2022-12-16-archlinux-duff/raw.csv",
+      "source": "ripgrep",
+      "member": "benchsuite/runs/2022-12-16-archlinux-duff/raw.csv",
+      "size": 55797,
+      "sha256": "fc3ef0ab9b7d0138dcba4436da44fca85bbb81955360b5606e965787d44e1584"
+    },
+    {
+      "path": "ripgrep/build.rs",
+      "source": "ripgrep",
+      "member": "build.rs",
+      "size": 1785,
+      "sha256": "d2d21012db3fa4ef14b0017b70eaca046b30ca654ccbdb3bab8558cba2ec4040"
+    },
+    {
+      "path": "ripgrep/ci/utils.sh",
+      "source": "ripgrep",
+      "member": "ci/utils.sh",
+      "size": 1962,
+      "sha256": "0a2632e085b2f2a4bca4024320010fb756d9782e26809efd0c243b4265530e1f"
+    },
+    {
+      "path": "ripgrep/crates/cli/README.md",
+      "source": "ripgrep",
+      "member": "crates/cli/README.md",
+      "size": 920,
+      "sha256": "4e9a7a4b713878587089d2aec3aa147e8fdde74e93a58f17600a05fb2c3c16f1"
+    },
+    {
+      "path": "ripgrep/crates/cli/src/decompress.rs",
+      "source": "ripgrep",
+      "member": "crates/cli/src/decompress.rs",
+      "size": 20121,
+      "sha256": "608893ee6d1379f1fc9271229efeb376b3d43388a2f6fec9142defc7dc9c4147"
+    },
+    {
+      "path": "ripgrep/crates/cli/src/escape.rs",
+      "source": "ripgrep",
+      "member": "crates/cli/src/escape.rs",
+      "size": 4264,
+      "sha256": "b3ac4121dd2d81be59f22f39bb9e4e473775c2631cc33b063715059ba63ed180"
+    },
+    {
+      "path": "ripgrep/crates/cli/src/hostname.rs",
+      "source": "ripgrep",
+      "member": "crates/cli/src/hostname.rs",
+      "size": 2987,
+      "sha256": "da7533b6d13dbd5a8c052fac349c33813f28b9d411d280555ac5a9ff93b2c921"
+    },
+    {
+      "path": "ripgrep/crates/cli/src/human.rs",
+      "source": "ripgrep",
+      "member": "crates/cli/src/human.rs",
+      "size": 4226,
+      "sha256": "b85f1391a01ccdfed20951cdf07bd641bf190256c48caccfe83f8ec14e2b1636"
+    },
+    {
+      "path": "ripgrep/crates/cli/src/lib.rs",
+      "source": "ripgrep",
+      "member": "crates/cli/src/lib.rs",
+      "size": 11698,
+      "sha256": "e561400a9d3f4b6b6a0ab88f743292421e5add5ec36562832d3a09daf82f4009"
+    },
+    {
+      "path": "ripgrep/crates/cli/src/pattern.rs",
+      "source": "ripgrep",
+      "member": "crates/cli/src/pattern.rs",
+      "size": 5753,
+      "sha256": "22b94d38be203aa3c252bf010cce238349f39cb5c494991ac57b52de1dab722f"
+    },
+    {
+      "path": "ripgrep/crates/cli/src/process.rs",
+      "source": "ripgrep",
+      "member": "crates/cli/src/process.rs",
+      "size": 11144,
+      "sha256": "1452fb92570a07c3c5135dc9efc293a30edd3322580cc93d0b342107c2593e3f"
+    },
+    {
+      "path": "ripgrep/crates/cli/src/wtr.rs",
+      "source": "ripgrep",
+      "member": "crates/cli/src/wtr.rs",
+      "size": 4871,
+      "sha256": "44d2f5192c2e0c74a838a190fee4c8065747d7c643ddb3f8b4d0985e6eb172a9"
+    },
+    {
+      "path": "ripgrep/crates/core/README.md",
+      "source": "ripgrep",
+      "member": "crates/core/README.md",
+      "size": 674,
+      "sha256": "0d23e23b8b0e54eafc4be79555e90c43c8280fe96e7786f926885705329ef86d"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/complete/bash.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/complete/bash.rs",
+      "size": 2770,
+      "sha256": "2eb1185195cc3fa00e72d3e7e08b0b81a8251f2410a04856f33f0ba24610bf7e"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/complete/encodings.sh",
+      "source": "ripgrep",
+      "member": "crates/core/flags/complete/encodings.sh",
+      "size": 1453,
+      "sha256": "2f7e59154c52114358dd7c12df046c26a2ba449af98f915180e820a04a681e43"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/complete/fish.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/complete/fish.rs",
+      "size": 2365,
+      "sha256": "6a3049c0d9fc8096f705b66dd47b232f792070ffe865613aa6ec27f8018171f8"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/complete/mod.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/complete/mod.rs",
+      "size": 216,
+      "sha256": "f3f0f698353fe778f96fd2d6dcd8b81d40196b0e45a63c26cedb6314afa8ee68"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/complete/powershell.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/complete/powershell.rs",
+      "size": 2713,
+      "sha256": "2adeeaa485b1af914d547175f295074d3bcc23501eb08e71b324d1a6167b3880"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/complete/zsh.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/complete/zsh.rs",
+      "size": 922,
+      "sha256": "4ce577a1fedb823b604ada530dc73e97de252471d98c1c2c17fbe81742d5c880"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/config.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/config.rs",
+      "size": 4593,
+      "sha256": "02860d8a3657185182bd070a3339c1aea4046835361847179a47bc5354d09758"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/defs.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/defs.rs",
+      "size": 230911,
+      "sha256": "f875b566b288818057a99ade837b0c639ce35640919b1b1f74fe23223229012a"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/doc/help.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/doc/help.rs",
+      "size": 9112,
+      "sha256": "a563df4e2a27a662b0606f513e377dd8b3136de135fe54836938dca2e7b4522f"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/doc/man.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/doc/man.rs",
+      "size": 3673,
+      "sha256": "000c61d1fc8af9ccbba2a106c0f85b1fccdc6eb841c33c1305e46e876f8403c7"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/doc/mod.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/doc/mod.rs",
+      "size": 1255,
+      "sha256": "49de2b86f8efe2e9807705ae87014c2e80561ce430f8501303ad4553dba9c6ed"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/doc/version.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/doc/version.rs",
+      "size": 5558,
+      "sha256": "fa0aa7d53af3ab9904830fb1f1045e2da3d5d133a703eca6bac881d2b0d08775"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/hiargs.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/hiargs.rs",
+      "size": 56922,
+      "sha256": "011109442e9c1343aaabaeca1c73125bfcc901ffda371d1d8a04f04051c1efd8"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/lowargs.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/lowargs.rs",
+      "size": 26457,
+      "sha256": "1481268e15b01a6106842c6eba067de8c5ff5e0af1e6bd215ac19e65c69b66a3"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/mod.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/mod.rs",
+      "size": 11801,
+      "sha256": "c68b54257334d917609227b373e9fb25c70802e20b873d85cda6eff97e8fb2d8"
+    },
+    {
+      "path": "ripgrep/crates/core/flags/parse.rs",
+      "source": "ripgrep",
+      "member": "crates/core/flags/parse.rs",
+      "size": 17793,
+      "sha256": "731c57fe9984e5d4aa08699a5e6f93a16eb28051d428376a005d6c4dccba7147"
+    },
+    {
+      "path": "ripgrep/crates/core/haystack.rs",
+      "source": "ripgrep",
+      "member": "crates/core/haystack.rs",
+      "size": 5741,
+      "sha256": "8766d52fd5acedf59bf7613d5ed9e77186e97a1ffe77d0b516c6ec807e1a9157"
+    },
+    {
+      "path": "ripgrep/crates/core/logger.rs",
+      "source": "ripgrep",
+      "member": "crates/core/logger.rs",
+      "size": 2124,
+      "sha256": "057c6449256af78acb88c4b267774e51d416fdee878d6f1bdf6600b5d6086119"
+    },
+    {
+      "path": "ripgrep/crates/core/main.rs",
+      "source": "ripgrep",
+      "member": "crates/core/main.rs",
+      "size": 18464,
+      "sha256": "dc3f8c2e868d3b852b5cf34a16ff6fbf181b30f6bb7b67ba3051400152d59136"
+    },
+    {
+      "path": "ripgrep/crates/core/messages.rs",
+      "source": "ripgrep",
+      "member": "crates/core/messages.rs",
+      "size": 5037,
+      "sha256": "82b679b0a9e13b61bbbb86c7aa845507a05c1278cf399e5148f97aecf4f5a2cd"
+    },
+    {
+      "path": "ripgrep/crates/core/search.rs",
+      "source": "ripgrep",
+      "member": "crates/core/search.rs",
+      "size": 15659,
+      "sha256": "5a268950a174865fd13b9eccbf69cf4686ab84fdfbeb019b0543dbd5a6a69386"
+    },
+    {
+      "path": "ripgrep/crates/globset/README.md",
+      "source": "ripgrep",
+      "member": "crates/globset/README.md",
+      "size": 3842,
+      "sha256": "f521ea13d4b8622f86998487e6a00ec12663dbe0a59a6c9e13ef44ece0284332"
+    },
+    {
+      "path": "ripgrep/crates/globset/benches/bench.rs",
+      "source": "ripgrep",
+      "member": "crates/globset/benches/bench.rs",
+      "size": 2751,
+      "sha256": "05a00ec1b35dbd7a202e280e862a784b3a972574b19201ef66ac7980521ce4ac"
+    },
+    {
+      "path": "ripgrep/crates/globset/src/fnv.rs",
+      "source": "ripgrep",
+      "member": "crates/globset/src/fnv.rs",
+      "size": 765,
+      "sha256": "bf67b20b542db2a159f91da8b980fca27d93253a8fafaee7173d6493de985bd8"
+    },
+    {
+      "path": "ripgrep/crates/globset/src/glob.rs",
+      "source": "ripgrep",
+      "member": "crates/globset/src/glob.rs",
+      "size": 55415,
+      "sha256": "23ca15eef97825895df767e2a94f3af6bb376e2578d2741c68713cca73dcf89d"
+    },
+    {
+      "path": "ripgrep/crates/globset/src/lib.rs",
+      "source": "ripgrep",
+      "member": "crates/globset/src/lib.rs",
+      "size": 31896,
+      "sha256": "e1906f948eca4d33c88541bbd4d96c5e5af09cca8e20065ce68098c239c8b084"
+    },
+    {
+      "path": "ripgrep/crates/globset/src/pathutil.rs",
+      "source": "ripgrep",
+      "member": "crates/globset/src/pathutil.rs",
+      "size": 4051,
+      "sha256": "57f044214c87b9d645624a95158d48c6e13a099abae8775f78b590f21bd27768"
+    },
+    {
+      "path": "ripgrep/crates/globset/src/serde_impl.rs",
+      "source": "ripgrep",
+      "member": "crates/globset/src/serde_impl.rs",
+      "size": 3180,
+      "sha256": "4fdc2b4a456fd9ffbe4555d27c760861adaec2ed2524a5f4149ebe827d4779f1"
+    },
+    {
+      "path": "ripgrep/crates/grep/README.md",
+      "source": "ripgrep",
+      "member": "crates/grep/README.md",
+      "size": 876,
+      "sha256": "c22e4ea508683d0b1572f2a5b64a063e7f48a4e177f764ea08e075faa2c75e59"
+    },
+    {
+      "path": "ripgrep/crates/grep/examples/simplegrep.rs",
+      "source": "ripgrep",
+      "member": "crates/grep/examples/simplegrep.rs",
+      "size": 1974,
+      "sha256": "ab7011b50f72b2f615685a6cae446d957ac081a05901b515cd210984b8c9e115"
+    },
+    {
+      "path": "ripgrep/crates/grep/src/lib.rs",
+      "source": "ripgrep",
+      "member": "crates/grep/src/lib.rs",
+      "size": 656,
+      "sha256": "de71633dfaa300e1d4eb518ca76d48dfb38ca80a178e43b6610d4ae3ddb068cc"
+    },
+    {
+      "path": "ripgrep/crates/ignore/README.md",
+      "source": "ripgrep",
+      "member": "crates/ignore/README.md",
+      "size": 1653,
+      "sha256": "fad351a4d6dad422368750be404b7a419bc9f6ab5acc86934edb3502fba2029d"
+    },
+    {
+      "path": "ripgrep/crates/ignore/examples/walk.rs",
+      "source": "ripgrep",
+      "member": "crates/ignore/examples/walk.rs",
+      "size": 1746,
+      "sha256": "9facef1184ed0cbdf503bc7131195b3c8fc75d4323d2d81537163239077f20d6"
+    },
+    {
+      "path": "ripgrep/crates/ignore/src/default_types.rs",
+      "source": "ripgrep",
+      "member": "crates/ignore/src/default_types.rs",
+      "size": 12593,
+      "sha256": "001e14fbfc6915d151c59af68ad9be65cf6d5a78c312d91724a83cc5e55e310d"
+    },
+    {
+      "path": "ripgrep/crates/ignore/src/dir.rs",
+      "source": "ripgrep",
+      "member": "crates/ignore/src/dir.rs",
+      "size": 42890,
+      "sha256": "c93955f071f9fd3a3440611d7a2bc516534607450c947c29adf8e4df151065c6"
+    },
+    {
+      "path": "ripgrep/crates/ignore/src/gitignore.rs",
+      "source": "ripgrep",
+      "member": "crates/ignore/src/gitignore.rs",
+      "size": 29424,
+      "sha256": "cab1116fe09ae360c3535c9c53b070674a53442da0c71beffea1303699d8f956"
+    },
+    {
+      "path": "ripgrep/crates/ignore/src/lib.rs",
+      "source": "ripgrep",
+      "member": "crates/ignore/src/lib.rs",
+      "size": 18507,
+      "sha256": "0b5b9252d82a6d6af8aec39dcddab13c44660a46e2f517ab0d29549a284a8764"
+    },
+    {
+      "path": "ripgrep/crates/ignore/src/overrides.rs",
+      "source": "ripgrep",
+      "member": "crates/ignore/src/overrides.rs",
+      "size": 8848,
+      "sha256": "7f32f4b4e2e9e345dd29b8e8ddb99ca301bfa2f885f3b75c7f5ea0d9ae70beb2"
+    },
+    {
+      "path": "ripgrep/crates/ignore/src/pathutil.rs",
+      "source": "ripgrep",
+      "member": "crates/ignore/src/pathutil.rs",
+      "size": 4387,
+      "sha256": "d0fb48f0ff1d2e0ff0462bf7b8ee80f7133f2fffaac299bef966b821ee42f442"
+    },
+    {
+      "path": "ripgrep/crates/ignore/src/types.rs",
+      "source": "ripgrep",
+      "member": "crates/ignore/src/types.rs",
+      "size": 19710,
+      "sha256": "298b659d48466893d754a4d4fd66ea0183569313629f52af9431d583e0cdbabc"
+    },
+    {
+      "path": "ripgrep/crates/ignore/src/walk.rs",
+      "source": "ripgrep",
+      "member": "crates/ignore/src/walk.rs",
+      "size": 77933,
+      "sha256": "91e6c323ad22ce7e8a24e31e6b8f42fa410dd034c1f341cf5da535e77f1f15a6"
+    },
+    {
+      "path": "ripgrep/crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "source": "ripgrep",
+      "member": "crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "size": 12356,
+      "sha256": "715fa13a13c1bec0731c14dbb0b81f12d74b2c021e110474e4cbc76fd13af7f2"
+    },
+    {
+      "path": "ripgrep/crates/matcher/README.md",
+      "source": "ripgrep",
+      "member": "crates/matcher/README.md",
+      "size": 822,
+      "sha256": "c14e2251a0164b86e8e9d232c547651d750c635d7ac8e7b29bae3247e5473e82"
+    },
+    {
+      "path": "ripgrep/crates/matcher/src/interpolate.rs",
+      "source": "ripgrep",
+      "member": "crates/matcher/src/interpolate.rs",
+      "size": 8615,
+      "sha256": "0dfc325d1f741522b5e558a0cb64347f893944b02285581ccda6b6012abe9dbf"
+    },
+    {
+      "path": "ripgrep/crates/matcher/src/lib.rs",
+      "source": "ripgrep",
+      "member": "crates/matcher/src/lib.rs",
+      "size": 46395,
+      "sha256": "1a0ebbbb902f17f74b7469312f95e14a04169b34f94cb9e7fb3465a97ab5c3d4"
+    },
+    {
+      "path": "ripgrep/crates/matcher/tests/test_matcher.rs",
+      "source": "ripgrep",
+      "member": "crates/matcher/tests/test_matcher.rs",
+      "size": 6450,
+      "sha256": "daaff26c1359e5b18b5df6262c3404ae50cfa50c03ba35a3bb61e498d08b2643"
+    },
+    {
+      "path": "ripgrep/crates/matcher/tests/tests.rs",
+      "source": "ripgrep",
+      "member": "crates/matcher/tests/tests.rs",
+      "size": 29,
+      "sha256": "a6a20ad15557f2c485f45bf0f1b4afdb1a5b6c3839a4db44c93ee1470db92670"
+    },
+    {
+      "path": "ripgrep/crates/matcher/tests/util.rs",
+      "source": "ripgrep",
+      "member": "crates/matcher/tests/util.rs",
+      "size": 2511,
+      "sha256": "386ea13b1ed055a5b1202aab1a1cfb94ebcb580aca50da205d303f2870bacb79"
+    },
+    {
+      "path": "ripgrep/crates/pcre2/README.md",
+      "source": "ripgrep",
+      "member": "crates/pcre2/README.md",
+      "size": 998,
+      "sha256": "9a8e0c090111340c3a39f4f67aa55d3545a774bc1b97a6801ea7c607f5649562"
+    },
+    {
+      "path": "ripgrep/crates/pcre2/src/error.rs",
+      "source": "ripgrep",
+      "member": "crates/pcre2/src/error.rs",
+      "size": 1338,
+      "sha256": "a1d5c41111a55c81a640333b05f8edd41088df9632cc5b20e19fa0eda5ba75b7"
+    },
+    {
+      "path": "ripgrep/crates/pcre2/src/lib.rs",
+      "source": "ripgrep",
+      "member": "crates/pcre2/src/lib.rs",
+      "size": 308,
+      "sha256": "e15a9899c2726518e140e7c464f16ab33928a6da111e75432587e15e2dce48bf"
+    },
+    {
+      "path": "ripgrep/crates/pcre2/src/matcher.rs",
+      "source": "ripgrep",
+      "member": "crates/pcre2/src/matcher.rs",
+      "size": 17724,
+      "sha256": "2c0680df89b3c3a9b03b3221d0d7858aabbf5ccd6e65ed6ecb67ba1c4a224168"
+    },
+    {
+      "path": "ripgrep/crates/printer/README.md",
+      "source": "ripgrep",
+      "member": "crates/printer/README.md",
+      "size": 742,
+      "sha256": "cea6caa7bb8aff076993d681dcea8e03fecdd6a9b06dafeb6cc6040e92c31403"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/color.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/color.rs",
+      "size": 12425,
+      "sha256": "6f1e1d684699a3d69fecbae98ee24dadf3bdd7a877d1e9a725fcf1c39bb829c2"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/counter.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/counter.rs",
+      "size": 2267,
+      "sha256": "ea4c5558d8ca442f91c06108dce64aa01c87517213c6731f9cc5a70cf39eca04"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/hyperlink.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/hyperlink.rs",
+      "size": 35593,
+      "sha256": "137d583afef5a8194c02f93700eaa3ca23c14a73edd86ecec237e5b130c4bd61"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/hyperlink_aliases.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/hyperlink_aliases.rs",
+      "size": 2981,
+      "sha256": "493ef1c9b7ec904a61396d9ed0c06af14258984cd22e4319debf68aa01f9831b"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/json.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/json.rs",
+      "size": 36926,
+      "sha256": "774109b83862c09705325e7e74be8e271e4d241cedf943927bc130b1171cd19c"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/jsont.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/jsont.rs",
+      "size": 9769,
+      "sha256": "15300ddace5d1bcdf2e6946f96eeb1492082bb3a50c95321a9f516ad043330ad"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/lib.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/lib.rs",
+      "size": 3545,
+      "sha256": "7202f6d2c2833655308ca21545e8661d3a9c3c2ada00a9e938c8c197a8e18100"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/macros.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/macros.rs",
+      "size": 670,
+      "sha256": "fba6a3f245286c63f6f031a3a3d1bee56bf1eab83bd81a258ad2ddd32aadbb67"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/path.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/path.rs",
+      "size": 6250,
+      "sha256": "733d31ce45d34bc521d35fa63494f10b0fc73760496c5181a51a1473b672d234"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/standard.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/standard.rs",
+      "size": 132068,
+      "sha256": "7602e247709c4b09628240aec7b46f96c4478a20519fa76b2ef23e54388fad88"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/stats.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/stats.rs",
+      "size": 4837,
+      "sha256": "fa7c96c4dd83892f19d9bc5d9a0e486c6d7b252f6c7f507da3cd090809bb48a1"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/summary.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/summary.rs",
+      "size": 40668,
+      "sha256": "01afd2f5c59ac67a1e8f6ab6d5ac86fd8c8377c1d4473ee92058a2665be70e7e"
+    },
+    {
+      "path": "ripgrep/crates/printer/src/util.rs",
+      "source": "ripgrep",
+      "member": "crates/printer/src/util.rs",
+      "size": 19920,
+      "sha256": "96b07ca2cdb75975ce72d6da9e402f8e857173b2b36c5b29be87886e9c999116"
+    },
+    {
+      "path": "ripgrep/crates/regex/README.md",
+      "source": "ripgrep",
+      "member": "crates/regex/README.md",
+      "size": 848,
+      "sha256": "ace5a38c993db0a725edd69233d6692761779531c5582c3dc07f5f94f8e03eb0"
+    },
+    {
+      "path": "ripgrep/crates/regex/src/ast.rs",
+      "source": "ripgrep",
+      "member": "crates/regex/src/ast.rs",
+      "size": 6305,
+      "sha256": "9e45d49f5a06afc87a492b86845a32055e4a7e448474f98990c8d27fb034a9b8"
+    },
+    {
+      "path": "ripgrep/crates/regex/src/ban.rs",
+      "source": "ripgrep",
+      "member": "crates/regex/src/ban.rs",
+      "size": 2673,
+      "sha256": "9e82e6eef84871c7f9f4857e805525d3c1b506e2906d4d55933d64a78d36aa46"
+    },
+    {
+      "path": "ripgrep/crates/regex/src/config.rs",
+      "source": "ripgrep",
+      "member": "crates/regex/src/config.rs",
+      "size": 14512,
+      "sha256": "81fbeb214b8bf7b21567b2c744673165664a19424574894091fd5f6ebf3d85cb"
+    },
+    {
+      "path": "ripgrep/crates/regex/src/error.rs",
+      "source": "ripgrep",
+      "member": "crates/regex/src/error.rs",
+      "size": 3183,
+      "sha256": "af7b8bfe1575546a9a31780c009bbf315a81a02f823099da34f106e416743ffd"
+    },
+    {
+      "path": "ripgrep/crates/regex/src/lib.rs",
+      "source": "ripgrep",
+      "member": "crates/regex/src/lib.rs",
+      "size": 323,
+      "sha256": "1aaa3edac9982c2aea9522c0381a17a6204f826419d58876531fb9de4b13e22a"
+    },
+    {
+      "path": "ripgrep/crates/regex/src/literal.rs",
+      "source": "ripgrep",
+      "member": "crates/regex/src/literal.rs",
+      "size": 38175,
+      "sha256": "a0b593514d4a1b66962e2d0d6e6425b5fc1e164a164e891bb0b029b7b3052ac0"
+    },
+    {
+      "path": "ripgrep/crates/regex/src/matcher.rs",
+      "source": "ripgrep",
+      "member": "crates/regex/src/matcher.rs",
+      "size": 25563,
+      "sha256": "a66589015a563a7857c106c10d25f534c353f2a35e22043aed002aa0a03eaa46"
+    },
+    {
+      "path": "ripgrep/crates/regex/src/non_matching.rs",
+      "source": "ripgrep",
+      "member": "crates/regex/src/non_matching.rs",
+      "size": 5255,
+      "sha256": "197c6a6e372644a8942f503848d7d1c7749dbbe9694fb6e65073c62cf92a9769"
+    },
+    {
+      "path": "ripgrep/crates/regex/src/strip.rs",
+      "source": "ripgrep",
+      "member": "crates/regex/src/strip.rs",
+      "size": 6329,
+      "sha256": "5cb1a33c97984429dc78a36fcc968f19e4107484aee6785cfec7ea91e3ff126a"
+    },
+    {
+      "path": "ripgrep/crates/searcher/README.md",
+      "source": "ripgrep",
+      "member": "crates/searcher/README.md",
+      "size": 906,
+      "sha256": "4f336034cdbcc9ff88e0db69b34813eebf0a13881705b8f63e9ccc3db3f290eb"
+    },
+    {
+      "path": "ripgrep/crates/searcher/examples/search-stdin.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/examples/search-stdin.rs",
+      "size": 753,
+      "sha256": "a1e0533ac62d8dbba5a169399d63583ceb76b20c1b9dc52c314869915c91b3cd"
+    },
+    {
+      "path": "ripgrep/crates/searcher/src/lib.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/src/lib.rs",
+      "size": 3718,
+      "sha256": "d215067a59b698d935d39ce0e13deb84ecb993f8b6077c2361617b86847e8277"
+    },
+    {
+      "path": "ripgrep/crates/searcher/src/line_buffer.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/src/line_buffer.rs",
+      "size": 34696,
+      "sha256": "6f443b3005ae7ece0f7f51dd255d83b542e019a09c72130cbd21bb254f37b1b2"
+    },
+    {
+      "path": "ripgrep/crates/searcher/src/lines.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/src/lines.rs",
+      "size": 16462,
+      "sha256": "37ec6404ed642b0692a726e21313acadae8ca4202da859d6421d5dfd44594bc1"
+    },
+    {
+      "path": "ripgrep/crates/searcher/src/macros.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/src/macros.rs",
+      "size": 739,
+      "sha256": "8514cf191aef22ad187ffe84d48f2edf1e9e7df04e963d8ad8026f5137ed17c2"
+    },
+    {
+      "path": "ripgrep/crates/searcher/src/searcher/core.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/src/searcher/core.rs",
+      "size": 20863,
+      "sha256": "37b36f51f0ffbaa9eb107c41406c0098bea3c09a64141a393f17295c11888035"
+    },
+    {
+      "path": "ripgrep/crates/searcher/src/searcher/glue.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/src/searcher/glue.rs",
+      "size": 49831,
+      "sha256": "6a10f572bfb070e621b652b7aaee712ffd1ab37348c1b0aa9a653f7b8acefa28"
+    },
+    {
+      "path": "ripgrep/crates/searcher/src/searcher/mmap.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/src/searcher/mmap.rs",
+      "size": 3694,
+      "sha256": "bf6a96b61673c73f00b871ce9adc1cf1a0cc5fbc3a2991be719303c9fb19928a"
+    },
+    {
+      "path": "ripgrep/crates/searcher/src/searcher/mod.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/src/searcher/mod.rs",
+      "size": 39771,
+      "sha256": "b1ba96daf77e0298c70bc2b381d2b50b358b632c6dfa954e5a0925f0ace32e27"
+    },
+    {
+      "path": "ripgrep/crates/searcher/src/sink.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/src/sink.rs",
+      "size": 23123,
+      "sha256": "703f25a0f08dac9a39742cabc029a332c7e027d9356980d6ffeec34f68953657"
+    },
+    {
+      "path": "ripgrep/crates/searcher/src/testutil.rs",
+      "source": "ripgrep",
+      "member": "crates/searcher/src/testutil.rs",
+      "size": 27568,
+      "sha256": "34055e71ee830bdc897686554a3be65499150e1d67a7d4cde45d7bf9aa9e9e2b"
+    },
+    {
+      "path": "ripgrep/pkg/brew/ripgrep-bin.rb",
+      "source": "ripgrep",
+      "member": "pkg/brew/ripgrep-bin.rb",
+      "size": 804,
+      "sha256": "7b940ec4746b307ca39ca674d7bbbd747c81a5cf507b3191d9530507340800bb"
+    },
+    {
+      "path": "ripgrep/pkg/windows/Manifest.xml",
+      "source": "ripgrep",
+      "member": "pkg/windows/Manifest.xml",
+      "size": 1423,
+      "sha256": "774ea49feb1503dceed70d56e24946b4fe5083929fb38252559b00d8b2cc48a0"
+    },
+    {
+      "path": "ripgrep/pkg/windows/README.md",
+      "source": "ripgrep",
+      "member": "pkg/windows/README.md",
+      "size": 710,
+      "sha256": "61ff8e95faeed8928d22bd2454aadbf17bb0d5dcff8fe1ad9945defe0af3e7f8"
+    },
+    {
+      "path": "ripgrep/tests/binary.rs",
+      "source": "ripgrep",
+      "member": "tests/binary.rs",
+      "size": 11829,
+      "sha256": "3dff854f3ec643a0aa25f39d9e50aa77472793f091f8eb5f7a1708d662e2a005"
+    },
+    {
+      "path": "ripgrep/tests/data/sherlock-nul.txt",
+      "source": "ripgrep",
+      "member": "tests/data/sherlock-nul.txt",
+      "size": 90314,
+      "sha256": "bb7dbf2cee6e40774bed465384bb2512307b0f63a31013c6812131096d083466"
+    },
+    {
+      "path": "ripgrep/tests/feature.rs",
+      "source": "ripgrep",
+      "member": "tests/feature.rs",
+      "size": 38561,
+      "sha256": "4ec6e924d198b1b2d74e09a36f787d7b695a806850669c79692d24763cc55615"
+    },
+    {
+      "path": "ripgrep/tests/hay.rs",
+      "source": "ripgrep",
+      "member": "tests/hay.rs",
+      "size": 834,
+      "sha256": "ee8d21ddd6f053f2f5427847e2a7bdc80913570cc410ced9508465ff66549684"
+    },
+    {
+      "path": "ripgrep/tests/json.rs",
+      "source": "ripgrep",
+      "member": "tests/json.rs",
+      "size": 10505,
+      "sha256": "4477e9e96203b1d7e8fddb306da2671161c6496086e89e783c0f5bed7f6776d0"
+    },
+    {
+      "path": "ripgrep/tests/macros.rs",
+      "source": "ripgrep",
+      "member": "tests/macros.rs",
+      "size": 1583,
+      "sha256": "27d0ee206b162f26f718e526a2f303ad587db76703648ba06c1ee3cb2877d3ee"
+    },
+    {
+      "path": "ripgrep/tests/misc.rs",
+      "source": "ripgrep",
+      "member": "tests/misc.rs",
+      "size": 36281,
+      "sha256": "fc15ad3c9911ca0381e6a2c21c11c50f443918eda46abb8fc93c252d1a10ac62"
+    },
+    {
+      "path": "ripgrep/tests/multiline.rs",
+      "source": "ripgrep",
+      "member": "tests/multiline.rs",
+      "size": 4002,
+      "sha256": "2c1b987f0fe60905e9cfe4edc19738f7693b12f79661d4b66252f4295e03d03d"
+    },
+    {
+      "path": "ripgrep/tests/regression.rs",
+      "source": "ripgrep",
+      "member": "tests/regression.rs",
+      "size": 38091,
+      "sha256": "a6dc71552b446256065cfaac6e02c30fd77232ee951d0e06b2a57ee279e40f71"
+    },
+    {
+      "path": "ripgrep/tests/tests.rs",
+      "source": "ripgrep",
+      "member": "tests/tests.rs",
+      "size": 585,
+      "sha256": "b262a442a4b986f38ef6ddcf3c059a934d770fa07a9a9296545be15aa67cb18f"
+    },
+    {
+      "path": "ripgrep/tests/util.rs",
+      "source": "ripgrep",
+      "member": "tests/util.rs",
+      "size": 17396,
+      "sha256": "96b3c3bb14f3a66f5e034415032ffc4225235efb72398403c47d4131eff05a4d"
+    }
+  ]
+}
