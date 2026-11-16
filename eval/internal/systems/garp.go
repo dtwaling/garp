@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,16 @@ type Run struct {
 	TimedOut int
 	Err      string
 	Wall     time.Duration
+}
+
+// GarpVersion returns the trimmed first line of the binary's --version output.
+func GarpVersion(bin string) (string, error) {
+	out, err := exec.Command(bin, "--version").Output()
+	if err != nil {
+		return "", fmt.Errorf("garp version: %w", err)
+	}
+	line, _, _ := strings.Cut(string(out), "\n")
+	return strings.TrimSpace(line), nil
 }
 
 // RunGarp runs either garp version once, with stdin closed. rootAbs is the

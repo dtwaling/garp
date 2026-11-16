@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	// Keep the subprocess build's dependency graph in this nested module's
@@ -36,6 +37,12 @@ func TestRunGarp(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	root := writeCorpus(t, map[string]string{"a.txt": "alpha beta", "b.txt": "alpha", "c.go": "package alpha"})
+	if version, err := GarpVersion(bin); err != nil || !strings.HasPrefix(version, "garp v") || strings.Contains(version, "\n") || version != strings.TrimSpace(version) {
+		t.Fatalf("version: %q, %v", version, err)
+	}
+	if _, err := GarpVersion(filepath.Join(root, "missing")); err == nil {
+		t.Fatal("missing version executable must fail")
+	}
 	for _, tc := range []struct {
 		corpus string
 		want   []string

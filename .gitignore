@@ -51,3 +51,4 @@ bin/*
 !bin/garp.exe
 dist/
 gh-body-files/
+eval/results/latest.*
