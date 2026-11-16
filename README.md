@@ -497,6 +497,7 @@ garp/
 |   `-- scope.go         # --startdir / --pathscope / --max-filesize validation
 |-- config/
 |   `-- types.go         # Supported types, globs, skip-dir list
+|-- eval/                # Retrieval-quality eval harness (own go.mod; see eval/README.md)
 |-- bin/                 # Prebuilt binary
 |-- Makefile
 `-- README.md
@@ -529,6 +530,16 @@ go vet ./...                                               # vet
 The committed `bin/garp` and `bin/garp.exe` are produced only by `make release`
 (`CGO_ENABLED=0`, `-trimpath`, stripped symbol table + DWARF, embedded version),
 built from a clean tree and committed on their own.
+
+## Development
+
+The [retrieval-quality eval harness](eval/README.md) compares the working tree
+against the previous release, BM25, and an rg pipeline on pinned, judged corpora.
+Use `make eval-fetch` to fetch corpora and build the previous release,
+`make eval` to run the offline regression gate, `make eval-baseline` to record
+a release baseline, and `make eval-test` for harness unit tests. `make eval`
+is not part of `make test`; the nested module keeps its dependencies and tests
+separate from the root module.
 
 ## TUI navigation
 

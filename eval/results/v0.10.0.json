@@ -1,0 +1,4311 @@
+{
+  "schema": 1,
+  "harness": {
+    "query_sha256": {
+      "code": "11d5e12664ae6d45cd441c853881da74077ba090a3a07c750eaea1b8178db039",
+      "docs": "04a092fd82e10d7dc36a85aff7de5d28630f85b8a3e9c865c73b239050a0055e"
+    },
+    "manifest_sha256": {
+      "code": "6cc4ccd8581d0bff3403e5e28f9a9ebb3b190e7ca8127e359b3702de60f00b3f",
+      "docs": "abd0f4b9a9f6da4216ce8612353e84b53854cce609744eca90fbc22a1d845e3a"
+    },
+    "tokenizer": "o200k_base tiktoken-go/tokenizer v0.10.0",
+    "token_budget": {
+      "code": 2000,
+      "docs": 2000
+    },
+    "rg_version": "ripgrep 14.1.0"
+  },
+  "systems": {
+    "candidate": {
+      "version": "garp v0.10.0"
+    },
+    "previous": {
+      "version": "garp v0.10.0",
+      "ref": "v0.10.0"
+    },
+    "bm25": {
+      "k1": 1.2,
+      "b": 0.75
+    },
+    "rg": {}
+  },
+  "corpora": {
+    "code": {
+      "aggregate": {
+        "bm25": {
+          "r1": 0.487103,
+          "r5": 0.75496,
+          "r10": 0.875,
+          "mrr10": 0.635185,
+          "hit_n": null,
+          "tokens_mean": null,
+          "tokens_p50": null,
+          "unjudged10": 0
+        },
+        "candidate": {
+          "r1": 0.415675,
+          "r5": 0.58631,
+          "r10": 0.616071,
+          "mrr10": 0.504195,
+          "hit_n": 0.40873,
+          "tokens_mean": 1541.02381,
+          "tokens_p50": 903,
+          "unjudged10": 0
+        },
+        "previous": {
+          "r1": 0.415675,
+          "r5": 0.58631,
+          "r10": 0.616071,
+          "mrr10": 0.504195,
+          "hit_n": 0.40873,
+          "tokens_mean": 1541.02381,
+          "tokens_p50": 903,
+          "unjudged10": 0
+        },
+        "rg": {
+          "r1": 0.217262,
+          "r5": 0.419643,
+          "r10": 0.541667,
+          "mrr10": 0.341138,
+          "hit_n": null,
+          "tokens_mean": 42.119048,
+          "tokens_p50": 17,
+          "unjudged10": 0
+        }
+      },
+      "by_kind": {
+        "proximity": {
+          "bm25": {
+            "r1": 0.741667,
+            "r5": 0.958333,
+            "r10": 0.983333,
+            "mrr10": 0.872222,
+            "hit_n": null,
+            "tokens_mean": null,
+            "tokens_p50": null,
+            "unjudged10": 0
+          },
+          "candidate": {
+            "r1": 0.741667,
+            "r5": 0.775,
+            "r10": 0.858333,
+            "mrr10": 0.809524,
+            "hit_n": 0.5,
+            "tokens_mean": 1420.4,
+            "tokens_p50": 733,
+            "unjudged10": 0
+          },
+          "previous": {
+            "r1": 0.741667,
+            "r5": 0.775,
+            "r10": 0.858333,
+            "mrr10": 0.809524,
+            "hit_n": 0.5,
+            "tokens_mean": 1420.4,
+            "tokens_p50": 733,
+            "unjudged10": 0
+          },
+          "rg": {
+            "r1": 0.475,
+            "r5": 0.841667,
+            "r10": 0.916667,
+            "mrr10": 0.688333,
+            "hit_n": null,
+            "tokens_mean": 28.733333,
+            "tokens_p50": 16,
+            "unjudged10": 0
+          }
+        },
+        "single": {
+          "bm25": {
+            "r1": 0.361111,
+            "r5": 0.777778,
+            "r10": 0.916667,
+            "mrr10": 0.589583,
+            "hit_n": null,
+            "tokens_mean": null,
+            "tokens_p50": null,
+            "unjudged10": 0
+          },
+          "candidate": {
+            "r1": 0.361111,
+            "r5": 0.75,
+            "r10": 0.75,
+            "mrr10": 0.541667,
+            "hit_n": 0.555556,
+            "tokens_mean": 2796.666667,
+            "tokens_p50": 1931,
+            "unjudged10": 0
+          },
+          "previous": {
+            "r1": 0.361111,
+            "r5": 0.75,
+            "r10": 0.75,
+            "mrr10": 0.541667,
+            "hit_n": 0.555556,
+            "tokens_mean": 2796.666667,
+            "tokens_p50": 1931,
+            "unjudged10": 0
+          },
+          "rg": {
+            "r1": 0.166667,
+            "r5": 0.416667,
+            "r10": 0.75,
+            "mrr10": 0.333565,
+            "hit_n": null,
+            "tokens_mean": 98.25,
+            "tokens_p50": 60,
+            "unjudged10": 0
+          }
+        },
+        "synonym": {
+          "bm25": {
+            "r1": 0.333333,
+            "r5": 0.533333,
+            "r10": 0.733333,
+            "mrr10": 0.43463,
+            "hit_n": null,
+            "tokens_mean": null,
+            "tokens_p50": null,
+            "unjudged10": 0
+          },
+          "candidate": {
+            "r1": 0.133333,
+            "r5": 0.266667,
+            "r10": 0.266667,
+            "mrr10": 0.168889,
+            "hit_n": 0.2,
+            "tokens_mean": 657.133333,
+            "tokens_p50": 514,
+            "unjudged10": 0
+          },
+          "previous": {
+            "r1": 0.133333,
+            "r5": 0.266667,
+            "r10": 0.266667,
+            "mrr10": 0.168889,
+            "hit_n": 0.2,
+            "tokens_mean": 657.133333,
+            "tokens_p50": 514,
+            "unjudged10": 0
+          },
+          "rg": {
+            "r1": 0,
+            "r5": 0,
+            "r10": 0,
+            "mrr10": 0,
+            "hit_n": null,
+            "tokens_mean": 10.6,
+            "tokens_p50": 3,
+            "unjudged10": 0
+          }
+        }
+      },
+      "queries": [
+        {
+          "id": "code-g-001",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                8
+              ],
+              "returned": 21,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                5
+              ],
+              "returned": 7,
+              "tokens": 1564,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                5
+              ],
+              "returned": 7,
+              "tokens": 1564,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 7,
+              "tokens": 44,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-002",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 22,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                7
+              ],
+              "returned": 7,
+              "tokens": 1612,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                7
+              ],
+              "returned": 7,
+              "tokens": 1612,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 3,
+              "tokens": 13,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-003",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                11,
+                10
+              ],
+              "returned": 23,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0,
+                0
+              ],
+              "returned": 2,
+              "tokens": 494,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0,
+                0
+              ],
+              "returned": 2,
+              "tokens": 494,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0,
+                0
+              ],
+              "returned": 3,
+              "tokens": 20,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-004",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 22,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                4
+              ],
+              "returned": 10,
+              "tokens": 2267,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                4
+              ],
+              "returned": 10,
+              "tokens": 2267,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                10
+              ],
+              "returned": 10,
+              "tokens": 60,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-005",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                11,
+                10
+              ],
+              "returned": 14,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0,
+                0
+              ],
+              "returned": 2,
+              "tokens": 514,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0,
+                0
+              ],
+              "returned": 2,
+              "tokens": 514,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0,
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-006",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 18,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 301,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 301,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": 11,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-007",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 25,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": 508,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": 508,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 3,
+              "tokens": 19,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-008",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 11,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 4,
+              "tokens": 906,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 4,
+              "tokens": 906,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-009",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                8
+              ],
+              "returned": 24,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                15
+              ],
+              "returned": 24,
+              "tokens": 5116,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                15
+              ],
+              "returned": 24,
+              "tokens": 5116,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                22
+              ],
+              "returned": 24,
+              "tokens": 157,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-010",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 3,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": 526,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": 526,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": 10,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-011",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 7,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 257,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 257,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 4,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-012",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 14,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 662,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 662,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 16,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-013",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 6,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 6,
+              "tokens": 1381,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 6,
+              "tokens": 1381,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 6,
+              "tokens": 32,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-014",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                9
+              ],
+              "returned": 33,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 4,
+              "tokens": 903,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 4,
+              "tokens": 903,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 3,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-015",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 21,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 720,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 720,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 6,
+              "tokens": 35,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-016",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                4
+              ],
+              "returned": 47,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 7,
+              "tokens": 1610,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 7,
+              "tokens": 1610,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 7,
+              "tokens": 44,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-017",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                13
+              ],
+              "returned": 31,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 3,
+              "tokens": 630,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 3,
+              "tokens": 630,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-g-018",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                5
+              ],
+              "returned": 24,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                11
+              ],
+              "returned": 24,
+              "tokens": 4926,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                11
+              ],
+              "returned": 24,
+              "tokens": 4926,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                21
+              ],
+              "returned": 24,
+              "tokens": 152,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-001",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 36,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 733,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 733,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": 17,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-002",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 27,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 279,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 279,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 3,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-003",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 27,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                4
+              ],
+              "returned": 9,
+              "tokens": 1931,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                4
+              ],
+              "returned": 9,
+              "tokens": 1931,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 9,
+              "tokens": 77,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-004",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": 530,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": 530,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 8,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-005",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 30,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 275,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 275,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 9,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-006",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1,
+                7,
+                13,
+                3,
+                2,
+                12,
+                9,
+                8
+              ],
+              "returned": 25,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                2,
+                6,
+                4,
+                5,
+                1,
+                12,
+                7,
+                3
+              ],
+              "returned": 12,
+              "tokens": 2448,
+              "hit_n": 0.5,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                2,
+                6,
+                4,
+                5,
+                1,
+                12,
+                7,
+                3
+              ],
+              "returned": 12,
+              "tokens": 2448,
+              "hit_n": 0.5,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                11,
+                5,
+                4,
+                6,
+                12,
+                3,
+                2,
+                1
+              ],
+              "returned": 13,
+              "tokens": 95,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-007",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                18
+              ],
+              "returned": 44,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                18
+              ],
+              "returned": 37,
+              "tokens": 7662,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                18
+              ],
+              "returned": 37,
+              "tokens": 7662,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                22
+              ],
+              "returned": 37,
+              "tokens": 334,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-008",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                17
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 5,
+              "tokens": 1144,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 5,
+              "tokens": 1144,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 4,
+              "tokens": 30,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-009",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 20,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 9,
+              "tokens": 1915,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 9,
+              "tokens": 1915,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 3,
+              "tokens": 16,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-010",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1,
+                7,
+                8
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1,
+                2,
+                5
+              ],
+              "returned": 6,
+              "tokens": 1282,
+              "hit_n": 0.666667,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1,
+                2,
+                5
+              ],
+              "returned": 6,
+              "tokens": 1282,
+              "hit_n": 0.666667,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                3,
+                4,
+                2
+              ],
+              "returned": 6,
+              "tokens": 32,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-011",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 7,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 86,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 86,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-012",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 785,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 785,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 2,
+              "tokens": 12,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-013",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 15,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 15,
+              "tokens": 3005,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 15,
+              "tokens": 3005,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                9
+              ],
+              "returned": 15,
+              "tokens": 119,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-014",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                4
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 2,
+              "tokens": 535,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 2,
+              "tokens": 535,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 3,
+              "tokens": 27,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-015",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                11
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 8,
+              "tokens": 1757,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 8,
+              "tokens": 1757,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 5,
+              "tokens": 31,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-016",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 273,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 273,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 8,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-017",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 43,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 4,
+              "tokens": 915,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 4,
+              "tokens": 915,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 8,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-018",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 33,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 280,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 280,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 3,
+              "tokens": 15,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-019",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 12,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 12,
+              "tokens": 2515,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 12,
+              "tokens": 2515,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                8
+              ],
+              "returned": 12,
+              "tokens": 108,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-020",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                12
+              ],
+              "returned": 27,
+              "tokens": 5651,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                12
+              ],
+              "returned": 27,
+              "tokens": 5651,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                8
+              ],
+              "returned": 11,
+              "tokens": 93,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-021",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 7,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 7,
+              "tokens": 1592,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 7,
+              "tokens": 1592,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                6
+              ],
+              "returned": 7,
+              "tokens": 56,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-022",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 23,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 85,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 85,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-023",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 16,
+              "tokens": 3465,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 16,
+              "tokens": 3465,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                5
+              ],
+              "returned": 6,
+              "tokens": 51,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "code-r-024",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                4
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 683,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": 683,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        }
+      ]
+    },
+    "docs": {
+      "aggregate": {
+        "bm25": {
+          "r1": 0.638889,
+          "r5": 0.869048,
+          "r10": 0.892857,
+          "mrr10": 0.754195,
+          "hit_n": null,
+          "tokens_mean": null,
+          "tokens_p50": null,
+          "unjudged10": 0
+        },
+        "candidate": {
+          "r1": 0.519841,
+          "r5": 0.630952,
+          "r10": 0.630952,
+          "mrr10": 0.59127,
+          "hit_n": 0.607143,
+          "tokens_mean": 343.642857,
+          "tokens_p50": 262,
+          "unjudged10": 0
+        },
+        "previous": {
+          "r1": 0.519841,
+          "r5": 0.630952,
+          "r10": 0.630952,
+          "mrr10": 0.59127,
+          "hit_n": 0.607143,
+          "tokens_mean": 343.642857,
+          "tokens_p50": 262,
+          "unjudged10": 0
+        },
+        "rg": {
+          "r1": 0.222222,
+          "r5": 0.297619,
+          "r10": 0.297619,
+          "mrr10": 0.269841,
+          "hit_n": null,
+          "tokens_mean": 6.452381,
+          "tokens_p50": 0,
+          "unjudged10": 0
+        }
+      },
+      "by_kind": {
+        "proximity": {
+          "bm25": {
+            "r1": 0.907407,
+            "r5": 1,
+            "r10": 1,
+            "mrr10": 0.972222,
+            "hit_n": null,
+            "tokens_mean": null,
+            "tokens_p50": null,
+            "unjudged10": 0
+          },
+          "candidate": {
+            "r1": 0.851852,
+            "r5": 0.944444,
+            "r10": 0.944444,
+            "mrr10": 0.916667,
+            "hit_n": 0.888889,
+            "tokens_mean": 344.111111,
+            "tokens_p50": 278,
+            "unjudged10": 0
+          },
+          "previous": {
+            "r1": 0.851852,
+            "r5": 0.944444,
+            "r10": 0.944444,
+            "mrr10": 0.916667,
+            "hit_n": 0.888889,
+            "tokens_mean": 344.111111,
+            "tokens_p50": 278,
+            "unjudged10": 0
+          },
+          "rg": {
+            "r1": 0.407407,
+            "r5": 0.5,
+            "r10": 0.5,
+            "mrr10": 0.462963,
+            "hit_n": null,
+            "tokens_mean": 7.777778,
+            "tokens_p50": 6,
+            "unjudged10": 0
+          }
+        },
+        "single": {
+          "bm25": {
+            "r1": 0.625,
+            "r5": 0.791667,
+            "r10": 0.791667,
+            "mrr10": 0.75,
+            "hit_n": null,
+            "tokens_mean": null,
+            "tokens_p50": null,
+            "unjudged10": 0
+          },
+          "candidate": {
+            "r1": 0.541667,
+            "r5": 0.791667,
+            "r10": 0.791667,
+            "mrr10": 0.694444,
+            "hit_n": 0.791667,
+            "tokens_mean": 387.25,
+            "tokens_p50": 262,
+            "unjudged10": 0
+          },
+          "previous": {
+            "r1": 0.541667,
+            "r5": 0.791667,
+            "r10": 0.791667,
+            "mrr10": 0.694444,
+            "hit_n": 0.791667,
+            "tokens_mean": 387.25,
+            "tokens_p50": 262,
+            "unjudged10": 0
+          },
+          "rg": {
+            "r1": 0.166667,
+            "r5": 0.291667,
+            "r10": 0.291667,
+            "mrr10": 0.25,
+            "hit_n": null,
+            "tokens_mean": 5.333333,
+            "tokens_p50": 0,
+            "unjudged10": 0
+          }
+        },
+        "synonym": {
+          "bm25": {
+            "r1": 0.25,
+            "r5": 0.75,
+            "r10": 0.833333,
+            "mrr10": 0.431349,
+            "hit_n": null,
+            "tokens_mean": null,
+            "tokens_p50": null,
+            "unjudged10": 0
+          },
+          "candidate": {
+            "r1": 0,
+            "r5": 0,
+            "r10": 0,
+            "mrr10": 0,
+            "hit_n": 0,
+            "tokens_mean": 299.333333,
+            "tokens_p50": 82,
+            "unjudged10": 0
+          },
+          "previous": {
+            "r1": 0,
+            "r5": 0,
+            "r10": 0,
+            "mrr10": 0,
+            "hit_n": 0,
+            "tokens_mean": 299.333333,
+            "tokens_p50": 82,
+            "unjudged10": 0
+          },
+          "rg": {
+            "r1": 0,
+            "r5": 0,
+            "r10": 0,
+            "mrr10": 0,
+            "hit_n": null,
+            "tokens_mean": 5.583333,
+            "tokens_p50": 0,
+            "unjudged10": 0
+          }
+        }
+      },
+      "queries": [
+        {
+          "id": "docs-001",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 262,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 262,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-002",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 78,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 78,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-003",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 20,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 241,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 241,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-004",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 262,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 262,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-005",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 16,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 80,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 80,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-006",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 34,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 2,
+              "tokens": 463,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 2,
+              "tokens": 463,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 2,
+              "tokens": 13,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-007",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 266,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 266,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-008",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 215,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 215,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-009",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 14,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 241,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 241,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-010",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 20,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 260,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 260,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-011",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 20,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 81,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 81,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-012",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 14,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 82,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 82,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 7,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-013",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 246,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 246,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-014",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1,
+                2
+              ],
+              "returned": 2,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1,
+                2
+              ],
+              "returned": 2,
+              "tokens": 470,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1,
+                2
+              ],
+              "returned": 2,
+              "tokens": 470,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0,
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-015",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 48,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 248,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 248,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-016",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 5,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 284,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 284,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-017",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                5
+              ],
+              "returned": 18,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 80,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 80,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-018",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 5,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 82,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 82,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-019",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 278,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 278,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 7,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-020",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 8,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 8,
+              "tokens": 1669,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 8,
+              "tokens": 1669,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 4,
+              "tokens": 32,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-021",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 82,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 82,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-022",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 288,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 288,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 7,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-023",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 5,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 83,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 83,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-024",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 31,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 2,
+              "tokens": 471,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 2,
+              "tokens": 471,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 2,
+              "tokens": 13,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-025",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 260,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 260,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 8,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-026",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                2,
+                0
+              ],
+              "returned": 2,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                2,
+                0
+              ],
+              "returned": 2,
+              "tokens": 421,
+              "hit_n": 0.5,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                2,
+                0
+              ],
+              "returned": 2,
+              "tokens": 421,
+              "hit_n": 0.5,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                2,
+                0
+              ],
+              "returned": 2,
+              "tokens": 17,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-027",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 19,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 278,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 278,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 8,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-028",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                3,
+                2,
+                1
+              ],
+              "returned": 14,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                3,
+                1,
+                2
+              ],
+              "returned": 3,
+              "tokens": 654,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                3,
+                1,
+                2
+              ],
+              "returned": 3,
+              "tokens": 654,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1,
+                2,
+                3
+              ],
+              "returned": 3,
+              "tokens": 26,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-029",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 29,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 81,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 81,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-030",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 22,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 284,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 1,
+              "tokens": 284,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 2,
+              "tokens": 13,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-031",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 79,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 79,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-032",
+          "kind": "single",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 2,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 2,
+              "tokens": 403,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 2,
+              "tokens": 403,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-033",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 7,
+              "tokens": 1381,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                2
+              ],
+              "returned": 7,
+              "tokens": 1381,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 7,
+              "tokens": 49,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-034",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 35,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 273,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 273,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-035",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 24,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 80,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 80,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0
+              ],
+              "returned": 0,
+              "tokens": 0,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-036",
+          "kind": "synonym",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                7,
+                8
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                0,
+                0
+              ],
+              "returned": 9,
+              "tokens": 1725,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                0,
+                0
+              ],
+              "returned": 9,
+              "tokens": 1725,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                0,
+                0
+              ],
+              "returned": 3,
+              "tokens": 21,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-037",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 12,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 278,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 278,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 6,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-038",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 6,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 281,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 281,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 6,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-039",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 3,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 256,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 256,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 6,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-040",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 15,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 281,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 281,
+              "hit_n": 0,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 6,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-041",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 12,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 291,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 291,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 6,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        },
+        {
+          "id": "docs-042",
+          "kind": "proximity",
+          "per_system": {
+            "bm25": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 50,
+              "tokens": null,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "candidate": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 315,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "previous": {
+              "gold_ranks": [
+                1
+              ],
+              "returned": 1,
+              "tokens": 315,
+              "hit_n": 1,
+              "unjudged10": 0,
+              "error": ""
+            },
+            "rg": {
+              "gold_ranks": [
+                3
+              ],
+              "returned": 3,
+              "tokens": 20,
+              "hit_n": null,
+              "unjudged10": 0,
+              "error": ""
+            }
+          }
+        }
+      ]
+    }
+  }
+}
