@@ -1,0 +1,1026 @@
+{
+  "corpus": "docs",
+  "token_budget": 2000,
+  "queries": [
+    {
+      "id": "docs-001",
+      "root": ".",
+      "kind": "single",
+      "need": "Find guidance on whether banks may automatically delay availability of cashier's checks just because counterfeits exist.",
+      "args": [
+        "cashier*"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/279397.pdf"
+        }
+      ],
+      "judged_nonrelevant": []
+    },
+    {
+      "id": "docs-002",
+      "root": ".",
+      "kind": "single",
+      "need": "Find the trail guide describing hiking routes from Leatherwood Ford.",
+      "args": [
+        "Leatherwood"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/331292.pdf"
+        }
+      ],
+      "judged_nonrelevant": []
+    },
+    {
+      "id": "docs-003",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find a public comment arguing that cellphone calls aboard aircraft would cause passenger disputes and distract flight crews.",
+      "args": [
+        "cellphone",
+        "aircraft",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/435465.pdf"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/009353.rtf",
+        "govdocs/069788.xml",
+        "govdocs/141890.xml",
+        "govdocs/266784.pdf",
+        "govdocs/302965.txt",
+        "govdocs/325411.pdf",
+        "govdocs/469113.doc",
+        "govdocs/563572.xml",
+        "govdocs/598856.pdf"
+      ]
+    },
+    {
+      "id": "docs-004",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the account of suspicious activity reports leading to seizure of three million dollars from an unlicensed money remitter.",
+      "args": [
+        "SARs",
+        "remitter",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/455393.pdf"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/007835.txt",
+        "govdocs/085462.pdf"
+      ]
+    },
+    {
+      "id": "docs-005",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find the Dataplot command that overwrites one cell of a matrix with a parameter.",
+      "args": [
+        "matrix",
+        "overwrite"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/464166.pdf"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/003774.txt",
+        "govdocs/004156.rtf",
+        "govdocs/016006.html",
+        "govdocs/037824.docx",
+        "govdocs/090231.html",
+        "govdocs/312772.pdf",
+        "govdocs/325411.pdf",
+        "govdocs/495155.doc",
+        "govdocs/685208.pdf",
+        "govdocs/774221.pdf"
+      ]
+    },
+    {
+      "id": "docs-006",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find the Arizona proposal that pays back college fees for corrections employees and requires five years of continued service.",
+      "args": [
+        "corrections",
+        "fees"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/842747.pdf"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/014819.pdf",
+        "govdocs/049331.doc",
+        "govdocs/080851.txt",
+        "govdocs/133284.pdf",
+        "govdocs/139345.pdf",
+        "govdocs/151049.txt",
+        "govdocs/302965.txt",
+        "govdocs/314521.txt",
+        "govdocs/704296.doc",
+        "govdocs/773506.pdf"
+      ]
+    },
+    {
+      "id": "docs-007",
+      "root": ".",
+      "kind": "single",
+      "need": "Find the fact sheet describing the Middle East Investment Initiative's financing for West Bank small businesses.",
+      "args": [
+        "MEII"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/285215.doc"
+        }
+      ],
+      "judged_nonrelevant": []
+    },
+    {
+      "id": "docs-008",
+      "root": ".",
+      "kind": "single",
+      "need": "Find the announcement of SOFIA civilian recruiting for reconstruction work in Iraq and Afghanistan.",
+      "args": [
+        "SOFIA"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/328128.doc"
+        }
+      ],
+      "judged_nonrelevant": []
+    },
+    {
+      "id": "docs-009",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find which Indiana organization received a VA grant for chronically mentally ill homeless veterans in September 2004.",
+      "args": [
+        "homeless",
+        "Indiana",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/499755.doc"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/017091.docx",
+        "govdocs/057545.txt",
+        "govdocs/129941.txt",
+        "govdocs/133284.pdf",
+        "govdocs/143879.pdf",
+        "govdocs/252017.doc",
+        "govdocs/301363.pdf",
+        "govdocs/500401.doc",
+        "govdocs/800627.pdf"
+      ]
+    },
+    {
+      "id": "docs-010",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the report describing a Costa Rican biologist's bird-monitoring internship at Oregon Caves in May 2007.",
+      "args": [
+        "biologist",
+        "Oregon",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/510434.doc"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/012819.html",
+        "govdocs/015814.html",
+        "govdocs/218978.docx",
+        "govdocs/224940.docx",
+        "govdocs/246353.pdf",
+        "govdocs/301340.doc",
+        "govdocs/484180.xml",
+        "govdocs/576891.xml",
+        "govdocs/671710.pdf"
+      ]
+    },
+    {
+      "id": "docs-011",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find the customs ruling assigning import duties to Australian BURNAID dressings and gel.",
+      "args": [
+        "BURNAID",
+        "tax"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/571315.doc"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/021524.docx",
+        "govdocs/053253.pdf",
+        "govdocs/083776.pdf",
+        "govdocs/133284.pdf",
+        "govdocs/210687.doc",
+        "govdocs/212648.docx",
+        "govdocs/484131.csv",
+        "govdocs/503949.doc",
+        "govdocs/567030.xml"
+      ]
+    },
+    {
+      "id": "docs-012",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find the ETM 461 syllabus explaining how grades are weighted for assignments, exams and participation.",
+      "args": [
+        "contingency",
+        "grading"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/728287.doc"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/000117.rtf",
+        "govdocs/004135.rtf",
+        "govdocs/004320.rtf",
+        "govdocs/010390.rtf",
+        "govdocs/151049.txt",
+        "govdocs/224939.docx",
+        "govdocs/230731.pdf",
+        "govdocs/257628.pdf",
+        "govdocs/846869.pdf"
+      ]
+    },
+    {
+      "id": "docs-013",
+      "root": ".",
+      "kind": "single",
+      "need": "Find the annual preparedness checklist for Interagency Hotshot Crews.",
+      "args": [
+        "hotshot"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/014760.docx"
+        }
+      ],
+      "judged_nonrelevant": []
+    },
+    {
+      "id": "docs-014",
+      "root": ".",
+      "kind": "single",
+      "need": "Find the March 2009 National Register workshop notice with registration logistics and intended attendees.",
+      "args": [
+        "NCSHPO"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/021524.docx"
+        },
+        {
+          "file": "govdocs/212648.docx"
+        }
+      ],
+      "judged_nonrelevant": []
+    },
+    {
+      "id": "docs-015",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the list of trade and civic groups supporting the bipartisan financial rescue package.",
+      "args": [
+        "financial",
+        "rescue",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/021526.docx"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/049331.doc",
+        "govdocs/116733.docx",
+        "govdocs/155586.txt",
+        "govdocs/185221.pdf",
+        "govdocs/539951.pdf",
+        "govdocs/655313.pdf",
+        "govdocs/669536.doc",
+        "govdocs/678396.pdf",
+        "govdocs/725061.doc"
+      ]
+    },
+    {
+      "id": "docs-016",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the Seattle agenda for the October 2008 Librarians and the EHR meeting, including the keynote speaker.",
+      "args": [
+        "librarians",
+        "EHR",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/021528.docx"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/145153.pdf",
+        "govdocs/252017.doc",
+        "govdocs/301809.pdf",
+        "govdocs/503846.pdf"
+      ]
+    },
+    {
+      "id": "docs-017",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find use cases for discovering semantics and serialization schemas for data services on a grid.",
+      "args": [
+        "schema",
+        "catalog"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/036269.docx"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/001857.rtf",
+        "govdocs/001858.rtf",
+        "govdocs/004320.rtf",
+        "govdocs/009320.html",
+        "govdocs/216688.docx",
+        "govdocs/216689.docx",
+        "govdocs/224363.docx",
+        "govdocs/387658.doc",
+        "govdocs/539951.pdf"
+      ]
+    },
+    {
+      "id": "docs-018",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find why the Asia-Pacific performance-based navigation plan was adopted in a provisional rather than final form.",
+      "args": [
+        "PBN",
+        "provisional"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/224039.docx"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/000257.rtf",
+        "govdocs/142669.doc",
+        "govdocs/661496.doc",
+        "govdocs/709028.pdf"
+      ]
+    },
+    {
+      "id": "docs-019",
+      "root": ".",
+      "kind": "single",
+      "need": "Find construction specifications for prefabricated wooden roof trusses.",
+      "args": [
+        "trusses"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/000117.rtf"
+        }
+      ],
+      "judged_nonrelevant": []
+    },
+    {
+      "id": "docs-020",
+      "root": ".",
+      "kind": "single",
+      "need": "Find the economic price adjustment clause for copper and other basic metal mill products.",
+      "args": [
+        "copper"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/001857.rtf"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/000803.rtf",
+        "govdocs/009360.rtf",
+        "govdocs/246353.pdf",
+        "govdocs/351599.pdf",
+        "govdocs/518561.doc",
+        "govdocs/522560.doc",
+        "mail/sa-00039.eml"
+      ]
+    },
+    {
+      "id": "docs-021",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the TEITAC draft critique explaining omissions caused by negative conditions in an accessibility decision tree.",
+      "args": [
+        "TEITAC",
+        "conditions",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/001963.rtf"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/004135.rtf",
+        "govdocs/043267.html",
+        "govdocs/116733.docx",
+        "govdocs/288516.pdf",
+        "govdocs/517544.pdf",
+        "govdocs/518561.doc",
+        "govdocs/522560.doc",
+        "govdocs/661496.doc",
+        "govdocs/774221.pdf"
+      ]
+    },
+    {
+      "id": "docs-022",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the statement of work for Dvir Blivis's NIH visit studying neonatal mouse spinal neurons.",
+      "args": [
+        "Blivis",
+        "neurons",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/003332.rtf"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/064144.html"
+      ]
+    },
+    {
+      "id": "docs-023",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find instructions for making fluorescent chromosome painting probes using degenerate-primer amplification.",
+      "args": [
+        "chromosome",
+        "fluorescent"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/005442.rtf"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/000257.rtf",
+        "govdocs/001468.rtf",
+        "govdocs/003332.rtf",
+        "govdocs/518561.doc"
+      ]
+    },
+    {
+      "id": "docs-024",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find NRCS definitions and outreach planning guidance for customers disadvantaged in access to USDA assistance.",
+      "args": [
+        "NRCS",
+        "inclusion"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/011840.rtf"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/032132.txt",
+        "govdocs/063776.txt",
+        "govdocs/064144.html",
+        "govdocs/214826.docx",
+        "govdocs/257628.pdf",
+        "govdocs/462945.pdf",
+        "govdocs/464159.pdf",
+        "govdocs/500401.doc",
+        "govdocs/576891.xml"
+      ]
+    },
+    {
+      "id": "docs-025",
+      "root": ".",
+      "kind": "single",
+      "need": "Find the email reporting how prevalent the Klez worm had become by August 2002.",
+      "args": [
+        "Klez"
+      ],
+      "gold": [
+        {
+          "file": "mail/sa-00004.eml"
+        }
+      ],
+      "judged_nonrelevant": []
+    },
+    {
+      "id": "docs-026",
+      "root": ".",
+      "kind": "single",
+      "need": "Find the reply explaining how eggs and bacon make carbonara without cream.",
+      "args": [
+        "carbonara"
+      ],
+      "gold": [
+        {
+          "file": "mail/sa-00006.eml"
+        },
+        {
+          "file": "mail/sa-00008.eml"
+        }
+      ],
+      "judged_nonrelevant": [
+        "mail/sa-00005.eml"
+      ]
+    },
+    {
+      "id": "docs-027",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the explanation of a RAID boot failure fixed by copying a filesystem with dump instead of tar.",
+      "args": [
+        "dump",
+        "tar",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "mail/sa-00013.eml"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/000816.pdf",
+        "govdocs/001550.rtf",
+        "govdocs/003774.txt",
+        "govdocs/010887.rtf",
+        "govdocs/063278.html",
+        "govdocs/063776.txt",
+        "govdocs/128507.txt",
+        "govdocs/218978.docx",
+        "govdocs/325411.pdf"
+      ]
+    },
+    {
+      "id": "docs-028",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find an email answering whether Solaris is Sun's UNIX rather than a Linux distribution.",
+      "args": [
+        "Solaris",
+        "UNIX",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "mail/sa-00018.eml"
+        },
+        {
+          "file": "mail/sa-00022.eml"
+        },
+        {
+          "file": "mail/sa-00023.eml"
+        }
+      ],
+      "judged_nonrelevant": [
+        "mail/sa-00020.eml",
+        "mail/sa-00025.eml",
+        "mail/sa-00027.eml",
+        "mail/sa-00034.eml",
+        "mail/sa-00035.eml",
+        "mail/sa-00036.eml",
+        "mail/sa-00038.eml"
+      ]
+    },
+    {
+      "id": "docs-029",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find the email explaining whether Eircom DSL supplies a public address and what round-trip delay voice calls face.",
+      "args": [
+        "Eircom",
+        "delay"
+      ],
+      "gold": [
+        {
+          "file": "mail/sa-00039.eml"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/009366.rtf",
+        "govdocs/049331.doc",
+        "govdocs/151049.txt",
+        "govdocs/224039.docx",
+        "govdocs/286538.pdf",
+        "govdocs/546009.pdf",
+        "govdocs/704296.doc",
+        "mail/sa-00016.eml",
+        "mail/sa-00054.eml"
+      ]
+    },
+    {
+      "id": "docs-030",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find a shell-loop solution for locating an archive member by filename across many ZIP files.",
+      "args": [
+        "zip",
+        "archive"
+      ],
+      "gold": [
+        {
+          "file": "mail/sa-00052.eml"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/021833.html",
+        "govdocs/047603.html",
+        "govdocs/099989.html",
+        "govdocs/113559.html",
+        "govdocs/287765.pdf",
+        "govdocs/309622.pdf",
+        "govdocs/325411.pdf",
+        "govdocs/469113.doc",
+        "govdocs/576891.xml",
+        "mail/sa-00051.eml"
+      ]
+    },
+    {
+      "id": "docs-031",
+      "root": ".",
+      "kind": "single",
+      "need": "Find the Outlook test message containing an added Olk10SideProps chunk.",
+      "args": [
+        "Olk10SideProps"
+      ],
+      "gold": [
+        {
+          "file": "msg/51873.msg"
+        }
+      ],
+      "judged_nonrelevant": []
+    },
+    {
+      "id": "docs-032",
+      "root": ".",
+      "kind": "single",
+      "need": "Find the historical correspondence directing La Tetra to a website for checking people's names.",
+      "args": [
+        "Tetra"
+      ],
+      "gold": [
+        {
+          "file": "msg/53784_fails.msg"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/007895.pdf"
+      ]
+    },
+    {
+      "id": "docs-033",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the correspondence giving the online location of the State Department Historical Advisory Committee annual report.",
+      "args": [
+        "historical",
+        "report",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "msg/53784_succeeds.msg"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/009120.rtf",
+        "govdocs/012819.html",
+        "govdocs/016006.html",
+        "govdocs/049331.doc",
+        "govdocs/053253.pdf",
+        "govdocs/057730.html",
+        "govdocs/098846.txt",
+        "govdocs/219589.txt",
+        "govdocs/286891.txt",
+        "govdocs/314521.txt",
+        "govdocs/345908.pdf",
+        "govdocs/484131.csv",
+        "govdocs/500401.doc",
+        "govdocs/678396.pdf"
+      ]
+    },
+    {
+      "id": "docs-034",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the instructions for pulling device databases with adb and opening them in Firefox's SQLite Manager.",
+      "args": [
+        "adb",
+        "database",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "msg/attachment_msg_inlineImg.msg"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/066290.txt",
+        "govdocs/215384.docx",
+        "govdocs/224363.docx",
+        "govdocs/256420.txt",
+        "govdocs/260338.pdf",
+        "govdocs/310327.xml",
+        "govdocs/464159.pdf",
+        "govdocs/473410.pdf",
+        "govdocs/727263.doc"
+      ]
+    },
+    {
+      "id": "docs-035",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find the test email that explicitly says its digital signature is valid.",
+      "args": [
+        "signature",
+        "authenticated"
+      ],
+      "gold": [
+        {
+          "file": "msg/logsat.com_signatures_valid.msg"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/014760.docx",
+        "govdocs/017091.docx",
+        "govdocs/116733.docx",
+        "govdocs/166104.docx",
+        "govdocs/261960.pdf",
+        "govdocs/598856.pdf",
+        "govdocs/644535.pdf",
+        "govdocs/728287.doc",
+        "govdocs/850997.pdf",
+        "mail/sa-00052.eml"
+      ]
+    },
+    {
+      "id": "docs-036",
+      "root": ".",
+      "kind": "synonym",
+      "need": "Find the message requesting preparation of an agreement after selecting Option 2.",
+      "args": [
+        "option",
+        "agreement"
+      ],
+      "gold": [
+        {
+          "file": "msg/message_1979.msg"
+        },
+        {
+          "file": "msg/message_1980.msg"
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/000258.rtf",
+        "govdocs/001468.rtf",
+        "govdocs/017444.html",
+        "govdocs/037025.docx",
+        "govdocs/047603.html",
+        "govdocs/116733.docx",
+        "govdocs/210687.doc",
+        "govdocs/261960.pdf",
+        "govdocs/301363.pdf",
+        "govdocs/302965.txt",
+        "govdocs/503590.pdf",
+        "govdocs/503949.doc",
+        "govdocs/678396.pdf",
+        "govdocs/704296.doc",
+        "govdocs/800627.pdf",
+        "mail/sa-00043.eml"
+      ]
+    },
+    {
+      "id": "docs-037",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find how EPICS process-variable values are saved and restored after a VME reboot.",
+      "args": [
+        "EPICS",
+        "restore",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/003774.txt",
+          "lines": [
+            4,
+            21
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/037025.docx",
+        "govdocs/049331.doc",
+        "govdocs/151049.txt",
+        "govdocs/239668.pdf",
+        "govdocs/301363.pdf",
+        "govdocs/474348.pdf",
+        "govdocs/488806.pdf",
+        "govdocs/517544.pdf",
+        "govdocs/637310.doc"
+      ]
+    },
+    {
+      "id": "docs-038",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the explanation of uncertainty about mammalian reproduction in microgravity and the evidence from frog eggs.",
+      "args": [
+        "reproduction",
+        "microgravity",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/228214.txt",
+          "lines": [
+            8,
+            24
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/012819.html",
+        "govdocs/217982.txt",
+        "govdocs/314521.txt",
+        "govdocs/436110.pdf",
+        "govdocs/520936.pdf"
+      ]
+    },
+    {
+      "id": "docs-039",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find the chapter list for Armindo Ngunga's book on Ciyao verb phonology and morphology.",
+      "args": [
+        "Ciyao",
+        "verb",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/009320.html",
+          "lines": [
+            11,
+            27
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/001387.pdf",
+        "govdocs/514025.pdf"
+      ]
+    },
+    {
+      "id": "docs-040",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find metadata explaining the purpose of the Alaska RACE bottom-trawl groundfish surveys.",
+      "args": [
+        "Alaska",
+        "groundfish",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/310327.xml",
+          "lines": [
+            5,
+            19
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/011443.pdf",
+        "govdocs/071930.pdf",
+        "govdocs/111807.csv",
+        "govdocs/129941.txt",
+        "govdocs/143879.pdf",
+        "govdocs/286891.txt",
+        "govdocs/565342.csv",
+        "govdocs/590172.csv",
+        "govdocs/748968.pdf"
+      ]
+    },
+    {
+      "id": "docs-041",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find crude-oil supply and ending stocks in PAD District 4 for May 2007.",
+      "args": [
+        "crude",
+        "stocks",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/476277.csv",
+          "lines": [
+            1,
+            5
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/000816.pdf",
+        "govdocs/009120.rtf",
+        "govdocs/063278.html",
+        "govdocs/151049.txt",
+        "govdocs/155586.txt",
+        "govdocs/236054.docx",
+        "govdocs/310327.xml",
+        "govdocs/436110.pdf",
+        "govdocs/520936.pdf"
+      ]
+    },
+    {
+      "id": "docs-042",
+      "root": ".",
+      "kind": "proximity",
+      "need": "Find annual Arkansas county population estimates from 1990 through the 2000 census.",
+      "args": [
+        "Arkansas",
+        "population",
+        "--distance",
+        "300"
+      ],
+      "gold": [
+        {
+          "file": "govdocs/481301.csv",
+          "lines": [
+            2,
+            8
+          ]
+        }
+      ],
+      "judged_nonrelevant": [
+        "govdocs/012819.html",
+        "govdocs/016006.html",
+        "govdocs/052528.pdf",
+        "govdocs/111807.csv",
+        "govdocs/123779.pdf",
+        "govdocs/246353.pdf",
+        "govdocs/565342.csv",
+        "govdocs/590172.csv",
+        "govdocs/671710.pdf"
+      ]
+    }
+  ]
+}
