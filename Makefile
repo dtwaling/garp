@@ -55,6 +55,10 @@ test:
 	go test ./...
 	@echo "Tests completed"
 
+# Test the nested eval harness without fetching a corpus
+eval-test:
+	cd eval && go test ./...
+
 # Format Go code
 fmt:
 	@echo "Formatting Go code..."
@@ -113,6 +117,7 @@ help:
 	@echo "  release  - dist + refresh tracked bin/garp and bin/garp.exe"
 	@echo "  clean    - Remove build artifacts"
 	@echo "  test     - Run tests"
+	@echo "  eval-test - Unit tests of the eval harness (no corpus)"
 	@echo "  fmt      - Format Go code"
 	@echo "  tidy     - Run go mod tidy"
 	@echo "  deps     - Install dependencies"
@@ -123,4 +128,4 @@ help:
 	@echo "  uninstall- Remove from ~/.local/bin"
 	@echo "  help     - Show this help"
 
-.PHONY: all build clean dist release test fmt tidy deps dev run install install-pdfcpu uninstall help
+.PHONY: all build clean dist release test eval-test fmt tidy deps dev run install install-pdfcpu uninstall help

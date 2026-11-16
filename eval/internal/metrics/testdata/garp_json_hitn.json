@@ -1,0 +1,25 @@
+{
+  "query": {"terms": ["needle"], "include_code": true},
+  "matches": 2,
+  "returned": 2,
+  "truncated": false,
+  "timed_out": 0,
+  "results": [
+    {
+      "file": "early.go",
+      "size_bytes": 80,
+      "score": 5,
+      "term_count": 1,
+      "matched_terms": ["needle"],
+      "excerpts": [{"text": "needle: café and 日本語", "start_line": 10}]
+    },
+    {
+      "file": "late.pdf",
+      "size_bytes": 200,
+      "score": 4,
+      "term_count": 1,
+      "matched_terms": ["needle"],
+      "excerpts": [{"text": "needle in extracted document text; this result ends beyond the small token budget"}]
+    }
+  ]
+}
