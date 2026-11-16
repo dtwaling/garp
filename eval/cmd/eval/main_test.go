@@ -174,6 +174,65 @@ func TestRun(t *testing.T) {
 			t.Fatalf("metrics: %+v", q)
 		}
 	}
+	t.Run("gate", func(t *testing.T) {
+		// Two of the three queries hit at rank 1: the saved 2/3 rounds up.
+		if result.Corpora["docs"].Aggregate["candidate"].MRR10 != 0.666667 {
+			t.Fatal("fixture must exercise upward baseline rounding")
+		}
+		baselinePath := filepath.Join(dir, "baseline.json")
+		for _, tc := range []struct {
+			name, message string
+			mutate        func(*report.Results)
+			status        int
+		}{
+			{name: "equal", status: 0},
+			{name: "regression", status: 1, mutate: func(r *report.Results) {
+				s := r.Corpora["docs"].Aggregate["candidate"]
+				s.R5 += 0.01
+				r.Corpora["docs"].Aggregate["candidate"] = s
+			}},
+			{name: "within tolerance", status: 0, mutate: func(r *report.Results) {
+				s := r.Corpora["docs"].Aggregate["candidate"]
+				s.R5 += 1e-10
+				r.Corpora["docs"].Aggregate["candidate"] = s
+			}},
+			{name: "query stale", status: 2, message: "baseline stale: run make eval-baseline", mutate: func(r *report.Results) { r.Harness.QuerySHA256["docs"] = "changed" }},
+			{name: "manifest stale", status: 2, message: "baseline stale: run make eval-baseline", mutate: func(r *report.Results) { r.Harness.ManifestSHA256["code"] = "changed" }},
+			{name: "missing candidate", status: 2, message: "baseline missing candidate metrics: docs", mutate: func(r *report.Results) { delete(r.Corpora["docs"].Aggregate, "candidate") }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var baseline report.Results
+				if err := json.Unmarshal(a, &baseline); err != nil {
+					t.Fatal(err)
+				}
+				if tc.mutate != nil {
+					tc.mutate(&baseline)
+				}
+				saveJSON(t, baselinePath, baseline)
+				gatePrefix := filepath.Join(dir, tc.name, "latest")
+				gated := append(args, "-no-gate=false", "-baseline", baselinePath, "-out", gatePrefix)
+				output := invoke(gated, tc.status, tc.message)
+				if tc.status == 2 {
+					if _, err := os.Stat(gatePrefix + ".json"); !os.IsNotExist(err) || output != "" {
+						t.Fatal("invalid baseline wrote results")
+					}
+				} else {
+					want := "### regressions vs " + baselinePath + ": none"
+					if tc.status == 1 {
+						want = "docs r5: 0.676667 -> 0.666667"
+					}
+					md, err := os.ReadFile(gatePrefix + ".md")
+					if err != nil || string(md) != output || !strings.Contains(output, want) || strings.Count(output, "### regressions vs ") != 1 {
+						t.Fatalf("gate report: %v\n%s", err, output)
+					}
+				}
+				// Recording never gates, including against a stale baseline.
+				if output := invoke(append(gated, "-no-gate"), 0, ""); strings.Contains(output, "### regressions vs ") {
+					t.Fatal("-no-gate printed a gate decision")
+				}
+			})
+		}
+	})
 	t.Run("pool", func(t *testing.T) {
 		poolPrefix := filepath.Join(dir, "pool")
 		pool := invoke(append(args, "-pool", "docs-single,code-single", "-previous-ref", "", "-out", poolPrefix), 0, "")

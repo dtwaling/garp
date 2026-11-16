@@ -166,10 +166,15 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		} else if !*noGate {
 			return fail(fmt.Errorf("baseline missing: run make eval-baseline"))
 		}
-		// The regression gate is implemented in the next chunk. Never silently
-		// claim a gated pass before that check exists.
 		if !*noGate {
-			return fail(fmt.Errorf("regression gate unavailable: use -no-gate to record results"))
+			if err := report.Stale(*baseline, result); err != nil {
+				return fail(err)
+			}
+			for _, name := range names {
+				if baseline.Corpora[name].Aggregate["candidate"].HitN == nil {
+					return fail(fmt.Errorf("baseline missing candidate metrics: %s", name))
+				}
+			}
 		}
 		cv, err := systems.GarpVersion(*candidate)
 		if err != nil {
@@ -276,6 +281,26 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	if err := report.WriteMarkdown(&md, result, baseline); err != nil {
 		return fail(err)
 	}
+	status := 0
+	if !*noGate {
+		// Compare exactly the representations persisted on disk, not a rounded
+		// baseline against full-precision macro means (e.g. 2/3 rounds upward).
+		var current report.Results
+		if err := json.Unmarshal(jsonOut.Bytes(), &current); err != nil {
+			return fail(err)
+		}
+		regressions := report.Gate(*baseline, current)
+		fmt.Fprintf(&md, "### regressions vs %s:", *baselinePath)
+		if len(regressions) == 0 {
+			md.WriteString(" none\n")
+		} else {
+			md.WriteByte('\n')
+			for _, r := range regressions {
+				fmt.Fprintf(&md, "%s %s: %.6f -> %.6f\n", r.Corpus, r.Metric, r.Baseline, r.Candidate)
+			}
+			status = 1
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(*out), 0755); err != nil {
 		return fail(err)
 	}
@@ -288,7 +313,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	if _, err := stdout.Write(md.Bytes()); err != nil {
 		return fail(err)
 	}
-	return 0
+	return status
 }
 
 // verifyCorpus checks the entire manifest and refuses unmanifested files, so
