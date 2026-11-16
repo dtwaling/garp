@@ -305,6 +305,7 @@ build. Timing is informational and omitted from deterministic JSON.
 
 ## Known limitations
 
+- Mechanical kind checks use working-tree extraction; if an extraction change invalidates a gold file's kind label, `make eval` exits 2 until labels are re-judged -- intentional under the frozen-key rule, not a bug.
 - Linux/macOS tooling is required; Windows `make eval` support is not provided.
 - rg numbers depend on the installed rg version, recorded in JSON, and are
   never gated. rg scans original bytes with its default binary handling,

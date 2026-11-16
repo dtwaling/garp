@@ -71,7 +71,13 @@ func TestBM25(t *testing.T) {
 }
 
 func TestBuildIndexExtraction(t *testing.T) {
-	root := writeCorpus(t, map[string]string{"literal.go": "left <identifier> right", "markup.html": "left <identifier> right", "bad.docx": "not a zip"})
+	root := writeCorpus(t, map[string]string{
+		"literal.go":  "left <identifier> right",
+		"markup.html": "left <identifier> right<script>scriptsecret</script><style>stylesecret</style> &lt;escaped&gt;",
+		"markup.xml":  "<root>left <identifier>right</identifier><script>scriptsecret</script><style>stylesecret</style> &lt;escaped&gt;</root>",
+		"mail.eml":    "Subject: Reader\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\nQWxwaGE=\r\n",
+		"bad.docx":    "not a zip",
+	})
 	file := filepath.Join(root, "reader.docx")
 	f, err := os.Create(file)
 	if err != nil {
@@ -95,28 +101,44 @@ func TestBuildIndexExtraction(t *testing.T) {
 	if _, ok := extractor.(search.ReaderAtExtractor); !ok {
 		t.Fatal("fixture must exercise ReaderAt dispatch")
 	}
-	idx, err := BuildIndex(root, ".", []string{"reader.docx", "literal.go", "markup.html", "bad.docx"})
+	paths := []string{"reader.docx", "literal.go", "markup.html", "markup.xml", "mail.eml", "bad.docx"}
+	idx, err := BuildIndex(root, ".", paths)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !idx.Tokens("reader.docx")["reader"] || !idx.Tokens("reader.docx")["alpha"] {
-		t.Fatalf("DOCX tokens: %v", idx.Tokens("reader.docx"))
+	for _, tc := range []struct {
+		path string
+		want map[string]bool
+	}{
+		{"reader.docx", map[string]bool{"reader": true, "alpha": true}},
+		{"mail.eml", map[string]bool{"reader": true, "alpha": true}},
+		{"literal.go", map[string]bool{"left": true, "identifier": true, "right": true}},
+		{"markup.html", map[string]bool{"left": true, "right": true, "escaped": true}},
+		{"markup.xml", map[string]bool{"left": true, "right": true, "escaped": true}},
+		{"bad.docx", map[string]bool{}},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := idx.Tokens(tc.path); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("tokens %v, want %v", got, tc.want)
+			}
+		})
 	}
-	if !idx.Tokens("literal.go")["identifier"] || idx.Tokens("markup.html")["identifier"] {
-		t.Fatal("literal and markup cleaners differ")
-	}
-	if len(idx.Tokens("bad.docx")) != 0 || len(idx.docs) != 4 {
+	if len(idx.docs) != len(paths) {
 		t.Fatal("failed extraction must stay as an empty document")
 	}
 	if _, err := BuildIndex(root, ".", []string{"missing.txt"}); err == nil {
 		t.Fatal("missing file is a setup error")
 	}
-	root = writeCorpus(t, map[string]string{"large.txt": "inside " + strings.Repeat(" ", textMaxBytes-len("inside ")) + "outside"})
-	idx, err = BuildIndex(root, ".", []string{"large.txt"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !idx.Tokens("large.txt")["inside"] || idx.Tokens("large.txt")["outside"] {
-		t.Fatal("plain text must stop at the engine's byte cap")
+	for _, path := range []string{"large.txt", "large.html", "large.xml"} {
+		t.Run(path, func(t *testing.T) {
+			root := writeCorpus(t, map[string]string{path: "inside " + strings.Repeat(" ", textMaxBytes-len("inside ")) + "outside"})
+			idx, err := BuildIndex(root, ".", []string{path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !idx.Tokens(path)["inside"] || idx.Tokens(path)["outside"] {
+				t.Fatal("raw text must stop at the engine's byte cap")
+			}
+		})
 	}
 }

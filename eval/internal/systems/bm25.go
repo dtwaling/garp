@@ -14,7 +14,7 @@ import (
 	"garp/search"
 )
 
-// Match search/walk.go's unexported defaultTextMaxBytes for non-registry files.
+// Match search/walk.go's unexported defaultTextMaxBytes for raw text files.
 const textMaxBytes = 5 << 20
 
 type document struct {
@@ -89,7 +89,11 @@ func indexText(path string, registry *search.ExtractorRegistry) (string, error) 
 		return "", fmt.Errorf("not a regular file")
 	}
 	var text string
-	if extractor, ok := registry.GetExtractor(filepath.Ext(path)); ok {
+	if search.IsBinaryFormat(path) {
+		extractor, ok := registry.GetExtractor(filepath.Ext(path))
+		if !ok {
+			return "", nil
+		}
 		if ra, ok := extractor.(search.ReaderAtExtractor); ok {
 			text, err = ra.ExtractReaderAt(f, info.Size(), search.DefaultMaxExtractedBytes)
 		} else {
