@@ -167,7 +167,7 @@ approved override keeps their exact terms/distances but derives gold per need:
 `gitignore ignore nested --distance 300` targets `search/ignore.go`,
 `timeout binary extract --distance 300` targets `search/engine.go`, and
 `prune walk gitignore --distance 400` targets `search/walk.go` plus
-`config/types.go`. Their kinds are synonym, synonym, and proximity,
+`config/types.go`. Their kinds are synonym, proximity, and synonym,
 respectively; `--code` remains harness-owned.
 
 During pool completion, `code-r-006` was re-authored from its unchanged need
