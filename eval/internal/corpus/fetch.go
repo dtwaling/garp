@@ -34,9 +34,13 @@ type entry struct {
 }
 
 // Fetch repairs missing or corrupt manifest files atomically. The cache is a
-// caller-owned directory, not a directory shared with untrusted writers.
+// caller-owned directory, not a directory shared with untrusted writers. Calls
+// must be serialized per cache: recovery removes temporaries from prior runs.
 func Fetch(m Manifest, cache, repo string) (FetchStats, error) {
 	var stats FetchStats
+	if m.Corpus != "docs" && m.Corpus != "code" {
+		return stats, fmt.Errorf("unknown corpus %q", m.Corpus)
+	}
 	sources := make(map[string]Source)
 	for _, s := range m.Sources {
 		if !fs.ValidPath(s.ID) || strings.ContainsAny(s.ID, "/\\") || s.ID == "." {
@@ -68,6 +72,12 @@ func Fetch(m Manifest, cache, repo string) (FetchStats, error) {
 			continue
 		}
 		pending[f.Source] = append(pending[f.Source], f)
+	}
+	// Sweep before the warm-cache fast path, including cached source downloads.
+	for _, root := range []string{filepath.Join(cache, m.Corpus), filepath.Join(cache, "dl")} {
+		if err := removeFetchTemps(root); err != nil {
+			return stats, fmt.Errorf("clean fetch temporaries: %w", err)
+		}
 	}
 	for _, s := range m.Sources {
 		files := pending[s.ID]
@@ -115,6 +125,24 @@ func Fetch(m Manifest, cache, repo string) (FetchStats, error) {
 		}
 	}
 	return stats, nil
+}
+
+// removeFetchTemps recognizes only regular files with CreateTemp's decimal
+// suffix. WalkDir does not follow symlinks; unrelated cache contents stay put.
+func removeFetchTemps(root string) error {
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if p == root && os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		suffix, ok := strings.CutPrefix(d.Name(), ".fetch-")
+		if d.Type().IsRegular() && ok && suffix != "" && strings.Trim(suffix, "0123456789") == "" {
+			return os.Remove(p)
+		}
+		return nil
+	})
 }
 
 func matches(filename string, size int64, hash string) bool {

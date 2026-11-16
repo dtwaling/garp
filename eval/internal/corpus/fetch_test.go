@@ -38,8 +38,9 @@ func TestFetch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"raw", "zip-range", "tar-gz", "tar-bz2"} {
-		t.Run(kind, func(t *testing.T) {
+	for _, tc := range []struct{ kind, corpus string }{{"raw", "docs"}, {"zip-range", "docs"}, {"tar-gz", "code"}, {"tar-bz2", "docs"}} {
+		t.Run(tc.kind, func(t *testing.T) {
+			kind := tc.kind
 			data := []byte("hello\n")
 			switch kind {
 			case "zip-range":
@@ -57,11 +58,24 @@ func TestFetch(t *testing.T) {
 			}))
 			defer server.Close()
 			src := Source{ID: "source", Kind: kind, URL: server.URL, BaseURL: server.URL + "/", Size: int64(len(data)), ETag: "pin", SHA256: digest(data)}
-			m := Manifest{Corpus: "docs", Sources: []Source{src}, Files: []File{{Path: "docs/x.txt", Source: "source", Member: "x.txt", Size: 6, SHA256: digest([]byte("hello\n"))}}}
+			m := Manifest{Corpus: tc.corpus, Sources: []Source{src}, Files: []File{{Path: "docs/x.txt", Source: "source", Member: "x.txt", Size: 6, SHA256: digest([]byte("hello\n"))}}}
 			cache := t.TempDir()
+			filename := filepath.Join(cache, m.Corpus, "docs/x.txt")
+			stale := []string{m.Corpus + "/docs/.fetch-123", m.Corpus + "/nested/.fetch-456", "dl/.fetch-789"}
 			for i, want := range []int{1, 0, 1} {
+				if i > 0 {
+					for _, name := range stale {
+						filename := filepath.Join(cache, name)
+						if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.WriteFile(filename, []byte("partial"), 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
 				if i == 2 {
-					if err := os.WriteFile(filepath.Join(cache, "docs/docs/x.txt"), []byte("jello\n"), 0600); err != nil {
+					if err := os.WriteFile(filename, []byte("jello\n"), 0600); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -73,12 +87,17 @@ func TestFetch(t *testing.T) {
 				if want == 0 && requests.Load() != before {
 					t.Fatal("warm fetch accessed network")
 				}
+				for _, name := range stale {
+					if _, err := os.Stat(filepath.Join(cache, name)); !os.IsNotExist(err) {
+						t.Fatalf("temporary file remains: %s: %v", name, err)
+					}
+				}
 			}
 			m.Files[0].SHA256 = strings.Repeat("0", 64)
-			if _, err := Fetch(m, cache, "."); err == nil || !strings.Contains(err.Error(), "sha256 mismatch: docs/docs/x.txt") {
+			if _, err := Fetch(m, cache, "."); err == nil || !strings.Contains(err.Error(), "sha256 mismatch: "+m.Corpus+"/docs/x.txt") {
 				t.Fatalf("mismatch: %v", err)
 			}
-			b, err := os.ReadFile(filepath.Join(cache, "docs/docs/x.txt"))
+			b, err := os.ReadFile(filename)
 			if err != nil || string(b) != "hello\n" {
 				t.Fatalf("failed fetch replaced destination: %q %v", b, err)
 			}
@@ -99,6 +118,33 @@ func TestFetch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRemoveFetchTemps(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{".fetch-123", ".fetch-123.txt", ".fetch-", "extra.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("keep"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, ".fetch-456"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("extra.txt", filepath.Join(root, ".fetch-789")); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeFetchTemps(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".fetch-123", ".fetch-123.txt", ".fetch-", "extra.txt", ".fetch-456", ".fetch-789"} {
+		_, err := os.Lstat(filepath.Join(root, name))
+		if name == ".fetch-123" && os.IsNotExist(err) {
+			continue
+		}
+		if name == ".fetch-123" || err != nil {
+			t.Errorf("%s: unexpected cleanup result: %v", name, err)
+		}
 	}
 }
 

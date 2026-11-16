@@ -33,6 +33,13 @@ release from `git archive` with `-buildvcs=false`. Subsequent `eval` and
 module or any corpus evaluation. `make eval-test` may need module downloads on
 its first run.
 
+After an interrupted fetch (including SIGINT or SIGKILL), re-run
+`make eval-fetch` with the same `EVAL_CACHE` before evaluating. It removes
+leftover `.fetch-<digits>` regular files from the corpus and download trees,
+including when all manifest files are already present. Other extra files are
+not removed and still fail the runner's universe check. Run only one fetch at
+a time per cache, and do not evaluate that cache while a fetch is in progress.
+
 The built `bin/eval-harness` returns **0** for a pass, **1** for a quality
 regression, and **2** for a harness/setup error (missing rg, bad query, corrupt
 corpus, stale/missing baseline, timeout, etc.). On recipe failure, make prints
