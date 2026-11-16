@@ -121,8 +121,14 @@ curl -LO https://github.com/dtwaling/garp/releases/latest/download/garp-windows-
 Or with the GitHub CLI:
 
 ```bash
-gh release download --repo dtwaling/garp --pattern 'garp-*' --output ~/.local/bin/
+gh release download --repo dtwaling/garp --pattern 'garp-*' --output ~/.local/bin/garp
 ```
+
+```powershell
+gh release download --repo dtwaling/garp --pattern 'garp-*' --output 'c:/cmd/garp.exe'
+```
+
+- note: use flag `--clobber` if replacing an earlier version.
 
 ## Agent / AI assistant use
 
