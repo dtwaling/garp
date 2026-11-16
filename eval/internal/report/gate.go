@@ -3,8 +3,8 @@ package report
 import "fmt"
 
 // Stale refuses comparisons unless both corpora have matching query and
-// manifest hashes and the previous release ref/version match. Missing hashes
-// or release metadata cannot establish a comparable baseline.
+// manifest hashes, previous release ref/version, tokenizer identity, and schema.
+// Missing hashes or metadata cannot establish a comparable baseline.
 func Stale(baseline, current Results) error {
 	for _, name := range []string{"docs", "code"} {
 		for _, pair := range [][2]string{
@@ -19,6 +19,12 @@ func Stale(baseline, current Results) error {
 	before, after := baseline.Systems.Previous, current.Systems.Previous
 	if before.Ref == "" || before.Version == "" || before != after {
 		return fmt.Errorf("baseline stale: recorded for ref %q version %q, run uses ref %q version %q; run make eval-baseline", before.Ref, before.Version, after.Ref, after.Version)
+	}
+	if baseline.Harness.Tokenizer == "" || baseline.Harness.Tokenizer != current.Harness.Tokenizer {
+		return fmt.Errorf("baseline stale: recorded for tokenizer %q, run uses tokenizer %q; run make eval-baseline", baseline.Harness.Tokenizer, current.Harness.Tokenizer)
+	}
+	if baseline.Schema == 0 || baseline.Schema != current.Schema {
+		return fmt.Errorf("baseline stale: recorded for schema %d, run uses schema %d; run make eval-baseline", baseline.Schema, current.Schema)
 	}
 	return nil
 }

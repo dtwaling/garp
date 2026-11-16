@@ -140,6 +140,7 @@ in both files.
    hashes; the gate refuses with `baseline stale: run make eval-baseline`
    until the previous release is re-scored against the changed key.
    The gate also refuses baselines with missing or different previous release ref/version metadata.
+   Missing or different tokenizer identity or schema version likewise requires re-running `make eval-baseline`.
 
 Independent readers used for authoring and confirmed by the second judge:
 

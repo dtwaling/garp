@@ -200,6 +200,10 @@ func TestRun(t *testing.T) {
 			{name: "manifest stale", status: 2, message: "baseline stale: run make eval-baseline", mutate: func(r *report.Results) { r.Harness.ManifestSHA256["code"] = "changed" }},
 			{name: "ref stale", status: 2, message: "baseline stale: recorded for ref", mutate: func(r *report.Results) { r.Systems.Previous.Ref = "other-ref" }},
 			{name: "version stale", status: 2, message: "baseline stale: recorded for ref", mutate: func(r *report.Results) { r.Systems.Previous.Version = "other-version" }},
+			{name: "tokenizer stale", status: 2, message: "baseline stale: recorded for tokenizer", mutate: func(r *report.Results) { r.Harness.Tokenizer = "other-tokenizer" }},
+			{name: "empty tokenizer", status: 2, message: "baseline stale: recorded for tokenizer", mutate: func(r *report.Results) { r.Harness.Tokenizer = "" }},
+			{name: "schema stale", status: 2, message: "baseline stale: recorded for schema", mutate: func(r *report.Results) { r.Schema = 2 }},
+			{name: "zero schema", status: 2, message: "baseline stale: recorded for schema", mutate: func(r *report.Results) { r.Schema = 0 }},
 			{name: "missing candidate", status: 2, message: "baseline missing candidate metrics: docs", mutate: func(r *report.Results) { delete(r.Corpora["docs"].Aggregate, "candidate") }},
 		} {
 			t.Run(tc.name, func(t *testing.T) {

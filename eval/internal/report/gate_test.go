@@ -1,12 +1,13 @@
 package report
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
 
 func gateResults() Results {
-	r := Results{Harness: Harness{QuerySHA256: map[string]string{}, ManifestSHA256: map[string]string{}}, Corpora: map[string]Corpus{}}
+	r := Results{Schema: 1, Harness: Harness{Tokenizer: "o200k_base tiktoken-go/tokenizer v0.10.0", QuerySHA256: map[string]string{}, ManifestSHA256: map[string]string{}}, Corpora: map[string]Corpus{}}
 	r.Systems.Previous = Previous{Ref: "v0.10.0", Version: "garp v0.10.0"}
 	for _, name := range []string{"docs", "code"} {
 		r.Harness.QuerySHA256[name] = "query-" + name
@@ -54,6 +55,27 @@ func TestGate(t *testing.T) {
 func TestStale(t *testing.T) {
 	if err := Stale(gateResults(), gateResults()); err != nil {
 		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, tokenizer string
+		schema          int
+	}{
+		{"tokenizer mismatch", "other-tokenizer", 1},
+		{"empty tokenizer", "", 1},
+		{"schema mismatch", gateResults().Harness.Tokenizer, 2},
+		{"zero schema", gateResults().Harness.Tokenizer, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			baseline, current := gateResults(), gateResults()
+			baseline.Harness.Tokenizer, baseline.Schema = tc.tokenizer, tc.schema
+			want := fmt.Sprintf("baseline stale: recorded for tokenizer %q, run uses tokenizer %q; run make eval-baseline", tc.tokenizer, current.Harness.Tokenizer)
+			if tc.schema != current.Schema {
+				want = fmt.Sprintf("baseline stale: recorded for schema %d, run uses schema %d; run make eval-baseline", tc.schema, current.Schema)
+			}
+			if err := Stale(baseline, current); err == nil || err.Error() != want {
+				t.Fatalf("got %v, want %q", err, want)
+			}
+		})
 	}
 	for _, tc := range []struct {
 		name, ref, version string
