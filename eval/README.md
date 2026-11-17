@@ -126,7 +126,9 @@ in both files.
    are reported and count as nonrelevant until judged. Judge them before
    trusting comparisons. Extraction/retrieval failures remain honest misses.
 6. **Mechanical kind checks.** BM25 tokens check honesty, not relevance:
-   terms are compared after the gold file's own extraction cleaning. `single`
+   a raw or extraction-cleaned term counts as present, using the gold file's
+   own cleaner. Accepting either form preserves case-insensitive matches even
+   when cleaning depends on letter case. `single`
    has one term, present in every gold file that has extracted tokens; zero-token
    gold is exempt so extraction failures remain honest misses. `proximity` has
    at least two terms, all present in every gold file; `synonym` has at least two,

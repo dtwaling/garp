@@ -373,11 +373,13 @@ func verifyCorpus(cache string, m corpus.Manifest) error {
 	})
 }
 
-// Kind checks count query terms (not split tokens), cleaned with each gold
-// file's extraction cleaner. A term is present when all its BM25-tokenized
-// parts occur, with prefix matching for a final '*'. Single requires its term
-// in every gold file with extracted tokens; zero-token gold (extraction failure)
-// is exempt so it stays an honest miss. Synonym requires a common missing term
+// Kind checks count query terms (not split tokens). A raw or extraction-cleaned
+// term is present when all its BM25-tokenized parts occur, with prefix matching
+// for a final '*'. Cleaning uses each gold file's cleaner; accepting the raw form
+// also preserves case-insensitive matches when cleaning depends on letter case.
+// Single requires its term in every gold file with extracted tokens; zero-token
+// gold (extraction failure) is exempt so it stays an honest miss.
+// Synonym requires a common missing term
 // across every gold file, not different missing terms in different files.
 // --partial, --partial=prefix, --partial=contains, and --smart-forms exempt
 // all kinds from presence checks because exact-token presence cannot establish
@@ -394,7 +396,7 @@ func checkKind(q queryset.Query, idx *systems.Index) error {
 		}
 		for _, g := range q.Gold {
 			tokens := idx.Tokens(g.File)
-			if len(tokens) > 0 && !termPresent(systems.CleanTerm(g.File, terms[0]), tokens) {
+			if len(tokens) > 0 && !termPresentIn(g.File, terms[0], tokens) {
 				return bad()
 			}
 		}
@@ -413,7 +415,7 @@ func checkKind(q queryset.Query, idx *systems.Index) error {
 	for _, g := range q.Gold {
 		tokens := idx.Tokens(g.File)
 		for i, term := range terms {
-			present := termPresent(systems.CleanTerm(g.File, term), tokens)
+			present := termPresentIn(g.File, term, tokens)
 			if q.Kind == "proximity" && !present {
 				return bad()
 			}
@@ -440,6 +442,10 @@ func broadensMatching(args []string) bool {
 		}
 	}
 	return false
+}
+
+func termPresentIn(file, term string, tokens map[string]bool) bool {
+	return termPresent(term, tokens) || termPresent(systems.CleanTerm(file, term), tokens)
 }
 
 func termPresent(term string, tokens map[string]bool) bool {

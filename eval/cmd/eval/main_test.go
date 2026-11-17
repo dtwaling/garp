@@ -37,7 +37,7 @@ func TestCheckKind(t *testing.T) {
 	dir := t.TempDir()
 	for name, text := range map[string]string{
 		"a.txt": "alpha beta file_name", "b.txt": "alpha gamma file_name",
-		"bad.docx": "not a zip", "m.html": "<p>Olk10SideProps chunk</p>",
+		"bad.docx": "not a zip", "m.html": "<p>Olk10SideProps chunk sha256</p>",
 		"long.txt": "deployment",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0600); err != nil {
@@ -67,6 +67,11 @@ func TestCheckKind(t *testing.T) {
 		{"single", []string{"missing"}, []string{"bad.docx"}, true},
 		{"single", []string{"alpha"}, []string{"a.txt", "bad.docx"}, true},
 		{"single", []string{"Olk10SideProps"}, []string{"m.html"}, true},
+		{"single", []string{"SHA256"}, []string{"m.html"}, true},
+		{"single", []string{"SHA512"}, []string{"m.html"}, false},
+		{"proximity", []string{"SHA256", "chunk"}, []string{"m.html"}, true},
+		{"synonym", []string{"SHA256", "missing"}, []string{"m.html"}, true},
+		{"synonym", []string{"SHA256", "chunk"}, []string{"m.html"}, false},
 		{"proximity", []string{"Olk10SideProps", "chunk"}, []string{"m.html"}, true},
 		{"synonym", []string{"Olk10SideProps", "chunk"}, []string{"m.html"}, false},
 		{"proximity", []string{"ALPHA", "file_na*", "--distance", "300"}, nil, true},
