@@ -13,6 +13,18 @@ import (
 	"garp/search"
 )
 
+func TestCleanTerm(t *testing.T) {
+	for _, tc := range []struct{ path, term, want string }{
+		{"m.html", "Olk10SideProps", "Olk10 SideProps"},
+		{"m.go", "Olk10SideProps", "Olk10SideProps"},
+		{"m.html", "cashier*", "cashier*"},
+	} {
+		if got := CleanTerm(tc.path, tc.term); got != tc.want {
+			t.Errorf("CleanTerm(%q, %q) = %q, want %q", tc.path, tc.term, got, tc.want)
+		}
+	}
+}
+
 func TestBM25(t *testing.T) {
 	root := writeCorpus(t, map[string]string{"sub/a.txt": "apple apple banana", "sub/b.txt": "apple carrot", "sub/c.txt": "banana carrot carrot", "other/x.txt": "apple"})
 	idx, err := BuildIndex(root, "sub", []string{"other/x.txt", "sub/c.txt", "sub/b.txt", "sub/a.txt"})

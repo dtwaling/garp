@@ -126,9 +126,17 @@ in both files.
    are reported and count as nonrelevant until judged. Judge them before
    trusting comparisons. Extraction/retrieval failures remain honest misses.
 6. **Mechanical kind checks.** BM25 tokens check honesty, not relevance:
-   `single` has one term; `proximity` has at least two, all present in every
-   gold file; `synonym` has at least two, at least one absent from every gold
-   file. These checks are not substitutes for reading the source.
+   a raw or extraction-cleaned term counts as present, using the gold file's
+   own cleaner. Accepting either form preserves case-insensitive matches even
+   when cleaning depends on letter case. `single`
+   has one term, present in every gold file that has extracted tokens; zero-token
+   gold is exempt so extraction failures remain honest misses. `proximity` has
+   at least two terms, all present in every gold file; `synonym` has at least two,
+   at least one absent from every gold file. Queries using `--partial`,
+   `--partial=prefix`, `--partial=contains`, or `--smart-forms` skip presence
+   checks for all three kinds because exact-token presence cannot establish
+   broadened matches; term-count requirements still apply. These checks are
+   not substitutes for reading the source.
 7. **Independent second judge.** An analyst reviews a gold-stripped packet
    and blind pool, deriving answers before opening the author's labels. The
    minimum sample is six docs (one per required extracted format) and six
@@ -176,6 +184,10 @@ eight relevant gold entries were retained and the pool regenerated/rejudged.
 `docs-027` changed a subject-only `RAID1` draft to the need's body-grounded
 `dump`/`tar` terms, with the same gold and proximity kind. These corrections
 were independently reviewed; other extraction/retrieval misses were retained.
+After the #85 key was frozen, `docs-026` dropped `mail/sa-00008.eml`, a
+follow-up reply that neither contains `carbonara` nor gives the explanation
+the need asks for -- `mail/sa-00006.eml` remains sole gold, and the baseline
+was re-recorded.
 
 ## Metric definitions
 
@@ -308,6 +320,9 @@ build. Timing is informational and omitted from deterministic JSON.
 ## Known limitations
 
 - Mechanical kind checks use working-tree extraction; if an extraction change invalidates a gold file's kind label, `make eval` exits 2 until labels are re-judged -- intentional under the frozen-key rule, not a bug.
+  Gold files with zero extracted tokens (extraction failures, e.g. `docs-002`)
+  are exempt from the `single` presence check and remain honest misses, so the
+  check cannot catch a wrong label on such a file.
 - Linux/macOS tooling is required; Windows `make eval` support is not provided.
 - rg numbers depend on the installed rg version, recorded in JSON, and are
   never gated. rg scans original bytes with its default binary handling,

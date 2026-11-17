@@ -35,31 +35,64 @@ func saveJSON(t *testing.T, p string, v any) {
 
 func TestCheckKind(t *testing.T) {
 	dir := t.TempDir()
-	for name, text := range map[string]string{"a.txt": "alpha beta file_name", "b.txt": "alpha gamma file_name"} {
+	for name, text := range map[string]string{
+		"a.txt": "alpha beta file_name", "b.txt": "alpha gamma file_name",
+		"bad.docx": "not a zip", "m.html": "<p>Olk10SideProps chunk sha256</p>",
+		"long.txt": "deployment",
+	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	idx, err := systems.BuildIndex(dir, ".", []string{"a.txt", "b.txt"})
+	idx, err := systems.BuildIndex(dir, ".", []string{"a.txt", "b.txt", "bad.docx", "m.html", "long.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
 		kind  string
 		args  []string
+		gold  []string
 		valid bool
 	}{
-		{"single", []string{"missing", "--strict"}, true},
-		{"single", []string{"alpha", "beta"}, false},
-		{"proximity", []string{"ALPHA", "file_na*", "--distance", "300"}, true},
-		{"proximity", []string{"alpha", "beta"}, false},
-		{"synonym", []string{"alpha", "missing"}, true},
-		{"synonym", []string{"beta", "gamma"}, false},
-		{"synonym", []string{"alpha", "file_name"}, false},
+		{"single", []string{"alpha", "--strict"}, nil, true},
+		{"single", []string{"alpha", "beta"}, nil, false},
+		{"single", []string{"beta"}, nil, false},
+		{"single", []string{"deploy", "--partial=prefix"}, []string{"long.txt"}, true},
+		{"single", []string{"deploy", "--partial"}, []string{"long.txt"}, true},
+		{"single", []string{"deploy", "--partial=contains"}, []string{"long.txt"}, true},
+		{"single", []string{"deploy", "--smart-forms"}, []string{"long.txt"}, true},
+		{"single", []string{"deploy"}, []string{"long.txt"}, false},
+		{"single", []string{"--partial"}, nil, false},
+		{"single", []string{"alpha", "beta", "--partial"}, nil, false},
+		{"single", []string{"missing"}, []string{"bad.docx"}, true},
+		{"single", []string{"alpha"}, []string{"a.txt", "bad.docx"}, true},
+		{"single", []string{"Olk10SideProps"}, []string{"m.html"}, true},
+		{"single", []string{"SHA256"}, []string{"m.html"}, true},
+		{"single", []string{"SHA512"}, []string{"m.html"}, false},
+		{"proximity", []string{"SHA256", "chunk"}, []string{"m.html"}, true},
+		{"synonym", []string{"SHA256", "missing"}, []string{"m.html"}, true},
+		{"synonym", []string{"SHA256", "chunk"}, []string{"m.html"}, false},
+		{"proximity", []string{"Olk10SideProps", "chunk"}, []string{"m.html"}, true},
+		{"synonym", []string{"Olk10SideProps", "chunk"}, []string{"m.html"}, false},
+		{"proximity", []string{"ALPHA", "file_na*", "--distance", "300"}, nil, true},
+		{"proximity", []string{"alpha", "beta"}, nil, false},
+		{"proximity", []string{"alpha", "missing", "--partial"}, nil, true},
+		{"proximity", []string{"alpha", "--partial"}, nil, false},
+		{"synonym", []string{"alpha", "missing"}, nil, true},
+		{"synonym", []string{"beta", "gamma"}, nil, false},
+		{"synonym", []string{"alpha", "file_name"}, nil, false},
+		{"synonym", []string{"alpha", "file_name", "--smart-forms"}, nil, true},
+		{"synonym", []string{"alpha", "--smart-forms"}, nil, false},
 	} {
-		q := queryset.Query{ID: "kind-check", Kind: tc.kind, Args: tc.args, Gold: []queryset.Gold{{File: "a.txt"}, {File: "b.txt"}}}
+		if tc.gold == nil {
+			tc.gold = []string{"a.txt", "b.txt"}
+		}
+		q := queryset.Query{ID: "kind-check", Kind: tc.kind, Args: tc.args}
+		for _, file := range tc.gold {
+			q.Gold = append(q.Gold, queryset.Gold{File: file})
+		}
 		if err := checkKind(q, idx); (err == nil) != tc.valid {
-			t.Errorf("%s %v: %v", tc.kind, tc.args, err)
+			t.Errorf("%s %v %v: %v", tc.kind, tc.args, tc.gold, err)
 		}
 	}
 }

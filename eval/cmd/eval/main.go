@@ -373,10 +373,17 @@ func verifyCorpus(cache string, m corpus.Manifest) error {
 	})
 }
 
-// Kind checks count query terms (not split tokens). A term is present when all
-// its BM25-tokenized parts occur, with prefix matching for a final '*'. Synonym
-// requires a common missing term across every gold file, not different missing
-// terms in different files. Single queries need no extraction-presence check.
+// Kind checks count query terms (not split tokens). A raw or extraction-cleaned
+// term is present when all its BM25-tokenized parts occur, with prefix matching
+// for a final '*'. Cleaning uses each gold file's cleaner; accepting the raw form
+// also preserves case-insensitive matches when cleaning depends on letter case.
+// Single requires its term in every gold file with extracted tokens; zero-token
+// gold (extraction failure) is exempt so it stays an honest miss.
+// Synonym requires a common missing term
+// across every gold file, not different missing terms in different files.
+// --partial, --partial=prefix, --partial=contains, and --smart-forms exempt
+// all kinds from presence checks because exact-token presence cannot establish
+// broadened matches. Term-count requirements still apply.
 func checkKind(q queryset.Query, idx *systems.Index) error {
 	terms := systems.Terms(q.Args)
 	bad := func() error { return fmt.Errorf("query %s: kind %s contradicts gold tokens", q.ID, q.Kind) }
@@ -384,10 +391,22 @@ func checkKind(q queryset.Query, idx *systems.Index) error {
 		if len(terms) != 1 {
 			return bad()
 		}
+		if broadensMatching(q.Args) {
+			return nil
+		}
+		for _, g := range q.Gold {
+			tokens := idx.Tokens(g.File)
+			if len(tokens) > 0 && !termPresentIn(g.File, terms[0], tokens) {
+				return bad()
+			}
+		}
 		return nil
 	}
 	if len(terms) < 2 {
 		return bad()
+	}
+	if broadensMatching(q.Args) {
+		return nil
 	}
 	absentEverywhere := make([]bool, len(terms))
 	for i := range absentEverywhere {
@@ -396,7 +415,7 @@ func checkKind(q queryset.Query, idx *systems.Index) error {
 	for _, g := range q.Gold {
 		tokens := idx.Tokens(g.File)
 		for i, term := range terms {
-			present := termPresent(term, tokens)
+			present := termPresentIn(g.File, term, tokens)
 			if q.Kind == "proximity" && !present {
 				return bad()
 			}
@@ -415,6 +434,20 @@ func checkKind(q queryset.Query, idx *systems.Index) error {
 	}
 	return nil
 }
+func broadensMatching(args []string) bool {
+	for _, arg := range args {
+		switch arg {
+		case "--partial", "--partial=prefix", "--partial=contains", "--smart-forms":
+			return true
+		}
+	}
+	return false
+}
+
+func termPresentIn(file, term string, tokens map[string]bool) bool {
+	return termPresent(term, tokens) || termPresent(systems.CleanTerm(file, term), tokens)
+}
+
 func termPresent(term string, tokens map[string]bool) bool {
 	stem, wild := strings.CutSuffix(strings.ToLower(term), "*")
 	parts := strings.FieldsFunc(stem, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
