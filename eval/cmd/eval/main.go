@@ -379,12 +379,18 @@ func verifyCorpus(cache string, m corpus.Manifest) error {
 // in every gold file with extracted tokens; zero-token gold (extraction failure)
 // is exempt so it stays an honest miss. Synonym requires a common missing term
 // across every gold file, not different missing terms in different files.
+// --partial, --partial=prefix, --partial=contains, and --smart-forms exempt
+// all kinds from presence checks because exact-token presence cannot establish
+// broadened matches. Term-count requirements still apply.
 func checkKind(q queryset.Query, idx *systems.Index) error {
 	terms := systems.Terms(q.Args)
 	bad := func() error { return fmt.Errorf("query %s: kind %s contradicts gold tokens", q.ID, q.Kind) }
 	if q.Kind == "single" {
 		if len(terms) != 1 {
 			return bad()
+		}
+		if broadensMatching(q.Args) {
+			return nil
 		}
 		for _, g := range q.Gold {
 			tokens := idx.Tokens(g.File)
@@ -396,6 +402,9 @@ func checkKind(q queryset.Query, idx *systems.Index) error {
 	}
 	if len(terms) < 2 {
 		return bad()
+	}
+	if broadensMatching(q.Args) {
+		return nil
 	}
 	absentEverywhere := make([]bool, len(terms))
 	for i := range absentEverywhere {
@@ -423,6 +432,16 @@ func checkKind(q queryset.Query, idx *systems.Index) error {
 	}
 	return nil
 }
+func broadensMatching(args []string) bool {
+	for _, arg := range args {
+		switch arg {
+		case "--partial", "--partial=prefix", "--partial=contains", "--smart-forms":
+			return true
+		}
+	}
+	return false
+}
+
 func termPresent(term string, tokens map[string]bool) bool {
 	stem, wild := strings.CutSuffix(strings.ToLower(term), "*")
 	parts := strings.FieldsFunc(stem, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })

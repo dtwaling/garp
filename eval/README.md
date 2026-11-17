@@ -130,8 +130,11 @@ in both files.
    has one term, present in every gold file that has extracted tokens; zero-token
    gold is exempt so extraction failures remain honest misses. `proximity` has
    at least two terms, all present in every gold file; `synonym` has at least two,
-   at least one absent from every gold file. These checks are not substitutes
-   for reading the source.
+   at least one absent from every gold file. Queries using `--partial`,
+   `--partial=prefix`, `--partial=contains`, or `--smart-forms` skip presence
+   checks for all three kinds because exact-token presence cannot establish
+   broadened matches; term-count requirements still apply. These checks are
+   not substitutes for reading the source.
 7. **Independent second judge.** An analyst reviews a gold-stripped packet
    and blind pool, deriving answers before opening the author's labels. The
    minimum sample is six docs (one per required extracted format) and six

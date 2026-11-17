@@ -38,12 +38,13 @@ func TestCheckKind(t *testing.T) {
 	for name, text := range map[string]string{
 		"a.txt": "alpha beta file_name", "b.txt": "alpha gamma file_name",
 		"bad.docx": "not a zip", "m.html": "<p>Olk10SideProps chunk</p>",
+		"long.txt": "deployment",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	idx, err := systems.BuildIndex(dir, ".", []string{"a.txt", "b.txt", "bad.docx", "m.html"})
+	idx, err := systems.BuildIndex(dir, ".", []string{"a.txt", "b.txt", "bad.docx", "m.html", "long.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +57,13 @@ func TestCheckKind(t *testing.T) {
 		{"single", []string{"alpha", "--strict"}, nil, true},
 		{"single", []string{"alpha", "beta"}, nil, false},
 		{"single", []string{"beta"}, nil, false},
+		{"single", []string{"deploy", "--partial=prefix"}, []string{"long.txt"}, true},
+		{"single", []string{"deploy", "--partial"}, []string{"long.txt"}, true},
+		{"single", []string{"deploy", "--partial=contains"}, []string{"long.txt"}, true},
+		{"single", []string{"deploy", "--smart-forms"}, []string{"long.txt"}, true},
+		{"single", []string{"deploy"}, []string{"long.txt"}, false},
+		{"single", []string{"--partial"}, nil, false},
+		{"single", []string{"alpha", "beta", "--partial"}, nil, false},
 		{"single", []string{"missing"}, []string{"bad.docx"}, true},
 		{"single", []string{"alpha"}, []string{"a.txt", "bad.docx"}, true},
 		{"single", []string{"Olk10SideProps"}, []string{"m.html"}, true},
@@ -63,9 +71,13 @@ func TestCheckKind(t *testing.T) {
 		{"synonym", []string{"Olk10SideProps", "chunk"}, []string{"m.html"}, false},
 		{"proximity", []string{"ALPHA", "file_na*", "--distance", "300"}, nil, true},
 		{"proximity", []string{"alpha", "beta"}, nil, false},
+		{"proximity", []string{"alpha", "missing", "--partial"}, nil, true},
+		{"proximity", []string{"alpha", "--partial"}, nil, false},
 		{"synonym", []string{"alpha", "missing"}, nil, true},
 		{"synonym", []string{"beta", "gamma"}, nil, false},
 		{"synonym", []string{"alpha", "file_name"}, nil, false},
+		{"synonym", []string{"alpha", "file_name", "--smart-forms"}, nil, true},
+		{"synonym", []string{"alpha", "--smart-forms"}, nil, false},
 	} {
 		if tc.gold == nil {
 			tc.gold = []string{"a.txt", "b.txt"}
