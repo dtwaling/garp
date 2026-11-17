@@ -563,9 +563,6 @@
       "gold": [
         {
           "file": "mail/sa-00006.eml"
-        },
-        {
-          "file": "mail/sa-00008.eml"
         }
       ],
       "judged_nonrelevant": [

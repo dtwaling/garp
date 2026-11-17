@@ -176,6 +176,10 @@ eight relevant gold entries were retained and the pool regenerated/rejudged.
 `docs-027` changed a subject-only `RAID1` draft to the need's body-grounded
 `dump`/`tar` terms, with the same gold and proximity kind. These corrections
 were independently reviewed; other extraction/retrieval misses were retained.
+After the #85 key was frozen, `docs-026` dropped `mail/sa-00008.eml`, a
+follow-up reply that neither contains `carbonara` nor gives the explanation
+the need asks for -- `mail/sa-00006.eml` remains sole gold, and the baseline
+was re-recorded.
 
 ## Metric definitions
 
