@@ -35,31 +35,47 @@ func saveJSON(t *testing.T, p string, v any) {
 
 func TestCheckKind(t *testing.T) {
 	dir := t.TempDir()
-	for name, text := range map[string]string{"a.txt": "alpha beta file_name", "b.txt": "alpha gamma file_name"} {
+	for name, text := range map[string]string{
+		"a.txt": "alpha beta file_name", "b.txt": "alpha gamma file_name",
+		"bad.docx": "not a zip", "m.html": "<p>Olk10SideProps chunk</p>",
+	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	idx, err := systems.BuildIndex(dir, ".", []string{"a.txt", "b.txt"})
+	idx, err := systems.BuildIndex(dir, ".", []string{"a.txt", "b.txt", "bad.docx", "m.html"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
 		kind  string
 		args  []string
+		gold  []string
 		valid bool
 	}{
-		{"single", []string{"missing", "--strict"}, true},
-		{"single", []string{"alpha", "beta"}, false},
-		{"proximity", []string{"ALPHA", "file_na*", "--distance", "300"}, true},
-		{"proximity", []string{"alpha", "beta"}, false},
-		{"synonym", []string{"alpha", "missing"}, true},
-		{"synonym", []string{"beta", "gamma"}, false},
-		{"synonym", []string{"alpha", "file_name"}, false},
+		{"single", []string{"alpha", "--strict"}, nil, true},
+		{"single", []string{"alpha", "beta"}, nil, false},
+		{"single", []string{"beta"}, nil, false},
+		{"single", []string{"missing"}, []string{"bad.docx"}, true},
+		{"single", []string{"alpha"}, []string{"a.txt", "bad.docx"}, true},
+		{"single", []string{"Olk10SideProps"}, []string{"m.html"}, true},
+		{"proximity", []string{"Olk10SideProps", "chunk"}, []string{"m.html"}, true},
+		{"synonym", []string{"Olk10SideProps", "chunk"}, []string{"m.html"}, false},
+		{"proximity", []string{"ALPHA", "file_na*", "--distance", "300"}, nil, true},
+		{"proximity", []string{"alpha", "beta"}, nil, false},
+		{"synonym", []string{"alpha", "missing"}, nil, true},
+		{"synonym", []string{"beta", "gamma"}, nil, false},
+		{"synonym", []string{"alpha", "file_name"}, nil, false},
 	} {
-		q := queryset.Query{ID: "kind-check", Kind: tc.kind, Args: tc.args, Gold: []queryset.Gold{{File: "a.txt"}, {File: "b.txt"}}}
+		if tc.gold == nil {
+			tc.gold = []string{"a.txt", "b.txt"}
+		}
+		q := queryset.Query{ID: "kind-check", Kind: tc.kind, Args: tc.args}
+		for _, file := range tc.gold {
+			q.Gold = append(q.Gold, queryset.Gold{File: file})
+		}
 		if err := checkKind(q, idx); (err == nil) != tc.valid {
-			t.Errorf("%s %v: %v", tc.kind, tc.args, err)
+			t.Errorf("%s %v %v: %v", tc.kind, tc.args, tc.gold, err)
 		}
 	}
 }

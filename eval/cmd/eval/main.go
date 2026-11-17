@@ -373,16 +373,24 @@ func verifyCorpus(cache string, m corpus.Manifest) error {
 	})
 }
 
-// Kind checks count query terms (not split tokens). A term is present when all
-// its BM25-tokenized parts occur, with prefix matching for a final '*'. Synonym
-// requires a common missing term across every gold file, not different missing
-// terms in different files. Single queries need no extraction-presence check.
+// Kind checks count query terms (not split tokens), cleaned with each gold
+// file's extraction cleaner. A term is present when all its BM25-tokenized
+// parts occur, with prefix matching for a final '*'. Single requires its term
+// in every gold file with extracted tokens; zero-token gold (extraction failure)
+// is exempt so it stays an honest miss. Synonym requires a common missing term
+// across every gold file, not different missing terms in different files.
 func checkKind(q queryset.Query, idx *systems.Index) error {
 	terms := systems.Terms(q.Args)
 	bad := func() error { return fmt.Errorf("query %s: kind %s contradicts gold tokens", q.ID, q.Kind) }
 	if q.Kind == "single" {
 		if len(terms) != 1 {
 			return bad()
+		}
+		for _, g := range q.Gold {
+			tokens := idx.Tokens(g.File)
+			if len(tokens) > 0 && !termPresent(systems.CleanTerm(g.File, terms[0]), tokens) {
+				return bad()
+			}
 		}
 		return nil
 	}
@@ -396,7 +404,7 @@ func checkKind(q queryset.Query, idx *systems.Index) error {
 	for _, g := range q.Gold {
 		tokens := idx.Tokens(g.File)
 		for i, term := range terms {
-			present := termPresent(term, tokens)
+			present := termPresent(systems.CleanTerm(g.File, term), tokens)
 			if q.Kind == "proximity" && !present {
 				return bad()
 			}

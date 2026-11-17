@@ -115,10 +115,25 @@ func indexText(path string, registry *search.ExtractorRegistry) (string, error) 
 		}
 		text = string(data)
 	}
+	return cleaner(path)(text), nil
+}
+
+func cleaner(path string) func(string) string {
 	if config.IsLiteralTextFile(path) {
-		return search.CleanContentCode(text), nil
+		return search.CleanContentCode
 	}
-	return search.CleanContent(text), nil
+	return search.CleanContent
+}
+
+// CleanTerm applies the cleaner indexText applies to path's text, keeping a
+// trailing '*', so mechanical gold checks compare query terms like with like.
+func CleanTerm(path, term string) string {
+	stem, wildcard := strings.CutSuffix(term, "*")
+	cleaned := cleaner(path)(stem)
+	if wildcard {
+		cleaned += "*"
+	}
+	return cleaned
 }
 
 func tokenize(text string) []string {
