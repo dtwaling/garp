@@ -20,6 +20,211 @@ import (
 	"unicode/utf8"
 )
 
+// writeRankedFormatFixture uses real containers and optional representation-only noise.
+func writeRankedFormatFixture(t *testing.T, path, text string, decorated bool) {
+	t.Helper()
+	noise := ""
+	switch filepath.Ext(path) {
+	case ".html":
+		if decorated {
+			noise = strings.Repeat("<b></b>", 2000)
+		}
+		text = "<html><body>" + noise + "<p>" + text + "</p></body></html>"
+	case ".docx":
+		if decorated {
+			noise = strings.Repeat("<w:r><w:rPr><w:b/></w:rPr></w:r>", 2000)
+		}
+		text = string(readerAtZIP(t, "word/document.xml", `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>`+noise+"<w:r><w:t>"+text+"</w:t></w:r></w:p></w:body></w:document>", 0))
+	case ".eml":
+		if decorated {
+			noise = strings.Repeat("X-Custom-Header: metadata\r\n", 400)
+		}
+		text = noise + "Content-Type: text/plain; charset=utf-8\r\n\r\n" + text
+	case ".rtf":
+		if decorated {
+			noise = strings.Repeat(`\b\i0 `, 2000)
+		}
+		text = `{\rtf1\ansi ` + noise + text + "}"
+	}
+	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMultiTermArgumentPermutationInvariance(t *testing.T) {
+	permutations := [][]string{{"missing", "alpha", "beta"}, {"missing", "beta", "alpha"}, {"alpha", "missing", "beta"}, {"alpha", "beta", "missing"}, {"beta", "missing", "alpha"}, {"beta", "alpha", "missing"}}
+	for _, ext := range []string{".txt", ".html", ".docx", ".eml", ".rtf"} {
+		for _, text := range []string{"alpha beta", "alpha"} {
+			t.Run(ext+"/"+text, func(t *testing.T) {
+				root := t.TempDir()
+				writeRankedFormatFixture(t, filepath.Join(root, "hit"+ext), text, false)
+				writeRankedFormatFixture(t, filepath.Join(root, "noise"+ext), "unrelated", false)
+				second := "alpha beta padding"
+				if text == "alpha" {
+					second = "beta"
+				}
+				writeRankedFormatFixture(t, filepath.Join(root, "second"+ext), second, false)
+				queries := permutations
+				if text == "alpha" {
+					queries = append(append([][]string(nil), permutations...), []string{"missing", "alpha"}, []string{"alpha", "missing"})
+				}
+				var prior []SearchResult
+				for i, words := range queries {
+					engine := NewSearchEngine(words, nil, nil, false, 1, 1000)
+					engine.StartDir, engine.Silent, engine.MaxExcerpts = root, true, 3
+					results, err := engine.Execute()
+					want := 2
+					if len(words) == 2 {
+						want = 1
+					}
+					if err != nil || len(results) != want {
+						t.Fatalf("%v: results=%v err=%v", words, results, err)
+					}
+					if i == 0 || i == len(permutations) {
+						prior = results
+					}
+					for j := range results {
+						a, b := results[j], prior[j]
+						if a.FilePath != b.FilePath || a.Score != b.Score || a.TermCount != b.TermCount || a.SpanLength != b.SpanLength || !reflect.DeepEqual(a.RawExcerpts, b.RawExcerpts) || !reflect.DeepEqual(a.StartLines, b.StartLines) || !reflect.DeepEqual(a.ChunkScores, b.ChunkScores) {
+							t.Fatalf("%v changed ranked output: %+v vs %+v", words, a, b)
+						}
+						if a.IsFallback != (text == "alpha") {
+							t.Fatalf("fallback=%v for %q", a.IsFallback, text)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestScarceMatchRarityFallbackPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name                              string
+		n, commonDF, multi, singles, want int
+		excluded, strict                  bool
+	}{
+		{"empty corpus", 0, 0, 0, 0, 0, false, false},
+		{"singleton disabled", 1, 0, 0, 1, 0, false, false},
+		{"small singleton rare", 2, 0, 0, 1, 1, false, false},
+		{"small common rejected", 3, 2, 0, 0, 0, false, false},
+		{"small upper bound", 39, 2, 0, 1, 1, false, false},
+		{"ratio boundary", 40, 2, 0, 1, 3, false, false},
+		{"crowding guard", 40, 3, 0, 1, 1, false, false},
+		{"tail cap", 40, 0, 0, 4, 3, false, false},
+		{"scarce primary", 40, 0, 1, 4, 4, false, false},
+		{"remaining capacity", 40, 0, 4, 4, 5, false, false},
+		{"sufficient primary", 40, 0, 5, 4, 5, false, false},
+		{"exclusions before scarcity", 40, 0, 5, 4, 5, true, false},
+		{"strict disables fallback", 40, 0, 0, 1, 0, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			words := []string{"alpha", "beta", "common", "rareone", "raretwo", "rarethree", "rarefour"}
+			files := map[string]string{}
+			for i := 0; i < tc.multi; i++ {
+				text := "alpha beta " + strings.Repeat("padding ", 200)
+				if tc.excluded && i == 0 {
+					text += "forbidden"
+				}
+				files[fmt.Sprintf("multi-%d.txt", i)] = text
+			}
+			for i := 0; i < tc.singles; i++ {
+				files[fmt.Sprintf("single-%d.txt", i)] = strings.Repeat(words[3+i]+" ", 20)
+			}
+			for i := 0; i < tc.commonDF; i++ {
+				files[fmt.Sprintf("common-%d.txt", i)] = "common"
+			}
+			for len(files) < tc.n {
+				files[fmt.Sprintf("noise-%d.txt", len(files))] = "noise"
+			}
+			writeEngineFixtureFiles(t, root, files)
+			results := executeRankedIntegrationSearch(t, root, words, []string{"forbidden"}, tc.strict)
+			if len(results) != tc.want {
+				t.Fatalf("got %v, want %d", resultFileNames(results), tc.want)
+			}
+			primary := tc.multi
+			if tc.excluded {
+				primary--
+			}
+			for i, result := range results {
+				if result.IsFallback != (i >= primary) || result.TermCount != map[bool]int{true: 1, false: 2}[result.IsFallback] {
+					t.Fatalf("wrong tier at %d: %+v", i, result)
+				}
+			}
+			if primary > 0 && primary < len(results) && results[primary].Score <= results[primary-1].Score {
+				t.Fatal("fixture must exercise a higher-score fallback below a primary match")
+			}
+			engine := newPartialIntegrationEngine(root, words, []string{"forbidden"}, []string{"-g", "*.txt"}, false, PartialModeOff, 100)
+			engine.PathOnly, engine.Strict = true, tc.strict
+			paths, err := engine.Execute()
+			if err != nil || !reflect.DeepEqual(resultFileNames(paths), resultFileNames(results)) {
+				t.Fatalf("path-only tier order differs: %v %v", paths, err)
+			}
+			for i := range paths {
+				if paths[i].IsFallback != results[i].IsFallback || paths[i].Score != results[i].Score {
+					t.Fatal("path-only fallback metadata differs")
+				}
+			}
+		})
+	}
+}
+
+func TestCorpusDenominatorInvarianceAcrossFormats(t *testing.T) {
+	for _, ext := range []string{".html", ".docx", ".eml", ".rtf"} {
+		t.Run(ext, func(t *testing.T) {
+			root := t.TempDir()
+			doc := filepath.Join(root, "doc.txt")
+			noise := filepath.Join(root, "noise"+ext)
+			writeRankedFormatFixture(t, doc, "anchor", false)
+			for _, decorated := range []bool{false, true} {
+				writeRankedFormatFixture(t, noise, "x", decorated)
+				for _, strict := range []bool{false, true} {
+					engine := NewSearchEngine([]string{"anchor"}, nil, nil, false, 1, 1000)
+					engine.StartDir, engine.Silent, engine.Strict = root, true, strict
+					results, err := engine.Execute()
+					if err != nil || len(results) != 1 || results[0].Score != 0.6931 {
+						t.Fatalf("decorated=%v strict=%v: results=%+v err=%v", decorated, strict, results, err)
+					}
+					// Direct inputs dedupe before counting and discard stale discovery stats.
+					matches, err := engine.FilterCandidates([]string{doc, noise, doc, noise}, 4, time.Now())
+					if err != nil || len(matches) != 1 || matches[0].score != results[0].Score {
+						t.Fatalf("direct: %v %v", matches, err)
+					}
+				}
+			}
+		})
+	}
+	t.Run("strict and overlapping roots", func(t *testing.T) {
+		root := t.TempDir()
+		sub := filepath.Join(root, "sub")
+		if err := os.Mkdir(sub, 0700); err != nil {
+			t.Fatal(err)
+		}
+		writeRankedFormatFixture(t, filepath.Join(sub, "doc.txt"), "alpha beta", false)
+		writeRankedFormatFixture(t, filepath.Join(sub, "noise.html"), "alpha", true)
+		for _, strict := range []bool{false, true} {
+			for _, rawRoots := range [][]string{{root}, {root, sub}} {
+				engine := NewSearchEngine([]string{"alpha", "beta"}, nil, nil, false, 1, 1000)
+				engine.Silent, engine.Strict = true, strict
+				var err error
+				engine.StartRoots, err = PrepareStartRoots(rawRoots, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				results, err := engine.Execute()
+				if err != nil || len(results) != 1 {
+					t.Fatalf("results=%+v err=%v", results, err)
+				}
+				const want = 1.0272
+				if results[0].Score != want {
+					t.Fatalf("score=%v want=%v", results[0].Score, want)
+				}
+			}
+		}
+	})
+}
+
 func TestSearchEngineResourceBounds(t *testing.T) {
 	for _, value := range []int{math.MinInt, -1, 0, 1, 2, MaxHeavyConcurrency, MaxWorkers, MaxFileTimeoutBinary, MaxFileTimeoutBinary + 1, math.MaxInt} {
 		se := NewSearchEngineWithWorkers(nil, nil, nil, false, value, value, value)
@@ -547,12 +752,12 @@ func TestEngineCanonicalTerms(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("result count = %d, want 1", len(results))
 	}
-	if got := results[0]; got.Score != float64(len("ms-*-api")) ||
+	if got := results[0]; got.Score <= 0 ||
 		got.TermCount != 1 ||
 		len(got.MatchedTerms) != 1 ||
 		got.MatchedTerms[0] != "ms-*-api" {
-		t.Errorf("metadata = score %v, term count %d, terms %q; want %d, 1, [ms-*-api]",
-			got.Score, got.TermCount, got.MatchedTerms, len("ms-*-api"))
+		t.Errorf("metadata = score %v, term count %d, terms %q; want positive score, 1, [ms-*-api]",
+			got.Score, got.TermCount, got.MatchedTerms)
 	}
 }
 
@@ -633,15 +838,15 @@ func TestEngineFilterCandidates(t *testing.T) {
 				byFile[filepath.Base(result.FilePath)] = result
 			}
 			all, ok := byFile["all.txt"]
-			if !ok || all.Score != 14 || all.TermCount != 3 || len(all.MatchedTerms) != 3 || all.SpanLength <= 0 {
-				t.Fatalf("all.txt metadata = (score %v, term count %d, terms %v, span %d), want score 14, 3 terms, and positive span", all.Score, all.TermCount, all.MatchedTerms, all.SpanLength)
+			if !ok || all.Score <= 0 || all.TermCount != 3 || len(all.MatchedTerms) != 3 || all.SpanLength <= 0 {
+				t.Fatalf("all.txt metadata = (score %v, term count %d, terms %v, span %d), want positive score, 3 terms, and positive span", all.Score, all.TermCount, all.MatchedTerms, all.SpanLength)
 			}
 			if tt.strict {
 				if _, found := byFile["relaxed.txt"]; found {
 					t.Fatal("strict matching retained partial candidate")
 				}
-			} else if relaxed, found := byFile["relaxed.txt"]; !found || relaxed.Score != 10 || relaxed.TermCount != 2 || len(relaxed.MatchedTerms) != 2 || relaxed.SpanLength <= 0 {
-				t.Fatalf("relaxed.txt metadata = (score %v, term count %d, terms %v, span %d), want score 10, 2 terms, and positive span", relaxed.Score, relaxed.TermCount, relaxed.MatchedTerms, relaxed.SpanLength)
+			} else if relaxed, found := byFile["relaxed.txt"]; !found || relaxed.Score <= 0 || relaxed.Score >= all.Score || relaxed.TermCount != 2 || len(relaxed.MatchedTerms) != 2 || relaxed.SpanLength <= 0 {
+				t.Fatalf("relaxed.txt metadata = (score %v, term count %d, terms %v, span %d), want lower positive score, 2 terms, and positive span", relaxed.Score, relaxed.TermCount, relaxed.MatchedTerms, relaxed.SpanLength)
 			}
 		})
 	}
@@ -2008,58 +2213,62 @@ func TestCapForBinaryPrefilter(t *testing.T) {
 
 func TestStage2BinaryPrefilterProvenance(t *testing.T) {
 	for _, ext := range []string{".eml", ".mbox", ".rtf"} {
-		for _, multi := range []bool{false, true} {
-			t.Run(ext+"/multi="+map[bool]string{false: "false", true: "true"}[multi], func(t *testing.T) {
-				dir := t.TempDir()
-				path := filepath.Join(dir, "sample"+ext)
-				if err := os.WriteFile(path, []byte("alpha"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				terms := []string{"alpha"}
-				if multi {
-					terms = append(terms, "beta")
-				}
-				engine := NewSearchEngine(terms, nil, nil, false, 1, 1000)
-				engine.StartDir, engine.Silent, engine.Strict = dir, true, true
-				extractor := &rankingCountingExtractor{text: "alpha beta"}
-				engine.Registry.extractors[strings.TrimPrefix(ext, ".")] = extractor
-				query := compileQuery(terms, PartialModeOff)
-				roots, err := engine.effectiveStartRoots()
-				if err != nil {
-					t.Fatal(err)
-				}
-				candidates, total, err := engine.discoverCandidates(query, 1, roots)
-				if err != nil || len(candidates) != 1 {
-					t.Fatalf("discovery = %v, %v", candidates, err)
-				}
-				if !candidates[0].primaryPrefiltered {
-					t.Fatal("discovery provenance missing")
-				}
-				// Turn a repeated raw scan into a decisive miss. The controlled extractor
-				// still returns the matching text, so reaching extraction proves bypass.
-				if err := os.WriteFile(path, []byte("unrelated"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				matches, err := engine.filterCandidates(query, candidates, total, time.Now())
-				want := 1
-				if multi {
-					want = 0
-				}
-				if err != nil || len(matches) != want || extractor.calls.Load() != int64(want) {
-					t.Fatalf("discovered: matches=%d calls=%d err=%v; want %d", len(matches), extractor.calls.Load(), err, want)
-				}
-				// Public path-only calls carry no query provenance, even on a reused engine.
-				before := extractor.calls.Load()
-				matches, err = engine.FilterCandidates([]string{path}, 1, time.Now())
-				if err != nil || len(matches) != 0 || extractor.calls.Load() != before {
-					t.Fatalf("direct: matches=%d calls=%d err=%v", len(matches), extractor.calls.Load(), err)
-				}
-			})
+		for _, strict := range []bool{false, true} {
+			for _, multi := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/multi=%v/strict=%v", ext, multi, strict), func(t *testing.T) {
+					dir := t.TempDir()
+					path := filepath.Join(dir, "sample"+ext)
+					if err := os.WriteFile(path, []byte("alpha"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					terms := []string{"alpha"}
+					if multi {
+						terms = append(terms, "beta")
+					}
+					engine := NewSearchEngine(terms, nil, nil, false, 1, 1000)
+					engine.StartDir, engine.Silent, engine.Strict = dir, true, strict
+					extractor := &rankingCountingExtractor{text: "alpha beta"}
+					engine.Registry.extractors[strings.TrimPrefix(ext, ".")] = extractor
+					query := compileQuery(terms, PartialModeOff)
+					roots, err := engine.effectiveStartRoots()
+					if err != nil {
+						t.Fatal(err)
+					}
+					candidates, total, err := engine.discoverCandidates(query, 1, roots)
+					want := 1
+					if multi && strict {
+						want = 0
+					}
+					if err != nil || len(candidates) != want {
+						t.Fatalf("discovery = %v, %v", candidates, err)
+					}
+					if want == 1 && !candidates[0].primaryPrefiltered {
+						t.Fatal("discovery provenance missing")
+					}
+					// Turn a repeated raw scan into a decisive miss. The controlled extractor
+					// still returns the matching text, so reaching extraction proves bypass.
+					if err := os.WriteFile(path, []byte("unrelated"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					matches, err := engine.filterCandidates(query, candidates, total, time.Now())
+					if err != nil || len(matches) != want || extractor.calls.Load() != 1 {
+						t.Fatalf("discovered: matches=%d calls=%d err=%v; want %d", len(matches), extractor.calls.Load(), err, want)
+					}
+					// Public path-only calls carry no query provenance, even on a reused engine.
+					before := extractor.calls.Load()
+					matches, err = engine.FilterCandidates([]string{path}, 1, time.Now())
+					if err != nil || len(matches) != 0 || extractor.calls.Load() != before+1 {
+						t.Fatalf("direct: matches=%d calls=%d err=%v", len(matches), extractor.calls.Load(), err)
+					}
+				})
+			}
 		}
 	}
+
 }
 
 func TestStage2MSGSkipsPrefilter(t *testing.T) {
+	// MSG has no authoritative streaming absence proof.
 	for _, terms := range [][]string{{"alpha"}, {"alpha", "beta"}} {
 		t.Run(strings.Join(terms, "-"), func(t *testing.T) {
 			dir := t.TempDir()
@@ -2131,6 +2340,7 @@ func TestResultRanking(t *testing.T) {
 			files: map[string]string{
 				"a-lower.txt":  "term go",
 				"z-higher.txt": "term synchronization",
+				"noise-go.txt": "go",
 			},
 			wantOrder: []string{"z-higher.txt", "a-lower.txt"},
 		},
@@ -2406,19 +2616,15 @@ func TestEnginePerFileSubsetsStage3Regressions(t *testing.T) {
 				t.Fatalf("got %d files, want 1", len(results))
 			}
 			result := results[0]
-			wantScore := float64(len("alpha") + len("beta"))
-			if tc.terms[0] == 3 {
-				wantScore += float64(len("gamma"))
-			}
-			if result.Score != wantScore || result.TermCount != tc.terms[0] {
-				t.Fatalf("file quality = (%v, %d), want (%v, %d)", result.Score, result.TermCount, wantScore, tc.terms[0])
+			if result.Score <= 0 || result.TermCount != tc.terms[0] {
+				t.Fatalf("file quality = (%v, %d), want positive score and %d terms", result.Score, result.TermCount, tc.terms[0])
 			}
 			if len(result.RawExcerpts) != len(tc.markers) || len(result.ChunkScores) != len(tc.markers) || len(result.ChunkTermCounts) != len(tc.markers) {
 				t.Fatalf("excerpt/score/term counts = (%d, %d, %d), want %d each", len(result.RawExcerpts), len(result.ChunkScores), len(result.ChunkTermCounts), len(tc.markers))
 			}
 			for i, marker := range tc.markers {
-				if result.ChunkScores[i] > result.Score || result.ChunkTermCounts[i] > result.TermCount {
-					t.Fatalf("excerpt %d quality exceeds parent file", i)
+				if result.ChunkScores[i] <= 0 || (i > 0 && result.ChunkScores[i] > result.ChunkScores[i-1]) || result.ChunkTermCounts[i] > result.TermCount {
+					t.Fatalf("excerpt %d has invalid quality or order", i)
 				}
 				if result.ChunkTermCounts[i] != tc.terms[i] || !strings.Contains(result.RawExcerpts[i], marker) {
 					t.Fatalf("excerpt %d = %q (%d terms), want %s (%d terms)", i, result.RawExcerpts[i], result.ChunkTermCounts[i], marker, tc.terms[i])
@@ -2801,21 +3007,20 @@ func TestRankedMultiTermIntegration(t *testing.T) {
 		results := executeRankedIntegrationSearch(t, root, words, []string{"forbidden"}, false)
 		want := []struct {
 			file      string
-			score     float64
 			termCount int
 		}{
-			{"doc_all.txt", 25, 3},
-			{"doc_t1_t2.txt", 20, 2},
-			{"doc_t2_t3.txt", 20, 2},
-			{"doc_t1_t3.txt", 10, 2},
+			{"doc_all.txt", 3},
+			{"doc_t2_t3.txt", 2},
+			{"doc_t1_t3.txt", 2},
+			{"doc_t1_t2.txt", 2},
 		}
 		if len(results) != len(want) {
 			t.Fatalf("result count = %d, want %d", len(results), len(want))
 		}
 		for i, want := range want {
 			got := results[i]
-			if file := filepath.Base(got.FilePath); file != want.file || got.Score != want.score || got.TermCount != want.termCount {
-				t.Fatalf("result %d = (%q, score %v, term count %d), want (%q, score %v, term count %d)", i, file, got.Score, got.TermCount, want.file, want.score, want.termCount)
+			if file := filepath.Base(got.FilePath); file != want.file || got.Score <= 0 || (i > 0 && got.Score >= results[i-1].Score) || got.TermCount != want.termCount {
+				t.Fatalf("result %d = (%q, score %v, term count %d), want (%q, descending positive score, term count %d)", i, file, got.Score, got.TermCount, want.file, want.termCount)
 			}
 		}
 	})
@@ -2831,8 +3036,8 @@ func TestRankedMultiTermIntegration(t *testing.T) {
 			t.Fatalf("result count = %d, want 1", len(results))
 		}
 		result := results[0]
-		if result.Score != 25 || result.TermCount != 3 || strings.Join(result.MatchedTerms, ",") != strings.Join(words, ",") {
-			t.Fatalf("selected window metadata = (score %v, term count %d, terms %v), want (25, 3, %v)", result.Score, result.TermCount, result.MatchedTerms, words)
+		if result.Score <= 0 || result.TermCount != 3 || strings.Join(result.MatchedTerms, ",") != strings.Join(words, ",") {
+			t.Fatalf("selected window metadata = (score %v, term count %d, terms %v), want (positive, 3, %v)", result.Score, result.TermCount, result.MatchedTerms, words)
 		}
 		if len(result.RawExcerpts) == 0 {
 			t.Fatal("selected window produced no raw excerpt")
@@ -2879,8 +3084,8 @@ func TestRankedMultiTermIntegration(t *testing.T) {
 		}
 
 		twoTerm := executeRankedIntegrationSearch(t, root, []string{primary, secondary}, nil, false)
-		if len(twoTerm) != 2 || filepath.Base(twoTerm[0].FilePath) != "all.txt" || filepath.Base(twoTerm[1].FilePath) != "long.txt" {
-			t.Fatalf("two-term results = %v, want [all.txt long.txt]", resultFileNames(twoTerm))
+		if len(twoTerm) != 2 || filepath.Base(twoTerm[0].FilePath) != "long.txt" || filepath.Base(twoTerm[1].FilePath) != "all.txt" || twoTerm[0].Score <= twoTerm[1].Score {
+			t.Fatalf("two-term results = %v, want [long.txt all.txt] with length normalization", resultFileNames(twoTerm))
 		}
 	})
 

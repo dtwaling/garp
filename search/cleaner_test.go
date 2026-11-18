@@ -1202,11 +1202,7 @@ func TestEngineCleaningConsistency(t *testing.T) {
 					if len(matches) != 1 {
 						t.Fatalf("matches = %+v, want one", matches)
 					}
-					score := 0.0
-					for _, term := range wantTerms {
-						score += float64(len(term))
-					}
-					if matches[0].score != score || matches[0].termCount != len(wantTerms) || !slices.Equal(matches[0].matchedTerms, wantTerms) {
+					if matches[0].score <= 0 || matches[0].termCount != len(wantTerms) || !slices.Equal(matches[0].matchedTerms, wantTerms) {
 						t.Fatalf("Stage 2 metadata includes stripped terms: %+v; want %v", matches[0], wantTerms)
 					}
 					results, err := engine.ExtractAndBuildResults(matches)
@@ -1214,7 +1210,13 @@ func TestEngineCleaningConsistency(t *testing.T) {
 						t.Fatalf("results=%+v err=%v", results, err)
 					}
 					result := results[0]
-					if result.Score != score || result.TermCount != len(wantTerms) || !slices.Equal(result.MatchedTerms, wantTerms) || result.ChunkScores[0] != score || result.ChunkTermCounts[0] != len(wantTerms) {
+					query := compileQuery(terms, PartialModeOff)
+					mask := make([]bool, query.slotCount())
+					for s := range mask {
+						mask[s] = slices.Contains(wantTerms, query.slotLabel(s))
+					}
+					chunkScore := RoundScore(canonicalSlotMaskWeight(query, mask, matches[0].slotWeights))
+					if result.Score != matches[0].score || result.TermCount != len(wantTerms) || !slices.Equal(result.MatchedTerms, wantTerms) || result.ChunkScores[0] != chunkScore || result.ChunkTermCounts[0] != len(wantTerms) {
 						t.Fatalf("Stage 2/3 metadata disagree: %+v", result)
 					}
 					if !literal && (strings.Contains(result.CleanContent, "gamma") || strings.Contains(strings.Join(result.RawExcerpts, " "), "hidden")) {

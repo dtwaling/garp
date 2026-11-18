@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -46,6 +47,7 @@ type SearchResult struct {
 	rootOrder       int
 	canonicalPath   string
 	FileSize        int64
+	IsFallback      bool           `json:"-"`
 	Score           float64        // Rounded ranking score; stateless helpers use matched term lengths.
 	TermCount       int            // Number of distinct query terms in the best window.
 	PathMatchCount  int            `json:"-"`
@@ -87,6 +89,12 @@ type candidateMatch struct {
 	score            float64
 	termCount        int
 	matchedTerms     []string
+	isFallback       bool
+	pathSlotMatches  []bool
+	analysis         rankedTextAnalysis
+	catalog          *rankedSubsetCatalog
+	slotWeights      []float64
+	rareSlots        []bool
 	pathMatchCount   int
 	boundaryQuality  int
 	spanLen          int
@@ -94,6 +102,7 @@ type candidateMatch struct {
 }
 
 type discoveredCandidate struct {
+	stage1 stage1FileScan
 	// Set only by discoverCandidates, not by the public path-only filtering API.
 	primaryPrefiltered bool
 	filePath           string
@@ -104,6 +113,8 @@ type discoveredCandidate struct {
 }
 
 func (match *candidateMatch) setAnalysis(analysis rankedTextAnalysis) {
+	analysis.bestIntervals = nil
+	match.analysis = analysis
 	match.score = analysis.Score
 	match.termCount = analysis.TermCount
 	match.matchedTerms = analysis.MatchedTerms
@@ -234,28 +245,29 @@ var heavySem = make(chan struct{}, 1)
 
 // SearchEngine handles the multi-word search logic
 type SearchEngine struct {
-	heavyOnce         sync.Once
-	heavyManager      *ConcurrencyManager
-	SearchWords       []string
-	ExcludeWords      []string
-	FileTypes         []string
-	IncludeCode       bool
-	Strict            bool
-	Partial           PartialMode
-	CaseSensitive     bool
-	SmartForms        bool
-	PathOnly          bool
-	Registry          *ExtractorRegistry
-	Distance          int // inclusive term-start bound in UTF-8 bytes of cleaned text
-	Silent            bool
-	HeavyConcurrency  int
-	FilterWorkers     int
-	FileTimeoutBinary time.Duration
-	MaxExcerpts       int
-	MaxResults        int
-	NoIgnore          bool
-	MaxFileSize       int64
-	PreflightCount    int
+	lastDiscoverySummary *discoveryCorpusSummary
+	heavyOnce            sync.Once
+	heavyManager         *ConcurrencyManager
+	SearchWords          []string
+	ExcludeWords         []string
+	FileTypes            []string
+	IncludeCode          bool
+	Strict               bool
+	Partial              PartialMode
+	CaseSensitive        bool
+	SmartForms           bool
+	PathOnly             bool
+	Registry             *ExtractorRegistry
+	Distance             int // inclusive term-start bound in UTF-8 bytes of cleaned text
+	Silent               bool
+	HeavyConcurrency     int
+	FilterWorkers        int
+	FileTimeoutBinary    time.Duration
+	MaxExcerpts          int
+	MaxResults           int
+	NoIgnore             bool
+	MaxFileSize          int64
+	PreflightCount       int
 
 	// StartDir, if non-empty, sets the root directory for file walks.
 	// When empty, the walk uses the current working directory.
@@ -335,7 +347,7 @@ func NewSearchEngineWithWorkers(searchWords, excludeWords []string, fileTypes []
 	return se
 }
 
-// DiscoverCandidates finds files containing the first search word
+// DiscoverCandidates returns paths admitted by the order-neutral corpus scan.
 func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error) {
 	roots, err := se.effectiveStartRoots()
 	if err != nil {
@@ -364,75 +376,170 @@ func (se *SearchEngine) effectiveStartRoots() ([]StartRoot, error) {
 	})
 }
 
+// discoveryCorpusSummary holds only authoritative stats for files not read in
+// Phase 2a. Word exclusions affect admission, never the walk-derived denominator.
+type discoveryCorpusSummary struct {
+	baseN  int
+	sumDL  float64
+	baseDF []int
+}
+
+func (summary *discoveryCorpusSummary) add(wordCount int, present []bool) {
+	summary.baseN++
+	summary.sumDL += float64(wordCount)
+	for s, hit := range present {
+		if hit {
+			summary.baseDF[s]++
+		}
+	}
+}
+
 func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int, roots []StartRoot) ([]discoveredCandidate, int, error) {
-	if len(query.terms) == 0 {
+	se.lastDiscoverySummary = nil
+	if query.slotCount() == 0 {
 		return nil, 0, nil
 	}
 	if !se.Silent {
-		fmt.Printf("Finding files with %q...\n", query.terms[0])
+		labels := append([]string(nil), query.terms...)
+		sort.Strings(labels)
+		fmt.Printf("Finding candidate files for %s...\n", fmt.Sprintf("%q", labels))
 	}
-	candidates := make([]discoveredCandidate, 0, 128)
-	candidateIndex := make(map[string]int)
-	trackProgressKeys := se.OnProgress != nil && preparedPhysicalRootsOverlap(roots)
-	var progressSeen map[string]struct{}
-	if trackProgressKeys {
-		progressSeen = make(map[string]struct{})
-		if se.onProgressKeyTracking != nil {
-			se.onProgressKeyTracking()
-		}
+	walked := make([]discoveredCandidate, 0, 128)
+	indexByKey := make(map[string]int)
+	if se.OnProgress != nil && preparedPhysicalRootsOverlap(roots) && se.onProgressKeyTracking != nil {
+		se.onProgressKeyTracking()
 	}
-	processed := 0
 	for _, root := range roots {
-		var onProgress func(int, int, string)
-		if se.OnProgress != nil {
-			onProgress = func(rootProcessed, _ int, path string) {
-				if rootProcessed == 0 {
-					return
-				}
-				if trackProgressKeys {
-					key := canonicalCandidateKey(root, path)
-					if _, exists := progressSeen[key]; exists {
-						return
-					}
-					progressSeen[key] = struct{}{}
-				}
-				processed++
-				se.OnProgress("discovery", processed, fileCount, path)
-			}
-		}
-		candidateFiles, err := findFilesWithFirstWordProgressQueryWithRoot(query, se.FileTypes, se.FilterWorkers, onProgress, root, se.PathScope, se.walkOptions())
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to find files with first word: %w", err)
-		}
-		for _, filePath := range candidateFiles {
-			key := canonicalCandidateKey(root, filePath)
-			candidate := newDiscoveredCandidate(filePath, key, root, roots)
+		err := walkPreparedCandidates(se.FileTypes, root, se.PathScope, se.walkOptions(), func(path string, _ os.FileInfo) error {
+			key := canonicalCandidateKey(root, path)
+			candidate := newDiscoveredCandidate(path, key, root, roots)
 			candidate.primaryPrefiltered = true
-			if index, exists := candidateIndex[key]; exists {
-				if discoveredCandidateProducerBetter(candidate, candidates[index]) {
-					candidates[index] = candidate
+			if i, exists := indexByKey[key]; exists {
+				if discoveredCandidateProducerBetter(candidate, walked[i]) {
+					walked[i] = candidate
 				}
 			} else {
-				candidateIndex[key] = len(candidates)
-				candidates = append(candidates, candidate)
+				indexByKey[key] = len(walked)
+				walked = append(walked, candidate)
+				if se.OnProgress != nil {
+					se.OnProgress("discovery", len(walked), fileCount, path)
+				}
 			}
+			return nil
+		})
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to find candidate files: %w", err)
 		}
 	}
-	total := len(candidates)
-	if len(candidates) == 0 {
-		if !se.Silent {
-			fmt.Printf("No files found containing %q\n", query.terms[0])
-		}
-		return nil, total, nil
+	workers := max(1, min(se.FilterWorkers, MaxWorkers))
+	jobs := make(chan int, workers*4)
+	cm := se.extractionManager()
+	maxBytes := se.walkOptions().TextMaxBytes()
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Go(func() {
+			var scratch literalScanScratch
+			for index := range jobs {
+				maybePaceForMemory()
+				walked[index].stage1 = se.discoverCorpusFile(cm, &scratch, walked[index].filePath, query, maxBytes)
+			}
+		})
 	}
+	for i := range walked {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	summary := &discoveryCorpusSummary{baseDF: make([]int, query.slotCount())}
+	candidates := make([]discoveredCandidate, 0, len(walked))
+	for _, candidate := range walked {
+		s1 := candidate.stage1
+		if !s1.needsStage2 && s1.readable {
+			summary.add(s1.wordCount, s1.slotPresent)
+		}
+		if s1.needsStage2 || (!se.Strict && query.slotCount() >= 2 && s1.exactSlots && s1.slotCount == 1) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	se.lastDiscoverySummary = summary
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].filePath < candidates[j].filePath })
 	if !se.Silent {
-		fmt.Printf("Found %s files containing %q\n", formatNumber(len(candidates)), query.terms[0])
+		if len(candidates) == 0 {
+			fmt.Println("No candidate files found.")
+		} else {
+			fmt.Printf("Found %s candidate files\n", formatNumber(len(candidates)))
+		}
 	}
-	return candidates, total, nil
+	return candidates, len(candidates), nil
+}
+
+// discoverCorpusFile discards all extracted text before returning. Prefilter
+// misses still contribute cleaned-text stats; unreadable files do not.
+func (se *SearchEngine) discoverCorpusFile(cm *ConcurrencyManager, scratch *literalScanScratch, path string, query compiledQuery, maxBytes int64) stage1FileScan {
+	if config.IsLiteralTextFile(path) {
+		s1, err := scanLiteralSlotsAndWords(scratch, path, query, se.Strict, maxBytes)
+		if err != nil {
+			return stage1FileScan{}
+		}
+		return s1
+	}
+	prefQ := query
+	prefQ.minSlots = 1
+	if se.Strict {
+		prefQ.minSlots = query.slotCount()
+	}
+	var cleaned string
+	if !IsBinaryFormat(path) {
+		admission, provable := prefilterAdmissionQuery(prefQ)
+		if discoveryAdmitsTextFile(path, admission, prefilterRawGate(admission), provable, maxBytes) {
+			return stage1FileScan{needsStage2: true}
+		}
+		var err error
+		cleaned, err = readStage2SearchText(path, maxBytes)
+		if err != nil {
+			return stage1FileScan{}
+		}
+	} else {
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".docx", ".odt", ".eml", ".mbox", ".rtf":
+			start := time.Now()
+			found, decided := binaryStreamingPrefilterDecidedQuery(path, prefQ, capForBinaryPrefilter(ext), se.Strict)
+			if ext == ".eml" {
+				atomic.AddInt64(&se.emlPrefilterCount, 1)
+				atomic.AddInt64(&se.emlPrefilterDurNanos, time.Since(start).Nanoseconds())
+			}
+			if !decided || found {
+				return stage1FileScan{needsStage2: true}
+			}
+		default:
+			return stage1FileScan{needsStage2: true}
+		}
+		var ok bool
+		cleaned, ok = se.loadBinaryCleanedQuiet(cm, path, ext)
+		if !ok {
+			return stage1FileScan{}
+		}
+	}
+	present, count := slotPresenceInText(cleaned, query)
+	return stage1FileScan{readable: true, wordCount: countCleanedWords(cleaned), slotPresent: present, slotCount: count}
+}
+
+func (se *SearchEngine) loadBinaryCleanedQuiet(cm *ConcurrencyManager, path, ext string) (string, bool) {
+	extractor, exists := se.Registry.GetExtractor(ext)
+	if !exists {
+		return "", false
+	}
+	text, _, _, _, timedOut, readErr, extractErr := se.extractBinaryFile(cm, path, ext, extractor, false)
+	if timedOut || readErr != nil || extractErr != nil {
+		return "", false
+	}
+	return cleanSearchContent(mappedContent{text: text}, config.IsLiteralTextFile(path)).text, true
 }
 
 // FilterCandidates filters candidates for all words and excludes
 func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, startTime time.Time) ([]candidateMatch, error) {
+	se.lastDiscoverySummary = nil
 	roots, err := se.effectiveStartRoots()
 	if err != nil {
 		return nil, err
@@ -671,11 +778,31 @@ func (se *SearchEngine) extractBinaryFileWorker(ctx context.Context, filePath, e
 }
 
 func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []discoveredCandidate, total int, startTime time.Time) ([]candidateMatch, error) {
+	summary := se.lastDiscoverySummary
+	se.lastDiscoverySummary = nil
 	if len(query.terms) == 0 {
 		return nil, nil
 	}
+	if summary == nil {
+		summary = &discoveryCorpusSummary{baseDF: make([]int, query.slotCount())}
+	}
+	unique := make([]discoveredCandidate, 0, len(candidateFiles))
+	indexByKey := make(map[string]int, len(candidateFiles))
+	for _, candidate := range candidateFiles {
+		key := canonicalCandidateKey(candidate.root, candidate.filePath)
+		candidate.canonicalKey = key
+		if i, exists := indexByKey[key]; exists {
+			if discoveredCandidateProducerBetter(candidate, unique[i]) {
+				unique[i] = candidate
+			}
+		} else {
+			indexByKey[key] = len(unique)
+			unique = append(unique, candidate)
+		}
+	}
+	candidateFiles = unique
 	if !se.Silent {
-		fmt.Println("Filtering for files containing ALL words...")
+		fmt.Println("Filtering candidate files...")
 	}
 	maxBytes := se.walkOptions().TextMaxBytes()
 
@@ -701,7 +828,22 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 	}
 
 	// Results and synchronization
-	var matchingFiles []candidateMatch
+	var multiMatches, stage2Single []candidateMatch
+	var deferredSingle, phase2a []discoveredCandidate
+	allowFallback := !se.Strict && query.slotCount() >= 2
+	deferSingle := func(s1 stage1FileScan) bool {
+		return allowFallback && !s1.needsStage2 && s1.exactSlots && s1.slotCount == 1
+	}
+	for _, candidate := range candidateFiles {
+		if extensionExcluded(candidate.filePath, extExcludes) {
+			continue
+		}
+		if candidate.primaryPrefiltered && deferSingle(candidate.stage1) {
+			deferredSingle = append(deferredSingle, candidate)
+		} else {
+			phase2a = append(phase2a, candidate)
+		}
+	}
 	var mu sync.Mutex
 
 	// Progress (atomic across workers)
@@ -716,7 +858,79 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 	jobs := make(chan discoveredCandidate, workers*4)
 	var wg sync.WaitGroup
 
-	handleOne := func(candidate discoveredCandidate) bool {
+	// Reloads neither prefilter nor add corpus stats. Only tied overflowing
+	// catalogs and rarity-approved deferred literal files use this quiet path.
+	reloadCleanedQuiet := func(path string) (string, bool) {
+		if IsBinaryFormat(path) {
+			return se.loadBinaryCleanedQuiet(cm, path, filepath.Ext(path))
+		}
+		text, err := readStage2SearchText(path, maxBytes)
+		return text, err == nil
+	}
+	loadCleaned := func(candidate discoveredCandidate, scratch *literalScanScratch) (string, bool) {
+		path := candidate.filePath
+		if !candidate.primaryPrefiltered {
+			var s1 stage1FileScan
+			if config.IsLiteralTextFile(path) {
+				var err error
+				s1, err = scanLiteralSlotsAndWords(scratch, path, query, se.Strict, maxBytes)
+				if err != nil {
+					if !se.Silent {
+						fmt.Printf("Warning: Error checking file %q: %q\n", path, err)
+					}
+					return "", false
+				}
+			} else {
+				s1 = se.discoverCorpusFile(cm, scratch, path, query, maxBytes)
+			}
+			if !s1.needsStage2 {
+				mu.Lock()
+				if s1.readable {
+					summary.add(s1.wordCount, s1.slotPresent)
+				}
+				if deferSingle(s1) {
+					candidate.stage1 = s1
+					deferredSingle = append(deferredSingle, candidate)
+				}
+				mu.Unlock()
+				return "", false
+			}
+		}
+		if !IsBinaryFormat(path) {
+			text, err := readStage2SearchText(path, maxBytes)
+			if err != nil && !se.Silent {
+				fmt.Printf("Warning: Error checking file %q: %q\n", path, err)
+			}
+			return text, err == nil
+		}
+		ext := filepath.Ext(path)
+		extractor, exists := se.Registry.GetExtractor(ext)
+		if !exists {
+			if !se.Silent {
+				fmt.Printf("Warning: No extractor for %q\n", ext)
+			}
+			return "", false
+		}
+		text, _, _, _, timedOut, readErr, extractErr := se.extractBinaryFile(cm, path, ext, extractor, false)
+		if timedOut || readErr != nil || extractErr != nil {
+			if !se.Silent {
+				switch {
+				case readErr != nil:
+					fmt.Printf("Warning: Error reading file %q: %q\n", path, readErr)
+				case extractErr != nil:
+					fmt.Printf("Warning: Error extracting text from %q: %q\n", path, extractErr)
+				default:
+					fmt.Printf("Warning: Extraction timeout for %q\n", path)
+				}
+			}
+			return "", false
+		}
+		if strings.EqualFold(ext, ".pdf") {
+			atomic.AddInt64(&se.pdfProcessed, 1)
+		}
+		return cleanSearchContent(mappedContent{text: text}, config.IsLiteralTextFile(path)).text, true
+	}
+	handleOne := func(candidate discoveredCandidate, scratch *literalScanScratch) bool {
 		filePath := candidate.filePath
 		displayPath, rankingPath := projectedCandidatePath(candidate)
 		match := candidateMatch{
@@ -731,168 +945,36 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 			return false
 		}
 
-		// Check if file contains all search words
-		hasAllWords := true
-		var searchText string
-		if len(query.terms) > 1 {
-			if IsBinaryFormat(filePath) {
-				ext := filepath.Ext(filePath)
-
-				// MSG raw bytes cannot prove absence; its extractor handles it once.
-				if !strings.EqualFold(ext, ".msg") {
-					cap := capForBinaryPrefilter(ext)
-					startPF := time.Now()
-					found, decided := binaryStreamingPrefilterDecidedQuery(filePath, query, cap, se.Strict)
-					durPF := time.Since(startPF)
-					if strings.EqualFold(ext, ".eml") {
-						atomic.AddInt64(&se.emlPrefilterCount, 1)
-						atomic.AddInt64(&se.emlPrefilterDurNanos, durPF.Nanoseconds())
-					}
-
-					// Decided negative => safe skip
-					if decided && !found {
-						return false
-					}
-				}
-
-				// Extract and verify distance for binary formats, including PDFs.
-				if extractor, exists := se.Registry.GetExtractor(ext); exists {
-					extractedText, _, _, _, timedOut, err, extErr := se.extractBinaryFile(cm, filePath, ext, extractor, false)
-					if err != nil {
-						if !se.Silent {
-							fmt.Printf("Warning: Error reading file %q: %q\n", filePath, err)
-						}
-						return false
-					}
-					if timedOut || extErr != nil {
-						if !se.Silent {
-							if extErr != nil {
-								// underlying extractor error
-								fmt.Printf("Warning: Error extracting text from %q: %q\n", filePath, extErr)
-							} else {
-								fmt.Printf("Warning: Extraction timeout for %q\n", filePath)
-							}
-						}
-						return false
-					}
-					searchText = cleanSearchContent(mappedContent{text: extractedText}, config.IsLiteralTextFile(filePath)).text
-					analysis, ok := analyzeRankedText(searchText, query, se.Distance, se.Strict)
-					if ok {
-						match.setAnalysis(analysis)
-					}
-					hasAllWords = ok
-				} else {
-					if !se.Silent {
-						fmt.Printf("Warning: No extractor for %q\n", ext)
-					}
-					return false
-				}
-			} else {
-				// Text file: stream+distance
-				analysis, cleaned, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
-				searchText = cleaned
-				if err != nil {
-					if !se.Silent {
-						fmt.Printf("Warning: Error checking file %q: %q\n", filePath, err)
-					}
-					return false
-				}
-				if ok {
-					match.setAnalysis(analysis)
-				}
-				hasAllWords = ok
-			}
-		} else {
-			// Single-word presence check
-			if IsBinaryFormat(filePath) {
-				ext := filepath.Ext(filePath)
-				// Discovery already checked this exact single-term query. Direct
-				// FilterCandidates callers still need the bounded prefilter.
-				if !candidate.primaryPrefiltered && !strings.EqualFold(ext, ".msg") {
-					cap := capForBinaryPrefilter(ext)
-					foundPF, decidedPF := binaryStreamingPrefilterDecidedQuery(filePath, query, cap, true)
-					// Decided negative => safe skip
-					if decidedPF && !foundPF {
-						return false
-					}
-				}
-
-				// Bounded extraction fallback under semaphore + timeout.
-				if extractor, exists := se.Registry.GetExtractor(ext); exists {
-					extractedText, _, _, _, timedOut, err, extErr := se.extractBinaryFile(cm, filePath, ext, extractor, false)
-					if err != nil {
-						if !se.Silent {
-							fmt.Printf("Warning: Error reading file %q: %q\n", filePath, err)
-						}
-						return false
-					}
-					if timedOut || extErr != nil {
-						if !se.Silent {
-							if extErr != nil {
-								fmt.Printf("Warning: Error extracting text from %q: %q\n", filePath, extErr)
-							} else {
-								fmt.Printf("Warning: Extraction timeout for %q\n", filePath)
-							}
-						}
-						return false
-					}
-					searchText = cleanSearchContent(mappedContent{text: extractedText}, config.IsLiteralTextFile(filePath)).text
-					analysis, ok := analyzeRankedText(searchText, query, se.Distance, se.Strict)
-					if ok {
-						match.setAnalysis(analysis)
-					}
-					hasAllWords = ok
-				} else {
-					if !se.Silent {
-						fmt.Printf("Warning: No extractor for %q\n", ext)
-					}
-					return false
-				}
-			} else {
-				analysis, cleaned, ok, err := checkFileRankedAnalysisQuery(filePath, query, se.Distance, se.Strict, maxBytes)
-				searchText = cleaned
-				if err != nil {
-					if !se.Silent {
-						fmt.Printf("Warning: Error checking file %q: %q\n", filePath, err)
-					}
-					return false
-				}
-				if ok {
-					match.setAnalysis(analysis)
-				}
-				hasAllWords = ok
-			}
-		}
-
-		// Every Stage 2 failure path has returned, so count each PDF once here.
-		if strings.EqualFold(filepath.Ext(filePath), ".pdf") {
-			atomic.AddInt64(&se.pdfProcessed, 1)
-		}
-
-		if !hasAllWords {
+		cleaned, ok := loadCleaned(candidate, scratch)
+		if !ok {
 			return false
 		}
-
-		// Check exclusions against the same cleaned text used for positive matching.
-		if len(wordExcludes) > 0 && CheckTextContainsExcludeWordsWithOptions(searchText, wordExcludes, se.queryOptions()) {
-			return false
-		}
-
-		match.pathMatchCount = pathMatchCount(displayPath, candidate.rankingRoot.LogicalPath, query)
+		cat := analyzeRankedCatalog(cleaned, query, se.Distance, se.Strict, allowFallback)
+		excluded := len(wordExcludes) > 0 && CheckTextContainsExcludeWordsWithOptions(cleaned, wordExcludes, se.queryOptions())
+		cleaned = ""
+		match.pathSlotMatches, match.pathMatchCount = pathMatchStats(displayPath, candidate.rankingRoot.LogicalPath, query)
 		mu.Lock()
-		matchingFiles = append(matchingFiles, match)
-		mu.Unlock()
+		defer mu.Unlock()
+		summary.add(cat.WordCount, cat.SlotPresent)
+		if excluded {
+			return false
+		}
+		match.catalog = &cat
+		if cat.MaxTermCount >= 2 || (query.slotCount() == 1 && cat.MaxTermCount == 1) {
+			multiMatches = append(multiMatches, match)
+		} else if cat.MaxTermCount == 1 {
+			stage2Single = append(stage2Single, match)
+		}
 		return true
 	}
 
 	// Start workers
 	for i := 0; i < workers; i++ {
 		wg.Go(func() {
+			var scratch literalScanScratch
 			for candidate := range jobs {
 				maybePaceForMemory()
-				matched := handleOne(candidate)
-
-				_ = matched
+				handleOne(candidate, &scratch)
 
 				// Atomic progress update
 				cur := atomic.AddInt64(&processed, 1)
@@ -911,17 +993,73 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 	}
 
 	// Enqueue jobs
-	for _, candidate := range candidateFiles {
+	for _, candidate := range phase2a {
 		maybePaceForMemory()
 		jobs <- candidate
 	}
 	close(jobs)
 	wg.Wait()
 
-	return matchingFiles, nil
+	stats := buildCorpusStats(query.slotCount(), summary.baseN, summary.sumDL, summary.baseDF)
+	resolve := func(matches []candidateMatch, fallback bool) []candidateMatch {
+		resolved := matches[:0]
+		for _, m := range matches {
+			var rare []bool
+			if fallback {
+				rare = stats.RareSlot
+			}
+			an, ok := resolveRankedCatalog(*m.catalog, query, se.Distance, se.Strict, fallback, rare, stats.IDF, func() (string, bool) { return reloadCleanedQuiet(m.accessPath) })
+			m.catalog = nil
+			if !ok {
+				continue
+			}
+			m.setAnalysis(an)
+			m.score = scoreAnalyzedDocument(an, query, m.pathSlotMatches, stats, se.Distance)
+			m.isFallback, m.slotWeights, m.rareSlots = fallback, stats.IDF, rare
+			resolved = append(resolved, m)
+		}
+		clear(matches[len(resolved):])
+		return sortAndDedupeCandidates(resolved)
+	}
+	multiMatches = resolve(multiMatches, false)
+	if !allowFallback || len(multiMatches) >= fallbackScarcityK || stats.N < 2 {
+		return multiMatches, nil
+	}
+	fallbacks := resolve(stage2Single, true)
+	for _, candidate := range deferredSingle {
+		rare := false
+		for s, hit := range candidate.stage1.slotPresent {
+			rare = rare || (hit && stats.RareSlot[s])
+		}
+		if !rare {
+			continue
+		}
+		cleaned, ok := reloadCleanedQuiet(candidate.filePath)
+		if !ok || (len(wordExcludes) > 0 && CheckTextContainsExcludeWordsWithOptions(cleaned, wordExcludes, se.queryOptions())) {
+			continue
+		}
+		an, ok := analyzeRankedTextWithOptions(cleaned, query, se.Distance, false, true, stats.RareSlot, stats.IDF)
+		cleaned = ""
+		if !ok {
+			continue
+		}
+		displayPath, rankingPath := projectedCandidatePath(candidate)
+		m := candidateMatch{filePath: displayPath, accessPath: candidate.filePath, canonicalKey: candidate.canonicalKey, rankingPath: rankingPath, rootOrder: candidate.rootOrder, isFallback: true, slotWeights: stats.IDF, rareSlots: stats.RareSlot}
+		m.setAnalysis(an)
+		m.pathSlotMatches, m.pathMatchCount = pathMatchStats(displayPath, candidate.rankingRoot.LogicalPath, query)
+		m.score = scoreAnalyzedDocument(an, query, m.pathSlotMatches, stats, se.Distance)
+		fallbacks = append(fallbacks, m)
+	}
+	fallbacks = sortAndDedupeCandidates(fallbacks)
+	limit := min(fallbackTailCap, fallbackScarcityK-len(multiMatches))
+	if len(fallbacks) > limit {
+		fallbacks = fallbacks[:limit]
+	}
+	return append(multiMatches, fallbacks...), nil
 }
 
 type rankingKey struct {
+	isFallback       bool
 	filePath         string
 	rootOrder        int
 	canonicalPath    string
@@ -966,6 +1104,9 @@ func compareRankingPath(left, right string) int {
 // rankingBetter is the single file-order comparator used before and after
 // Stage 3.
 func rankingBetter(a, b rankingKey) bool {
+	if a.isFallback != b.isFallback {
+		return !a.isFallback
+	}
 	if RoundScore(a.score) != RoundScore(b.score) {
 		return RoundScore(a.score) > RoundScore(b.score)
 	}
@@ -1003,6 +1144,7 @@ func candidateRankingKey(match candidateMatch) rankingKey {
 		filePath:         rankingPath,
 		rootOrder:        match.rootOrder,
 		canonicalPath:    match.canonicalKey,
+		isFallback:       match.isFallback,
 		score:            match.score,
 		termCount:        match.termCount,
 		pathMatchCount:   match.pathMatchCount,
@@ -1021,6 +1163,7 @@ func resultRankingKey(result SearchResult) rankingKey {
 		filePath:         rankingPath,
 		rootOrder:        result.rootOrder,
 		canonicalPath:    result.canonicalPath,
+		isFallback:       result.IsFallback,
 		score:            result.Score,
 		termCount:        result.TermCount,
 		pathMatchCount:   result.PathMatchCount,
@@ -1081,6 +1224,7 @@ func (se *SearchEngine) buildPathOnlyResults(matchingFiles []candidateMatch) []S
 			rootOrder:        match.rootOrder,
 			canonicalPath:    match.canonicalKey,
 			Score:            match.score,
+			IsFallback:       match.isFallback,
 			TermCount:        match.termCount,
 			PathMatchCount:   match.pathMatchCount,
 			BoundaryQuality:  match.boundaryQuality,
@@ -1212,16 +1356,16 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		// Per-file ranked subset: every coverage level from the query's minimum
 		// match requirement up to its Stage 2 term count can seed a chunk, so a file's
 		// best cluster no longer suppresses separate lower-quality clusters.
-		// minTerms mirrors Strategy A: relaxed 3+ term queries seed from 2-term
-		// clusters up; strict (and 1-2 term) queries require the full set.
+		// Primary multi-slot results seed from two slots; fallback results seed
+		// only from corpus-approved rare slots. Strict results require every slot.
 		minTerms := 0
-		if len(query.terms) >= 3 && !se.Strict {
-			minTerms = 2
+		if !se.Strict {
+			minTerms = min(2, match.termCount)
 		}
 		// Pass Distance unchanged to preserve Stage 2 parity, including zero.
 		// NewSearchEngine supplies the default of 5000; legacy excerpt helpers
 		// use unconstrainedDistance to disable their proximity bound.
-		spans = extractRankedMappedExcerptSpansQuery(mapped, query, maxExcerpts, match.termCount, minTerms, se.Distance, literal)
+		spans = extractRankedMappedExcerptSpansWeighted(mapped, query, maxExcerpts, match.termCount, minTerms, se.Distance, literal, match.slotWeights, match.rareSlots)
 		excerpts = excerptSpanTexts(spans)
 
 		if len(excerpts) == 0 {
@@ -1272,6 +1416,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 			canonicalPath:    match.canonicalKey,
 			FileSize:         fileSize,
 			Score:            match.score,
+			IsFallback:       match.isFallback,
 			TermCount:        match.termCount,
 			PathMatchCount:   match.pathMatchCount,
 			BoundaryQuality:  match.boundaryQuality,
@@ -1346,14 +1491,14 @@ func (se *SearchEngine) ExecuteDetailed() (ExecutionResult, error) {
 	}
 	if len(matchingFiles) == 0 {
 		if !se.Silent {
-			fmt.Println("No files found containing all search terms.")
+			fmt.Println("No matching files found.")
 		}
 		return ExecutionResult{TimedOut: int(atomic.LoadInt64(&se.timedOutFiles))}, nil
 	}
 
 	// Step 4: Extract and build results
 	if !se.Silent {
-		fmt.Printf("Found %s files containing all words. Extracting content...\n", formatNumber(len(matchingFiles)))
+		fmt.Printf("Found %s matching files. Extracting content...\n", formatNumber(len(matchingFiles)))
 	}
 
 	outcome, err := se.extractAndBuildResultsDetailed(query, matchingFiles)
