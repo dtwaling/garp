@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/richardlehane/mscfb"
 
@@ -827,6 +828,9 @@ func discoveryChunkMatchStart(bytesRead int64, retained int) int {
 	return 0
 }
 
+// discoveryMatchIndex borrows buf synchronously; callers must not mutate it
+// during the call. The matcher only reads the view and returns byte offsets,
+// never retaining text, so the caller can reuse its buffer after return.
 func discoveryMatchIndex(buf []byte, matcher termMatcher, from int) int {
 	if from < 0 {
 		from = 0
@@ -838,7 +842,9 @@ func discoveryMatchIndex(buf []byte, matcher termMatcher, from int) int {
 		return asciiPlainTermIndexCI(buf, matcher, from)
 	}
 
-	found, ok := matcher.find(string(buf), from)
+	// Keep canonical wildcard/Unicode/byte-exact semantics without copying
+	// each streaming window. This read-only string must not escape the call.
+	found, ok := matcher.find(unsafe.String(unsafe.SliceData(buf), len(buf)), from)
 	if !ok {
 		return -1
 	}

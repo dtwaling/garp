@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"testing"
@@ -268,6 +269,51 @@ func TestDiscoveryPlainASCIIFastPathAllocations(t *testing.T) {
 			}
 			if allocations != 0 {
 				t.Fatalf("plain ASCII discovery allocations = %v, want 0", allocations)
+			}
+		})
+	}
+}
+
+func TestLiteralSlotScannerAllocationScaling(t *testing.T) {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "-race" && setting.Value == "true" {
+				// Race builds randomly drop regexp machines from sync.Pool;
+				// measure allocation scaling only without that instrumentation.
+				t.Skip("regexp pool allocations are randomized by the race detector")
+			}
+		}
+	}
+	path := filepath.Join(t.TempDir(), "candidate.txt")
+	for _, tc := range []struct{ name, term, body string }{
+		{"ASCII", "missing", "alpha beta "},
+		{"wildcard", "mi?sing", "alpha beta "},
+		{"Unicode", "éxcluded", "alpha beta "},
+		{"Unicode fold", "missing", "Kelvin ſink "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := compileQuery([]string{tc.term}, PartialModeOff)
+			var scratch literalScanScratch
+			var baseline float64
+			for _, chunks := range []int{1, 8} {
+				raw := strings.Repeat(tc.body, chunks*discoveryChunkSize/len(tc.body))
+				if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				wantWords := countCleanedWords(CleanContentCode(raw))
+				allocs := testing.AllocsPerRun(3, func() {
+					got, err := scanLiteralSlotsAndWords(&scratch, path, q, false, int64(len(raw)+1))
+					if err != nil || !got.exactSlots || got.wordCount != wantWords || got.slotCount != 0 {
+						t.Fatalf("scan = %+v, err = %v; want %d words and no slots", got, err, wantWords)
+					}
+				})
+				t.Logf("chunks=%d allocations/scan=%.0f", chunks, allocs)
+				if chunks == 1 {
+					baseline = allocs
+				} else if allocs > baseline+1 {
+					// Allow fixed runtime overhead, not a copy per window.
+					t.Fatalf("allocations grew from %.0f to %.0f across %d chunks", baseline, allocs, chunks)
+				}
 			}
 		})
 	}
