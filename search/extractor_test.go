@@ -350,32 +350,70 @@ func TestReaderAtExtractorEnforcesMaxExtractedBytes(t *testing.T) {
 	})
 }
 
-func TestDOCAndMSGReaderAtBoundedFallback(t *testing.T) {
-	for ext, e := range map[string]ReaderAtExtractor{"doc": &DOCExtractor{}, "msg": &MSGExtractor{}} {
-		t.Run(ext, func(t *testing.T) {
-			for _, limit := range []int64{4096, 4 * 1024 * 1024} {
-				cap := min(limit, 2*1024*1024)
-				end := cap
-				if ext == "msg" {
-					end += utf8.UTFMax - 1 // Boundary lookahead is not decoded.
-				}
-				data := []byte("fallback prefix " + strings.Repeat(" ", int(cap)-len("fallback prefix ")) + "XYZ")
-				r := &guardedReaderAt{t: t, r: bytes.NewReader(data), end: end}
-				text, err := e.ExtractReaderAt(r, 50*1024*1024, limit)
-				if err != nil || text != "fallback prefix" {
-					t.Fatalf("limit %d: extraction = (%q, %v)", limit, text, err)
-				}
-				if r.maxEnd != end {
-					t.Fatalf("prefix read ends at %d, want %d", r.maxEnd, end)
-				}
-			}
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-			text, err := e.ExtractReaderAt(contextReaderAt{ctx, strings.NewReader("fallback prefix")}, 15, 4)
-			if text != "" || !errors.Is(err, context.Canceled) {
-				t.Fatalf("canceled extraction = (%q, %v)", text, err)
+func TestDOCReaderAtBoundedFallback(t *testing.T) {
+	e := &DOCExtractor{}
+	for _, limit := range []int64{4096, 4 * 1024 * 1024} {
+		cap := min(limit, 2*1024*1024)
+		data := []byte("fallback prefix " + strings.Repeat(" ", int(cap)-len("fallback prefix ")) + "XYZ")
+		r := &guardedReaderAt{t: t, r: bytes.NewReader(data), end: cap}
+		text, err := e.ExtractReaderAt(r, 50*1024*1024, limit)
+		if err != nil || text != "fallback prefix" {
+			t.Fatalf("limit %d: extraction = (%q, %v)", limit, text, err)
+		}
+		if r.maxEnd != cap {
+			t.Fatalf("prefix read ends at %d, want %d", r.maxEnd, cap)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	text, err := e.ExtractReaderAt(contextReaderAt{ctx, strings.NewReader("fallback prefix")}, 15, 4)
+	if text != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled extraction = (%q, %v)", text, err)
+	}
+}
+
+func TestMSGExtractorRequiresCFBContainer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"empty", nil},
+		{"plain text", []byte("arithmetic exception, numeric overflow")},
+		{"UTF-8 Tcl catalog", []byte("namespace eval ::tk {\n	::msgcat::mcset de \"&Open...\" \"\u00d6&ffnen...\"\n}\n")},
+		{"binary catalog", binaryCatalogMSG},
+		{"sparse NUL catalog", sparseNULCatalogMSG},
+		{"UTF-16LE HTML", chineseHTMLUTF16LE},
+		{"large text", []byte(strings.Repeat("fallback prefix ", 4096))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &guardedReaderAt{t: t, r: bytes.NewReader(tc.data), end: 512}
+			text, err := (&MSGExtractor{}).ExtractReaderAt(r, 50*1024*1024, 0)
+			if text != "" || err == nil || !strings.HasPrefix(err.Error(), "failed to parse MSG: ") {
+				t.Fatalf("extraction = (%q, %v), want empty text and MSG parse error", text, err)
 			}
 		})
+	}
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"no MAPI text streams", cfbWithRootStreams([2]string{"__nameid_version1.0", "__substg1.0_001A001E"}, [2][]byte{nil, []byte("IPM.Note")})},
+		{"NUL-terminated empty strings", cfbWithRootStreams([2]string{"__substg1.0_0037001E", "__substg1.0_1000001F"}, [2][]byte{{0}, {0, 0}})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text, err := (&MSGExtractor{}).ExtractText(tc.data)
+			if text != "" || err != nil {
+				t.Fatalf("extraction = (%q, %v), want empty text and no error", text, err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	data := readerAtMSG()
+	text, err := (&MSGExtractor{}).ExtractReaderAt(contextReaderAt{ctx, bytes.NewReader(data)}, int64(len(data)), 0)
+	// mscfb stringifies read errors rather than unwrapping them.
+	if text != "" || err == nil {
+		t.Fatalf("canceled extraction = (%q, %v), want empty text and error", text, err)
 	}
 }
 
@@ -510,106 +548,67 @@ var chineseHTMLUTF16LE = utf16LE("<html><body><p>" + strings.Repeat("\u4e00\u5b6
 func TestMSGExtractorDecodesStringStreamsByPropertyType(t *testing.T) {
 	hiddenHTML := utf16LE("<html><style>cssneedle</style><script>jsneedle()</script><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</body></html>")
 	for _, tc := range []struct {
-		name     string
-		data     []byte
-		want     string
-		notWant  string
-		maxBytes int64 // Nonzero limits also require exact output.
+		name    string
+		data    []byte
+		want    string
+		notWant string
 	}{
-		{"ANSI 001E", ansiMSG(), "subject body", "", 0},
-		{"ANSI 001E CP1252 decodes to UTF-8", cp1252MSG(), "Menú café Le café crème ordered", "", 0},
+		{"ANSI 001E", ansiMSG(), "subject body", ""},
+		{"ANSI 001E CP1252 decodes to UTF-8", cp1252MSG(), "Menú café Le café crème ordered", ""},
 		{"ANSI 001E UTF-8 is not decoded twice", cfbWithRootStreams(
 			[2]string{"__substg1.0_0037001E", "__substg1.0_1000001E"},
-			[2][]byte{[]byte("Le café crème" + strings.Repeat(" ", 4081)), []byte("body" + strings.Repeat(" ", 4092))}), "Le café crème", "cafÃ©", 0},
+			[2][]byte{[]byte("Le café crème" + strings.Repeat(" ", 4081)), []byte("body" + strings.Repeat(" ", 4092))}), "Le café crème", "cafÃ©"},
 		{"binary CP1252 HTML decodes 8-bit text", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("<html><body><p>Le caf\xe9 cr\xe8me au lait</p></body></html>"), nil}), "Le café crème au lait", "", 0},
-		{"non-CFB 8-bit fallback", []byte("arithmetic exception, numeric overflow"), "arithmetic exception, numeric overflow", "", 0},
+			[2][]byte{[]byte("<html><body><p>Le caf\xe9 cr\xe8me au lait</p></body></html>"), nil}), "Le café crème au lait", ""},
 		{"binary CP1252 HTML excludes UTF-16LE mojibake", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("<html><body><p>cp1252htmlmarker caf\xe9 text \x93quoted\x94</p></body></html>"), nil}), "cp1252htmlmarker caf\u00e9 text \u201cquoted\u201d", "\u683c\u6d74\u3e6c\u623c\u646f\u3e79", 0},
-		{"non-CFB UTF-8 Tcl catalog", []byte("namespace eval ::tk {\n	::msgcat::mcset de \"&Open...\" \"\u00d6&ffnen...\"\n}\n"), "\u00d6&ffnen...", "\u616e\u656d\u7073\u6361", 0},
-		{"non-CFB CP1252 text", []byte("Men\xfa caf\xe9 cr\xe8me"), "Men\u00fa caf\u00e9 cr\u00e8me", "\u654d", 0},
-		{"non-CFB binary catalog", binaryCatalogMSG, "arithmetic exception, numeric overflow invalid database key", "\u7261\u7469\u6d68\u7465\u6369", 0},
-		{"non-CFB sparse NUL catalog", sparseNULCatalogMSG, "arithmetic overflow invalid database key", "\u7261\u7469\u6d68\u7465\u6369", 0},
+			[2][]byte{[]byte("<html><body><p>cp1252htmlmarker caf\xe9 text \x93quoted\x94</p></body></html>"), nil}), "cp1252htmlmarker caf\u00e9 text \u201cquoted\u201d", "\u683c\u6d74\u3e6c\u623c\u646f\u3e79"},
 		{"binary 0102 sparse NUL text", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{sparseNULCatalogMSG, nil}), "arithmetic overflow", "\u7261\u7469\u6d68\u7465\u6369", 0},
+			[2][]byte{sparseNULCatalogMSG, nil}), "arithmetic overflow", "\u7261\u7469\u6d68\u7465\u6369"},
 		{"binary UTF-16LE HTML with low-byte NULs", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{chineseHTMLUTF16LE, nil}), "\u4e00\u5b63\u5ea6\u62a5\u544a", "", 0},
-		{"non-CFB UTF-16LE HTML with low-byte NULs", chineseHTMLUTF16LE, "\u4e00\u5b63\u5ea6\u62a5\u544a", "", 0},
-		{"non-CFB UTF-8 Latin cut after byte 1", []byte("café 季度 é"), "café 季度", "Ã å", int64(len("café 季度 ") + 1)},
-		{"non-CFB UTF-8 CJK cut after byte 1", []byte("café 季度 报"), "café 季度", "Ã å", int64(len("café 季度 ") + 1)},
-		{"non-CFB UTF-8 CJK cut after byte 2", []byte("café 季度 报"), "café 季度", "Ã å", int64(len("café 季度 ") + 2)},
-		{"non-CFB UTF-8 emoji cut after byte 1", []byte("café 季度 😀"), "café 季度", "Ã å", int64(len("café 季度 ") + 1)},
-		{"non-CFB UTF-8 emoji cut after byte 2", []byte("café 季度 😀"), "café 季度", "Ã å", int64(len("café 季度 ") + 2)},
-		{"non-CFB UTF-8 emoji cut after byte 3", []byte("café 季度 😀"), "café 季度", "Ã å", int64(len("café 季度 ") + 3)},
-		{"non-CFB UTF-8 replacement rune cut after byte 1", []byte("caf\u00e9 \ufffd tail"), "caf\u00e9", "\u00c3", int64(len("caf\u00e9 ") + 1)},
-		{"non-CFB UTF-8 replacement rune cut after byte 2", []byte("caf\u00e9 \ufffd tail"), "caf\u00e9", "\u00c3", int64(len("caf\u00e9 ") + 2)},
-		{"non-CFB UTF-8 replacement rune complete at limit", []byte("caf\u00e9 \ufffd tail"), "caf\u00e9 \ufffd", "\u00c3", int64(len("caf\u00e9 \ufffd"))},
-		{"non-CFB UTF-8 Latin untruncated", []byte("café 季度 é"), "café 季度 é", "Ã å", int64(len("café 季度 é"))},
-		{"non-CFB UTF-8 CJK untruncated", []byte("café 季度 报"), "café 季度 报", "Ã å", int64(len("café 季度 报"))},
-		{"non-CFB UTF-8 complete rune at limit", []byte("café 季度 报 remainder"), "café 季度 报", "Ã å", int64(len("café 季度 报"))},
-		{"non-CFB CP1252 truncated ASCII tail", []byte("caf\xe9 text remainder"), "café text", "", int64(len("caf\xe9 text"))},
-		{"non-CFB CP1252 truncated incomplete-looking tail", []byte("caf\xe9 caf\xe9 remainder"), "café café", "", int64(len("caf\xe9 caf\xe9"))},
-		{"non-CFB CP1252 untruncated incomplete-looking tail", []byte("caf\xe9"), "café", "", int64(len("caf\xe9"))},
-		{"non-CFB CP1252 lone high byte at limit", []byte("caf\xe9 remainder"), "café", "", 4},
-		{"non-CFB UTF-8 same leading byte at limit", []byte("caf\u9000 remainder"), "caf", "", 4},
-		{"non-CFB CP1252 incomplete lookahead", []byte("caf\xe9\x80"), "café", "", 4},
-		{"non-CFB CP1252 invalid lookahead", []byte("caf\xe9\x80 remainder"), "café", "", 4},
-		{"non-CFB invalid UTF-8 tail is retained", []byte("report \xe0\x80 remainder"), "report à€", "", int64(len("report \xe0\x80"))},
-		{"non-CFB UTF-16LE complete unit at limit", utf16LE("ABCé remainder"), "ABCé", "", int64(len(utf16LE("ABCé")))},
-		{"non-CFB UTF-8 emoji untruncated", []byte("café 季度 😀"), "café 季度 😀", "Ã å", int64(len("café 季度 😀"))},
-		{"non-CFB UTF-8 Latin complete rune at limit", []byte("café 季度 é remainder"), "café 季度 é", "Ã å", int64(len("café 季度 é"))},
-		{"non-CFB UTF-8 emoji complete rune at limit", []byte("café 季度 😀 remainder"), "café 季度 😀", "Ã å", int64(len("café 季度 😀"))},
+			[2][]byte{chineseHTMLUTF16LE, nil}), "\u4e00\u5b63\u5ea6\u62a5\u544a", ""},
 		{"binary UTF-16LE HTML drops hidden blocks", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{hiddenHTML, nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle", 0},
-		{"non-CFB UTF-16LE HTML drops hidden blocks", hiddenHTML, "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle", 0},
+			[2][]byte{hiddenHTML, nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "cssneedle jsneedle"},
 		{"Unicode 001F without BOM", cfbWithRootStreams(
 			[2]string{"__substg1.0_0037001F", "__substg1.0_1000001F"},
-			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема", "", 0},
+			[2][]byte{utf16LE(strings.Repeat("Тема ", 409)), utf16LE("body")}), "Тема Тема", ""},
 		{"binary HTML without BOM and predominantly non-Latin body", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{utf16LE(`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal", 0},
+			[2][]byte{utf16LE(`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), nil}), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal"},
 		{"binary UTF-16LE HTML isolates stray brackets between readings", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{utf16LE("<html><body><p>report > limit</p>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "\u503c"), nil}), "report limit \u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "", 0},
-		{"non-CFB UTF-16LE HTML strips attributes", utf16LE(
-			`<html><body><p class="MsoNormal">` + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "</p></body></html>"), "\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", "MsoNormal", 0},
+			[2][]byte{utf16LE("<html><body><p>report > limit</p>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "\u503c"), nil}), "report limit \u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", ""},
 		{"binary CP1252 HTML preserves entity-encoded brackets", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("<html><body>Caf\xe9 <p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", "", 0},
+			[2][]byte{[]byte("<html><body>Caf\xe9 <p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
 		{"binary non-Latin UTF-16LE HTML preserves entity-encoded brackets", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{utf16LE("<html><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "<p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", "", 0},
+			[2][]byte{utf16LE("<html><body>" + strings.Repeat("\u6771\u4eac\u90fd\u306e\u5831\u544a\u66f8", 30) + "<p>From: John &lt;john@example.com&gt; Q3 &lt; Q4 forecast revenue &gt; target</p></body></html>"), nil}), "John <john@example.com> Q3 < Q4 forecast revenue > target", ""},
 		{"binary CP1252 HTML strips multi-line tags and keeps text between stray comparison brackets", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("<html><body>Caf\xe9 <p class=MsoNormal\nstyle='color:red'>load <80% keeps\nwarm cache until >90%</p></body></html>"), nil}), "keeps warm cache until", "MsoNormal", 0},
+			[2][]byte{[]byte("<html><body>Caf\xe9 <p class=MsoNormal\nstyle='color:red'>load <80% keeps\nwarm cache until >90%</p></body></html>"), nil}), "keeps warm cache until", "MsoNormal"},
 		{"binary HTML without BOM and predominantly Cyrillic body", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{utf16LE("<html><body>" + strings.Repeat("Отчёт о продажах", 30) + "</body></html>"), nil}), "Отчёт о продажах", "", 0},
+			[2][]byte{utf16LE("<html><body>" + strings.Repeat("Отчёт о продажах", 30) + "</body></html>"), nil}), "Отчёт о продажах", ""},
 		{"binary CP1252 HTML strips quoted attributes after newline", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\n\"load <80%\">alpha"), nil}), "alpha", "secret", 0},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\n\"load <80%\">alpha"), nil}), "alpha", "secret"},
 		{"binary CP1252 HTML strips angle sequences in attributes", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"<< </ 80%\">alpha"), nil}), "alpha", "secret", 0},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"<< </ 80%\">alpha"), nil}), "alpha", "secret"},
 		{"binary CP1252 HTML strips ordinary attributes", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"load\">alpha"), nil}), "alpha", "secret", 0},
+			[2][]byte{[]byte("Caf\xe9 <img src=\"secret\" alt=\"load\">alpha"), nil}), "alpha", "secret"},
 		{"binary UTF-8 HTML preserves non-ASCII text and strips attributes", cfbWithRootStreams(
 			[2]string{"__substg1.0_10130102", "unused"},
-			[2][]byte{[]byte(`<html><body><p class="MsoNormal">café 東京都の報告書 quarterly</p></body></html>`), nil}), "café 東京都の報告書 quarterly", "MsoNormal", 0},
+			[2][]byte{[]byte(`<html><body><p class="MsoNormal">café 東京都の報告書 quarterly</p></body></html>`), nil}), "café 東京都の報告書 quarterly", "MsoNormal"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := (&MSGExtractor{}).ExtractReaderAt(bytes.NewReader(tc.data), int64(len(tc.data)), tc.maxBytes)
-			if tc.maxBytes != 0 {
-				if got != tc.want {
-					t.Errorf("bounded extraction = %q, want exactly %q", got, tc.want)
-				}
-			}
+			got, err := (&MSGExtractor{}).ExtractReaderAt(bytes.NewReader(tc.data), int64(len(tc.data)), 0)
 			if err != nil || !strings.Contains(got, tc.want) {
 				t.Errorf("extraction = (%q, %v), want containing %q", got, err, tc.want)
 			}

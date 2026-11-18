@@ -924,8 +924,8 @@ func absFloat(v float64) float64 {
 // Windows-1252. Binary 0102 (HTML only) is detected UTF-16, else ANSI,
 // plus a UTF-16LE reading only with sufficient odd-lane NUL density and dominance
 // or aligned UTF-16LE markup.
-// HTML is used only without a plain body. Non-CFB input, or a message with no Subject/body
-// text, falls back to bounded legacy-stream decoding.
+// HTML is used only without a plain body. An OLE/CFB container is required;
+// other input returns a parse error. A message with no Subject/Body/HTML text yields empty text.
 type MSGExtractor struct{}
 
 // ExtractText implements the Extractor interface for MSG files
@@ -933,128 +933,104 @@ func (e *MSGExtractor) ExtractText(data []byte) (string, error) {
 	return e.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
 }
 
-// ExtractReaderAt reads only target MAPI streams and bounds fallback salvage.
+// ExtractReaderAt reads only target MAPI streams.
 func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBytes int64) (string, error) {
 	if r == nil || size < 0 {
 		return "", fmt.Errorf("invalid reader or size: %d", size)
 	}
 	limit := effectiveMaxExtractedBytes(maxExtractedBytes)
 	// Parse the OLE compound file and decode Subject/Body (then HTML) by MAPI property type.
-	if cf, err := mscfb.New(r); err == nil {
-		streams := make(map[string][]byte)
-		var totalRead int64
-		for ent, err2 := cf.Next(); err2 == nil; ent, err2 = cf.Next() {
-			if len(ent.Path) != 0 {
-				continue
-			}
-			name := ent.Name
-			switch name {
-			case "__substg1.0_0037001F", "__substg1.0_0037001E", "__substg1.0_1000001F", "__substg1.0_1000001E", "__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102":
-			default:
-				continue
-			}
-			b, err := readBoundedAll(ent, limit-totalRead)
-			if err != nil {
-				return "", err
-			}
-			totalRead += int64(len(b))
-			if len(b) > 0 {
-				streams[name] = b
-			}
+	cf, err := mscfb.New(r)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse MSG: %w", err)
+	}
+	streams := make(map[string][]byte)
+	var totalRead int64
+	for ent, err2 := cf.Next(); err2 == nil; ent, err2 = cf.Next() {
+		if len(ent.Path) != 0 {
+			continue
 		}
-
-		// Helper: prefer Unicode (001F), then ANSI (001E), then binary 0102 (for HTML)
-		findStream := func(keys ...string) (string, []byte, bool) {
-			for _, k := range keys {
-				if v, ok := streams[k]; ok && len(v) > 0 {
-					return k, v, true
-				}
-			}
-			return "", nil, false
+		name := ent.Name
+		switch name {
+		case "__substg1.0_0037001F", "__substg1.0_0037001E", "__substg1.0_1000001F", "__substg1.0_1000001E", "__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102":
+		default:
+			continue
 		}
-		// MAPI string types determine encoding; only binary properties need detection.
-		decodeMSGText := func(name string, b []byte) string {
-			switch {
-			case strings.HasSuffix(name, "001F"):
-				r := transform.NewReader(bytes.NewReader(b), unicode.UTF16(unicode.LittleEndian, unicode.UseBOM).NewDecoder())
-				s, _ := io.ReadAll(r)
-				return strings.TrimSpace(string(s))
-			case strings.HasSuffix(name, "001E"):
-				// ANSI properties must never be interpreted as UTF-16.
-			default:
-				if s, ok := tryDecodeUTF16BestEffort(b); ok {
-					return strings.TrimSpace(s)
-				}
-				// Retain both readings only with sufficient odd-lane NUL density and
-				// dominance or aligned UTF-16LE markup, even with non-Latin low-byte NULs.
-				// 8-bit HTML gets the single ANSI reading.
-				// Strip each reading's tags before combining, while markup is intact.
-				// Leave entities encoded for the final HTML pass to decode once.
-				if hasUTF16LECadence(b) {
-					text := stripReadingMarkup(decodeANSIText(b)) + "\n" +
-						stripReadingMarkup(utf16LEReadingWithMarkup(b, true))
-					return strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
-				}
-			}
-			s := whitespaceRegex.ReplaceAllString(decodeANSIText(b), " ")
-			return strings.TrimSpace(s)
+		b, err := readBoundedAll(ent, limit-totalRead)
+		if err != nil {
+			return "", err
 		}
-
-		var subject, body string
-
-		// PR_SUBJECT: 0037 (Unicode 001F; ANSI 001E)
-		if name, b, ok := findStream("__substg1.0_0037001F", "__substg1.0_0037001E"); ok {
-			subject = decodeMSGText(name, b)
-		}
-		// PR_BODY: 1000 (Unicode 001F; ANSI 001E)
-		if name, b, ok := findStream("__substg1.0_1000001F", "__substg1.0_1000001E"); ok {
-			body = decodeMSGText(name, b)
-		}
-		// PR_HTML: 1013 (Unicode 001F; ANSI 001E; sometimes 0102 binary); use as fallback for body
-		if body == "" {
-			if name, b, ok := findStream("__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102"); ok {
-				html := decodeMSGText(name, b)
-				if html == "" {
-					html = string(b)
-				}
-				body = strings.TrimSpace(stripHTMLTags(html))
-			}
-		}
-
-		if subject != "" || body != "" {
-			return mailSearchText(subject, body), nil
+		totalRead += int64(len(b))
+		if len(b) > 0 {
+			streams[name] = b
 		}
 	}
 
-	// Fallback: bounded shared legacy-stream decoding. Read up to three extra
-	// bytes only to distinguish a split UTF-8 rune from a Windows-1252 high byte.
-	fallbackMax := min(limit, 2*1024*1024)
-	readSize := min(size, fallbackMax)
-	if fallbackMax < size {
-		readSize = min(size, fallbackMax+int64(utf8.UTFMax-1))
-	}
-	raw, readErr := io.ReadAll(io.NewSectionReader(r, 0, readSize))
-	if readErr != nil {
-		return "", readErr
-	}
-	data := raw[:min(int64(len(raw)), fallbackMax)]
-	// Never decode lookahead bytes, and leave NUL-bearing binary/UTF-16 data
-	// untouched. Trim only a verified split rune after an otherwise UTF-8 prefix.
-	if len(data) < len(raw) && bytes.IndexByte(data, 0) < 0 {
-		for tailStart := len(data) - 1; tailStart >= 0 && tailStart >= len(data)-(utf8.UTFMax-1); tailStart-- {
-			if !utf8.RuneStart(data[tailStart]) {
-				continue
+	// Helper: prefer Unicode (001F), then ANSI (001E), then binary 0102 (for HTML)
+	findStream := func(keys ...string) (string, []byte, bool) {
+		for _, k := range keys {
+			if v, ok := streams[k]; ok && len(v) > 0 {
+				return k, v, true
 			}
-			if !utf8.FullRune(data[tailStart:]) && utf8.Valid(data[:tailStart]) {
-				_, width := utf8.DecodeRune(raw[tailStart:])
-				if width > len(data)-tailStart {
-					data = data[:tailStart]
-				}
+		}
+		return "", nil, false
+	}
+	// MAPI string types determine encoding; only binary properties need detection.
+	decodeMSGText := func(name string, b []byte) string {
+		switch {
+		case strings.HasSuffix(name, "001F"):
+			r := transform.NewReader(bytes.NewReader(b), unicode.UTF16(unicode.LittleEndian, unicode.UseBOM).NewDecoder())
+			s, _ := io.ReadAll(r)
+			return strings.TrimSpace(string(s))
+		case strings.HasSuffix(name, "001E"):
+			// ANSI properties must never be interpreted as UTF-16.
+		default:
+			if s, ok := tryDecodeUTF16BestEffort(b); ok {
+				return strings.TrimSpace(s)
 			}
-			break
+			// Retain both readings only with sufficient odd-lane NUL density and
+			// dominance or aligned UTF-16LE markup, even with non-Latin low-byte NULs.
+			// 8-bit HTML gets the single ANSI reading.
+			// Strip each reading's tags before combining, while markup is intact.
+			// Leave entities encoded for the final HTML pass to decode once.
+			if hasUTF16LECadence(b) {
+				text := stripReadingMarkup(decodeANSIText(b)) + "\n" +
+					stripReadingMarkup(utf16LEReadingWithMarkup(b, true))
+				return strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
+			}
+		}
+		s := whitespaceRegex.ReplaceAllString(decodeANSIText(b), " ")
+		return strings.TrimSpace(s)
+	}
+
+	var subject, body string
+
+	// PR_SUBJECT: 0037 (Unicode 001F; ANSI 001E)
+	if name, b, ok := findStream("__substg1.0_0037001F", "__substg1.0_0037001E"); ok {
+		subject = decodeMSGText(name, b)
+	}
+	// PR_BODY: 1000 (Unicode 001F; ANSI 001E)
+	if name, b, ok := findStream("__substg1.0_1000001F", "__substg1.0_1000001E"); ok {
+		body = decodeMSGText(name, b)
+	}
+	// PR_HTML: 1013 (Unicode 001F; ANSI 001E; sometimes 0102 binary); use as fallback for body
+	if body == "" {
+		if name, b, ok := findStream("__substg1.0_1013001F", "__substg1.0_1013001E", "__substg1.0_10130102"); ok {
+			html := decodeMSGText(name, b)
+			if html == "" {
+				html = string(b)
+			}
+			body = strings.TrimSpace(stripHTMLTags(html))
 		}
 	}
-	return decodeLegacyStreamText(data, false), nil
+
+	// MAPI string streams may carry NUL terminators, even for empty text.
+	subject = strings.TrimSpace(strings.Trim(subject, "\x00"))
+	body = strings.TrimSpace(strings.Trim(body, "\x00"))
+	if subject != "" || body != "" {
+		return mailSearchText(subject, body), nil
+	}
+	return "", nil
 }
 
 // decodeANSIText keeps valid UTF-8 (including ASCII) and decodes other 8-bit

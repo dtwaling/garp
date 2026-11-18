@@ -420,7 +420,7 @@ restricts to just this family.
 | DOC | `richardlehane/mscfb` + `WordDocument`/`1Table`/`0Table` streams (2 MiB total): Word 97-2003 text from the FIB piece table (Windows-1252 or UTF-16LE pieces); otherwise UTF-16 when a BOM or dominant NUL lane proves it, else printable ASCII, plus a UTF-16LE reading only with sufficient odd-lane NUL density and dominance or aligned UTF-16LE markup; non-CFB or textless files fall back to printable-ASCII salvage |
 | DOCX/ODT | `archive/zip` + XML |
 | RTF | regex/control-word stripping |
-| MSG | `richardlehane/mscfb` + MAPI property-typed Subject/Body: Unicode `001F` (UTF-16LE), ANSI `001E` (UTF-8, else Windows-1252); HTML body (`001F`/`001E`/`0102`) when no plain body, with a `0102` UTF-16LE reading only with sufficient odd-lane NUL density and dominance or aligned UTF-16LE markup; non-CFB files or messages without that text fall back to legacy-stream decoding (NUL-free text as UTF-8, else Windows-1252) |
+| MSG | `richardlehane/mscfb` + MAPI property-typed Subject/Body: Unicode `001F` (UTF-16LE), ANSI `001E` (UTF-8, else Windows-1252); HTML body (`001F`/`001E`/`0102`) when no plain body, with a `0102` UTF-16LE reading only with sufficient odd-lane NUL density and dominance or aligned UTF-16LE markup; requires an Outlook OLE/CFB container -- other .msg files are not searched, and a message without Subject/Body/HTML text yields no text |
 
 > PDF note: extractions share `--heavy-concurrency` slots -- auto: half of
 > `--workers`, at most 1 per 4 GiB of available RAM, clamped to 1..8.
@@ -564,6 +564,8 @@ separate from the root module.
   to find them.
 - Classification is by extension only. A markup file with a literal extension
   (for example, HTML saved as `.txt`) is searched with its tags.
+- `.msg` files are searched only as Outlook OLE/CFB messages. Other files that
+  use the extension (for example Tcl msgcat or Firebird message catalogs) are skipped.
 - Literal formats keep commas exactly as written, so a query must use the file's
   comma form: `name,email` matches `name,email`, but `name, email` does not.
   Before this release, every non-code document padded commas, so only
