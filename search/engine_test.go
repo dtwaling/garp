@@ -375,6 +375,7 @@ func TestRankingComparatorUsesEveryTier(t *testing.T) {
 		worse  rankingKey
 	}{
 		{name: "score", better: rankingKey{score: 11}, worse: rankingKey{score: 10}},
+		{name: "rounded score tie", better: rankingKey{score: 4.03276, termCount: 3}, worse: rankingKey{score: 4.03284, termCount: 2}},
 		{name: "term count", better: rankingKey{score: 10, termCount: 3}, worse: rankingKey{score: 10, termCount: 2}},
 		{
 			name:   "path match count",
@@ -546,11 +547,11 @@ func TestEngineCanonicalTerms(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("result count = %d, want 1", len(results))
 	}
-	if got := results[0]; got.Score != len("ms-*-api") ||
+	if got := results[0]; got.Score != float64(len("ms-*-api")) ||
 		got.TermCount != 1 ||
 		len(got.MatchedTerms) != 1 ||
 		got.MatchedTerms[0] != "ms-*-api" {
-		t.Errorf("metadata = score %d, term count %d, terms %q; want %d, 1, [ms-*-api]",
+		t.Errorf("metadata = score %v, term count %d, terms %q; want %d, 1, [ms-*-api]",
 			got.Score, got.TermCount, got.MatchedTerms, len("ms-*-api"))
 	}
 }
@@ -633,14 +634,14 @@ func TestEngineFilterCandidates(t *testing.T) {
 			}
 			all, ok := byFile["all.txt"]
 			if !ok || all.Score != 14 || all.TermCount != 3 || len(all.MatchedTerms) != 3 || all.SpanLength <= 0 {
-				t.Fatalf("all.txt metadata = (score %d, term count %d, terms %v, span %d), want score 14, 3 terms, and positive span", all.Score, all.TermCount, all.MatchedTerms, all.SpanLength)
+				t.Fatalf("all.txt metadata = (score %v, term count %d, terms %v, span %d), want score 14, 3 terms, and positive span", all.Score, all.TermCount, all.MatchedTerms, all.SpanLength)
 			}
 			if tt.strict {
 				if _, found := byFile["relaxed.txt"]; found {
 					t.Fatal("strict matching retained partial candidate")
 				}
 			} else if relaxed, found := byFile["relaxed.txt"]; !found || relaxed.Score != 10 || relaxed.TermCount != 2 || len(relaxed.MatchedTerms) != 2 || relaxed.SpanLength <= 0 {
-				t.Fatalf("relaxed.txt metadata = (score %d, term count %d, terms %v, span %d), want score 10, 2 terms, and positive span", relaxed.Score, relaxed.TermCount, relaxed.MatchedTerms, relaxed.SpanLength)
+				t.Fatalf("relaxed.txt metadata = (score %v, term count %d, terms %v, span %d), want score 10, 2 terms, and positive span", relaxed.Score, relaxed.TermCount, relaxed.MatchedTerms, relaxed.SpanLength)
 			}
 		})
 	}
@@ -923,7 +924,7 @@ func TestExecuteDetailedPathOnlyCapDoesNotOpenFiles(t *testing.T) {
 		t.Fatalf("outcome = %+v, want 3 matches, 2 returned, truncated", outcome)
 	}
 	if outcome.Results[0].Score != 3 || outcome.Results[1].Score != 2 {
-		t.Fatalf("scores = %d, %d; want 3, 2", outcome.Results[0].Score, outcome.Results[1].Score)
+		t.Fatalf("scores = %v, %v; want 3, 2", outcome.Results[0].Score, outcome.Results[1].Score)
 	}
 }
 
@@ -950,7 +951,7 @@ func stage3BackfillFixture(t *testing.T, firstExtension string) (*SearchEngine, 
 	for i, path := range paths {
 		matches[i] = candidateMatch{
 			filePath:     path,
-			score:        len(paths) - i,
+			score:        float64(len(paths) - i),
 			termCount:    1,
 			matchedTerms: []string{"alpha"},
 			spanLen:      5,
@@ -2405,12 +2406,12 @@ func TestEnginePerFileSubsetsStage3Regressions(t *testing.T) {
 				t.Fatalf("got %d files, want 1", len(results))
 			}
 			result := results[0]
-			wantScore := len("alpha") + len("beta")
+			wantScore := float64(len("alpha") + len("beta"))
 			if tc.terms[0] == 3 {
-				wantScore += len("gamma")
+				wantScore += float64(len("gamma"))
 			}
 			if result.Score != wantScore || result.TermCount != tc.terms[0] {
-				t.Fatalf("file quality = (%d, %d), want (%d, %d)", result.Score, result.TermCount, wantScore, tc.terms[0])
+				t.Fatalf("file quality = (%v, %d), want (%v, %d)", result.Score, result.TermCount, wantScore, tc.terms[0])
 			}
 			if len(result.RawExcerpts) != len(tc.markers) || len(result.ChunkScores) != len(tc.markers) || len(result.ChunkTermCounts) != len(tc.markers) {
 				t.Fatalf("excerpt/score/term counts = (%d, %d, %d), want %d each", len(result.RawExcerpts), len(result.ChunkScores), len(result.ChunkTermCounts), len(tc.markers))
@@ -2451,7 +2452,7 @@ func TestEnginePerFileSubsetsChunkOrderingWithinFile(t *testing.T) {
 	}
 	for i := 1; i < len(mixed.ChunkScores); i++ {
 		if mixed.ChunkScores[i] > mixed.ChunkScores[i-1] {
-			t.Fatalf("chunk %d score %d exceeds prior chunk score %d (best-first violated)", i, mixed.ChunkScores[i], mixed.ChunkScores[i-1])
+			t.Fatalf("chunk %d score %v exceeds prior chunk score %v (best-first violated)", i, mixed.ChunkScores[i], mixed.ChunkScores[i-1])
 		}
 	}
 	// Anchors stay in document order regardless of chunk emission order.
@@ -2800,11 +2801,12 @@ func TestRankedMultiTermIntegration(t *testing.T) {
 		results := executeRankedIntegrationSearch(t, root, words, []string{"forbidden"}, false)
 		want := []struct {
 			file      string
-			score     int
+			score     float64
 			termCount int
 		}{
 			{"doc_all.txt", 25, 3},
 			{"doc_t1_t2.txt", 20, 2},
+			{"doc_t2_t3.txt", 20, 2},
 			{"doc_t1_t3.txt", 10, 2},
 		}
 		if len(results) != len(want) {
@@ -2813,7 +2815,7 @@ func TestRankedMultiTermIntegration(t *testing.T) {
 		for i, want := range want {
 			got := results[i]
 			if file := filepath.Base(got.FilePath); file != want.file || got.Score != want.score || got.TermCount != want.termCount {
-				t.Fatalf("result %d = (%q, score %d, term count %d), want (%q, score %d, term count %d)", i, file, got.Score, got.TermCount, want.file, want.score, want.termCount)
+				t.Fatalf("result %d = (%q, score %v, term count %d), want (%q, score %v, term count %d)", i, file, got.Score, got.TermCount, want.file, want.score, want.termCount)
 			}
 		}
 	})
@@ -2830,7 +2832,7 @@ func TestRankedMultiTermIntegration(t *testing.T) {
 		}
 		result := results[0]
 		if result.Score != 25 || result.TermCount != 3 || strings.Join(result.MatchedTerms, ",") != strings.Join(words, ",") {
-			t.Fatalf("selected window metadata = (score %d, term count %d, terms %v), want (25, 3, %v)", result.Score, result.TermCount, result.MatchedTerms, words)
+			t.Fatalf("selected window metadata = (score %v, term count %d, terms %v), want (25, 3, %v)", result.Score, result.TermCount, result.MatchedTerms, words)
 		}
 		if len(result.RawExcerpts) == 0 {
 			t.Fatal("selected window produced no raw excerpt")
@@ -2858,7 +2860,7 @@ func TestRankedMultiTermIntegration(t *testing.T) {
 		}
 		for i := range forward {
 			if filepath.Base(forward[i].FilePath) != filepath.Base(reordered[i].FilePath) || forward[i].Score != reordered[i].Score || forward[i].TermCount != reordered[i].TermCount {
-				t.Fatalf("reordered result %d = (%q, score %d, term count %d), want (%q, score %d, term count %d)", i, filepath.Base(reordered[i].FilePath), reordered[i].Score, reordered[i].TermCount, filepath.Base(forward[i].FilePath), forward[i].Score, forward[i].TermCount)
+				t.Fatalf("reordered result %d = (%q, score %v, term count %d), want (%q, score %v, term count %d)", i, filepath.Base(reordered[i].FilePath), reordered[i].Score, reordered[i].TermCount, filepath.Base(forward[i].FilePath), forward[i].Score, forward[i].TermCount)
 			}
 		}
 	})

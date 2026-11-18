@@ -46,7 +46,7 @@ type SearchResult struct {
 	rootOrder       int
 	canonicalPath   string
 	FileSize        int64
-	Score           int            // Sum of distinct matched term lengths in the best window.
+	Score           float64        // Rounded ranking score; stateless helpers use matched term lengths.
 	TermCount       int            // Number of distinct query terms in the best window.
 	PathMatchCount  int            `json:"-"`
 	BoundaryQuality int            `json:"-"`
@@ -58,7 +58,7 @@ type SearchResult struct {
 	StartLines      []int          // 1-based start line per excerpt (parallel to RawExcerpts); 0 = unknown
 	// Per-chunk ranked quality (parallel to RawExcerpts), best-first within the
 	// file. Zero for chunks that did not frame a ranked window.
-	ChunkScores     []int
+	ChunkScores     []float64
 	ChunkTermCounts []int
 	// TopQualityChunks is the Stage 2 count of non-overlapping best-quality
 	// windows. Emitted excerpt limits do not affect it.
@@ -84,7 +84,7 @@ type candidateMatch struct {
 	canonicalKey     string
 	rankingPath      string
 	rootOrder        int
-	score            int
+	score            float64
 	termCount        int
 	matchedTerms     []string
 	pathMatchCount   int
@@ -925,7 +925,7 @@ type rankingKey struct {
 	filePath         string
 	rootOrder        int
 	canonicalPath    string
-	score            int
+	score            float64
 	termCount        int
 	pathMatchCount   int
 	boundaryQuality  int
@@ -966,8 +966,8 @@ func compareRankingPath(left, right string) int {
 // rankingBetter is the single file-order comparator used before and after
 // Stage 3.
 func rankingBetter(a, b rankingKey) bool {
-	if a.score != b.score {
-		return a.score > b.score
+	if RoundScore(a.score) != RoundScore(b.score) {
+		return RoundScore(a.score) > RoundScore(b.score)
 	}
 	if a.termCount != b.termCount {
 		return a.termCount > b.termCount
@@ -1258,7 +1258,7 @@ func (se *SearchEngine) extractAndBuildResultsDetailed(query compiledQuery, matc
 		}
 
 		// Per-chunk ranked quality, parallel to the emitted excerpts.
-		chunkScores := make([]int, len(spans))
+		chunkScores := make([]float64, len(spans))
 		chunkTermCounts := make([]int, len(spans))
 		for i, sp := range spans {
 			chunkScores[i] = sp.score

@@ -8,6 +8,16 @@ import (
 	"garp/search"
 )
 
+func TestTUIFormatsFractionalScore(t *testing.T) {
+	lastExcerptInnerWidth, lastContentHeight = 0, 0
+	m := model{results: []search.SearchResult{{FilePath: "rare.txt", Score: 4.0328, TermCount: 1, Excerpts: []string{"rare"}}}, width: 200, height: 60, searchWords: []string{"rare", "missing", "absent"}, totalFiles: 1, confirmSelected: "yes"}
+	for _, want := range []string{"Score: 4.0328 (1/3 terms)", "Result [ 1 / 1 ] (Score 4.0328, 1/3 terms)"} {
+		if view := m.View(); !strings.Contains(view, want) {
+			t.Errorf("missing %q: %s", want, view)
+		}
+	}
+}
+
 func TestTUIFormatting(t *testing.T) {
 	lastExcerptInnerWidth = 0
 	lastContentHeight = 0

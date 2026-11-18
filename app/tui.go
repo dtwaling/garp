@@ -469,7 +469,7 @@ func (m model) View() string {
 	} else {
 		// Display current result
 		result := m.results[m.currentPage]
-		boxContent = fmt.Sprintf("File: %s (%s) • Score: %d (%d/%d terms)\n\n", terminaltext.Sanitize(result.FilePath), formatFileSize(result.FileSize), result.Score, result.TermCount, len(m.searchWords))
+		boxContent = fmt.Sprintf("File: %s (%s) • Score: %s (%d/%d terms)\n\n", terminaltext.Sanitize(result.FilePath), formatFileSize(result.FileSize), search.FormatScore(result.Score), result.TermCount, len(m.searchWords))
 
 		// Add email metadata if available
 		if result.EmailSubject != "" {
@@ -633,7 +633,7 @@ func (m model) View() string {
 			noBtn = noUn.Render("[ No ]")
 		}
 
-		cont := infoStyle.Render(fmt.Sprintf("Result [ %d / %d ] (Score %d, %d/%d terms) -- Continue?  ", m.currentPage+1, len(m.results), m.results[m.currentPage].Score, m.results[m.currentPage].TermCount, len(m.searchWords))) + yesBtn + "      " + noBtn
+		cont := infoStyle.Render(fmt.Sprintf("Result [ %d / %d ] (Score %s, %d/%d terms) -- Continue?  ", m.currentPage+1, len(m.results), search.FormatScore(m.results[m.currentPage].Score), m.results[m.currentPage].TermCount, len(m.searchWords))) + yesBtn + "      " + noBtn
 		bottomStatus = cont
 	}
 

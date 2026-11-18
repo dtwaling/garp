@@ -230,8 +230,8 @@ func TestInlineWildcardExcerptUsesExactRanges(t *testing.T) {
 			if !strings.Contains(spans[0].text, tt.text) {
 				t.Fatalf("excerpt = %q, want content %q", spans[0].text, tt.text)
 			}
-			if spans[0].score != len(tt.term) || spans[0].termCount != 1 {
-				t.Fatalf("excerpt quality = (%d, %d), want (%d, 1)", spans[0].score, spans[0].termCount, len(tt.term))
+			if spans[0].score != float64(len(tt.term)) || spans[0].termCount != 1 {
+				t.Fatalf("excerpt quality = (%v, %d), want (%d, 1)", spans[0].score, spans[0].termCount, len(tt.term))
 			}
 		})
 	}
@@ -637,20 +637,57 @@ func TestRankedExcerptSpansCapCoverageAtTarget(t *testing.T) {
 	content := "alpha beta gamma"
 	query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
 	spans := extractRankedExcerptSpansQuery(content, query, 3, 2, 2, false, len(content))
-	if len(spans) != 1 || spans[0].termCount != 2 || spans[0].score != len("alpha")+len("beta") {
+	if len(spans) != 1 || spans[0].termCount != 2 || spans[0].score != float64(len("alpha")+len("beta")) {
 		t.Fatalf("spans = %#v, want one two-term candidate capped at target", spans)
 	}
 }
 
-func TestRankedExcerptSpansRequirePrimaryTerm(t *testing.T) {
+func TestRankedExcerptSpansOrderInvariantRelaxedSubsets(t *testing.T) {
 	query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
 	for _, content := range []string{
 		"beta gamma",
 		"alpha " + strings.Repeat("padding ", 150) + "beta gamma",
 	} {
 		spans := extractRankedExcerptSpansQuery(content, query, 3, 2, 2, false, 20)
-		if len(spans) != 0 {
-			t.Fatalf("spans = %#v, want no relaxed candidates without nearby primary term", spans)
+		if len(spans) != 1 || spans[0].termCount != 2 || spans[0].score != 9 || strings.Contains(spans[0].text, "alpha") {
+			t.Fatalf("spans = %#v, want beta/gamma only", spans)
+		}
+	}
+	if spans := extractRankedExcerptSpansQuery("alpha "+strings.Repeat("padding ", 150)+"beta", query, 3, 2, 2, false, 20); len(spans) != 0 {
+		t.Fatalf("distant pair admitted: %+v", spans)
+	}
+}
+
+func TestWeightedRankedExcerptSpansRareGateAndOrderInvariance(t *testing.T) {
+	gap := strings.Repeat("padding ", 150)
+	q := compileQuery([]string{"conditions", "TEITAC"}, PartialModeOff)
+	mapped := cleanStage3Content("conditions "+gap+"TEITAC", true)
+	spans := extractRankedMappedExcerptSpansWeighted(mapped, q, 3, 1, 1, 20, true, []float64{9, 2}, []bool{false, true})
+	if len(spans) != 1 || spans[0].score != 2 || !strings.Contains(spans[0].text, "TEITAC") || strings.Contains(spans[0].text, "conditions") {
+		t.Fatalf("rare gate: %+v", spans)
+	}
+	q = compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
+	spans = extractRankedMappedExcerptSpansWeighted(cleanStage3Content("alpha beta "+gap+"alpha gamma", true), q, 2, 2, 2, 20, true, []float64{1, 2, 4}, nil)
+	if len(spans) != 2 || spans[0].score != 5 || spans[1].score != 3 {
+		t.Fatalf("IDF ordering: %+v", spans)
+	}
+	var want string
+	for _, terms := range [][]string{{"alpha", "al*", "*pha"}, {"alpha", "*pha", "al*"}, {"al*", "alpha", "*pha"}, {"al*", "*pha", "alpha"}, {"*pha", "alpha", "al*"}, {"*pha", "al*", "alpha"}} {
+		q = compileQuery(terms, PartialModeOff)
+		weights := make([]float64, 3)
+		for i := range weights {
+			weights[i] = map[string]float64{"alpha": 1, "al*": 2, "*pha": 4}[q.slotLabel(i)]
+		}
+		spans = extractRankedMappedExcerptSpansWeighted(cleanStage3Content("alpha first "+gap+"alpha second", true), q, 2, 3, 2, 20, true, weights, nil)
+		if len(spans) != 2 || spans[0].score != 7 || spans[0].termCount != 3 {
+			t.Fatalf("equal-offset coverage: %+v", spans)
+		}
+		got := fmt.Sprintf("%s/%v/%d/%s/%v/%d", spans[0].text, spans[0].score, spans[0].rawStart, spans[1].text, spans[1].score, spans[1].rawStart)
+		if want == "" {
+			want = got
+		}
+		if got != want {
+			t.Fatalf("permutation %v changed excerpts", terms)
 		}
 	}
 }
@@ -1165,9 +1202,9 @@ func TestEngineCleaningConsistency(t *testing.T) {
 					if len(matches) != 1 {
 						t.Fatalf("matches = %+v, want one", matches)
 					}
-					score := 0
+					score := 0.0
 					for _, term := range wantTerms {
-						score += len(term)
+						score += float64(len(term))
 					}
 					if matches[0].score != score || matches[0].termCount != len(wantTerms) || !slices.Equal(matches[0].matchedTerms, wantTerms) {
 						t.Fatalf("Stage 2 metadata includes stripped terms: %+v; want %v", matches[0], wantTerms)

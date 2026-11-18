@@ -788,7 +788,7 @@ func TestCheckFileContainsRankedWords(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !ok || score != 10 || count != 2 || strings.Join(terms, ",") != "alpha,gamma" || span != 11 {
-		t.Fatalf("ranked file match = (%d, %d, %v, %d, %v), want (10, 2, [alpha gamma], 11, true)", score, count, terms, span, ok)
+		t.Fatalf("ranked file match = (%v, %d, %v, %d, %v), want (10, 2, [alpha gamma], 11, true)", score, count, terms, span, ok)
 	}
 }
 

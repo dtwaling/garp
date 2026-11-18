@@ -204,15 +204,16 @@ func CheckTextContainsAllWordsPartial(text string, words []string, distance int,
 
 // CheckTextContainsRankedWords finds the highest-scoring proximity cluster in
 // text. A score is the sum of the lengths of distinct query terms in the
-// cluster. For three or more terms, non-strict mode requires the first term
-// plus at least one secondary term; strict mode requires every term.
-func CheckTextContainsRankedWords(text string, words []string, distance int, strict bool) (score int, termCount int, matchedTerms []string, spanLen int, ok bool) {
+// cluster. Non-strict multi-term queries require any two distinct slots;
+// strict and single-slot queries require every slot. Stateless helpers have
+// no corpus statistics and do not admit single-slot multi-term fallbacks.
+func CheckTextContainsRankedWords(text string, words []string, distance int, strict bool) (score float64, termCount int, matchedTerms []string, spanLen int, ok bool) {
 	return CheckTextContainsRankedWordsPartial(text, words, distance, strict, PartialModeOff)
 }
 
 // CheckTextContainsRankedWordsPartial finds the highest-scoring proximity
 // cluster using the requested partial-match mode.
-func CheckTextContainsRankedWordsPartial(text string, words []string, distance int, strict bool, partial PartialMode) (score int, termCount int, matchedTerms []string, spanLen int, ok bool) {
+func CheckTextContainsRankedWordsPartial(text string, words []string, distance int, strict bool, partial PartialMode) (score float64, termCount int, matchedTerms []string, spanLen int, ok bool) {
 	if len(words) == 0 {
 		return 0, 0, nil, 0, true
 	}
@@ -1793,21 +1794,21 @@ func checkFileContainsAllWordsQuery(filePath string, query compiledQuery, distan
 
 // CheckFileContainsRankedWords checks a text file using the ranked matching
 // semantics after a streaming candidate prefilter.
-func CheckFileContainsRankedWords(filePath string, words []string, distance int, strict bool, silent bool) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
+func CheckFileContainsRankedWords(filePath string, words []string, distance int, strict bool, silent bool) (score float64, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
 	return CheckFileContainsRankedWordsPartial(filePath, words, distance, strict, silent, PartialModeOff)
 }
 
 // CheckFileContainsRankedWordsPartial checks a text file using the requested
 // partial-match mode after a streaming candidate prefilter.
-func CheckFileContainsRankedWordsPartial(filePath string, words []string, distance int, strict bool, silent bool, partial PartialMode) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
+func CheckFileContainsRankedWordsPartial(filePath string, words []string, distance int, strict bool, silent bool, partial PartialMode) (score float64, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
 	return checkFileContainsRankedWordsPartial(filePath, words, distance, strict, silent, partial, defaultTextMaxBytes)
 }
 
-func checkFileContainsRankedWordsPartial(filePath string, words []string, distance int, strict bool, silent bool, partial PartialMode, maxBytes int64) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
+func checkFileContainsRankedWordsPartial(filePath string, words []string, distance int, strict bool, silent bool, partial PartialMode, maxBytes int64) (score float64, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
 	return checkFileContainsRankedWordsQuery(filePath, compileQuery(words, partial), distance, strict, silent, maxBytes)
 }
 
-func checkFileContainsRankedWordsQuery(filePath string, query compiledQuery, distance int, strict bool, silent bool, maxBytes int64) (score int, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
+func checkFileContainsRankedWordsQuery(filePath string, query compiledQuery, distance int, strict bool, silent bool, maxBytes int64) (score float64, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
 	analysis, _, ok, err := checkFileRankedAnalysisQuery(filePath, query, distance, strict, maxBytes)
 	if err != nil || !ok {
 		return 0, 0, nil, 0, ok, err

@@ -1319,7 +1319,7 @@ func TestCheckTextContainsRankedWords(t *testing.T) {
 		words     []string
 		distance  int
 		strict    bool
-		wantScore int
+		wantScore float64
 		wantCount int
 		wantTerms []string
 		wantSpan  int
@@ -1391,11 +1391,15 @@ func TestCheckTextContainsRankedWords(t *testing.T) {
 			wantOK:    true,
 		},
 		{
-			name:     "relaxed three terms rejects missing primary",
-			text:     "beta synchronization",
-			words:    []string{"alpha", "beta", "synchronization"},
-			distance: 30,
-			wantOK:   false,
+			name:      "relaxed three terms accepts missing first term",
+			text:      "beta synchronization",
+			words:     []string{"alpha", "beta", "synchronization"},
+			distance:  30,
+			wantScore: 19,
+			wantCount: 2,
+			wantTerms: []string{"beta", "synchronization"},
+			wantSpan:  20,
+			wantOK:    true,
 		},
 		{
 			name:     "relaxed three terms rejects primary alone",
@@ -1440,7 +1444,7 @@ func TestCheckTextContainsRankedWords(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			score, count, terms, span, ok := CheckTextContainsRankedWords(tt.text, tt.words, tt.distance, tt.strict)
 			if score != tt.wantScore || count != tt.wantCount || span != tt.wantSpan || ok != tt.wantOK {
-				t.Fatalf("CheckTextContainsRankedWords() = (%d, %d, %v, %d, %v), want (%d, %d, %v, %d, %v)", score, count, terms, span, ok, tt.wantScore, tt.wantCount, tt.wantTerms, tt.wantSpan, tt.wantOK)
+				t.Fatalf("CheckTextContainsRankedWords() = (%v, %d, %v, %d, %v), want (%v, %d, %v, %d, %v)", score, count, terms, span, ok, tt.wantScore, tt.wantCount, tt.wantTerms, tt.wantSpan, tt.wantOK)
 			}
 			if strings.Join(terms, "\x00") != strings.Join(tt.wantTerms, "\x00") {
 				t.Fatalf("matched terms = %v, want %v", terms, tt.wantTerms)
@@ -1457,7 +1461,7 @@ func TestCheckTextContainsRankedWordsChoosesBestWindow(t *testing.T) {
 			t.Fatal("expected a valid ranked match")
 		}
 		if score != 19 || count != 2 || strings.Join(terms, ",") != "term,synchronization" || span != 20 {
-			t.Fatalf("best window = (%d, %d, %v, %d), want (19, 2, [term synchronization], 20)", score, count, terms, span)
+			t.Fatalf("best window = (%v, %d, %v, %d), want (19, 2, [term synchronization], 20)", score, count, terms, span)
 		}
 	})
 
@@ -1468,7 +1472,7 @@ func TestCheckTextContainsRankedWordsChoosesBestWindow(t *testing.T) {
 			t.Fatal("expected a valid ranked match")
 		}
 		if score != 23 || count != 3 || strings.Join(terms, ",") != "term,synchronization,beta" || span != 25 {
-			t.Fatalf("best window = (%d, %d, %v, %d), want (23, 3, [term synchronization beta], 25)", score, count, terms, span)
+			t.Fatalf("best window = (%v, %d, %v, %d), want (23, 3, [term synchronization beta], 25)", score, count, terms, span)
 		}
 	})
 
@@ -1479,7 +1483,7 @@ func TestCheckTextContainsRankedWordsChoosesBestWindow(t *testing.T) {
 			t.Fatal("expected a valid ranked match")
 		}
 		if score != 9 || count != 2 || strings.Join(terms, ",") != "alpha,beta" || span != 10 {
-			t.Fatalf("best window = (%d, %d, %v, %d), want (9, 2, [alpha beta], 10)", score, count, terms, span)
+			t.Fatalf("best window = (%v, %d, %v, %d), want (9, 2, [alpha beta], 10)", score, count, terms, span)
 		}
 	})
 }

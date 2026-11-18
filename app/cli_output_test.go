@@ -47,13 +47,13 @@ func TestCLIOutputFormats(t *testing.T) {
 			t.Fatalf("JSON matches/results = %d/%d, want 2/2", result.Matches, len(result.Results))
 		}
 		if got := result.Results[0]; got.Score != 14 || got.TermCount != 3 || got.SpanLength <= 0 {
-			t.Errorf("first JSON ranked metadata = score %d, term_count %d, span_length %d; want 14, 3, positive", got.Score, got.TermCount, got.SpanLength)
+			t.Errorf("first JSON ranked metadata = score %v, term_count %d, span_length %d; want 14, 3, positive", got.Score, got.TermCount, got.SpanLength)
 		}
 		if got := result.Results[0].MatchedTerms; !slicesEqual(got, []string{"alpha", "beta", "gamma"}) {
 			t.Errorf("first JSON matched_terms = %v, want [alpha beta gamma]", got)
 		}
 		if got := result.Results[1]; got.Score != 9 || got.TermCount != 2 || got.SpanLength <= 0 {
-			t.Errorf("second JSON ranked metadata = score %d, term_count %d, span_length %d; want 9, 2, positive", got.Score, got.TermCount, got.SpanLength)
+			t.Errorf("second JSON ranked metadata = score %v, term_count %d, span_length %d; want 9, 2, positive", got.Score, got.TermCount, got.SpanLength)
 		}
 		if got := result.Results[1].MatchedTerms; !slicesEqual(got, []string{"alpha", "beta"}) {
 			t.Errorf("second JSON matched_terms = %v, want [alpha beta]", got)
@@ -750,7 +750,7 @@ func TestPlainOutputCannotForgeRecords(t *testing.T) {
 			FilePath: payload, FileSize: 42,
 			RawExcerpts:     []string{payload, payload, payload, payload},
 			StartLines:      []int{2, 0, 3, 0},
-			ChunkScores:     []int{1, 1, 0, 0},
+			ChunkScores:     []float64{1, 1, 0, 0},
 			ChunkTermCounts: []int{1, 1, 0, 0},
 		}},
 	}
@@ -797,7 +797,7 @@ func TestPlainOutputBackslashPathsRoundTripInParityHelpers(t *testing.T) {
 			FileSize:        42,
 			RawExcerpts:     []string{"alpha beta", "alpha gamma"},
 			StartLines:      []int{1, 10},
-			ChunkScores:     []int{10, 8},
+			ChunkScores:     []float64{10, 8},
 			ChunkTermCounts: []int{2, 2},
 		}},
 	}
@@ -880,6 +880,31 @@ func buildRankedSubsetFixture(t *testing.T) string {
 }
 
 func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {
+	t.Run("fractional file and excerpt scores", func(t *testing.T) {
+		args := parseArguments([]string{"alpha", "beta", "gamma"})
+		outcome := search.ExecutionResult{Matches: 1, Returned: 1, Results: []search.SearchResult{{
+			FilePath: "rare.txt", Score: 4.0328, TermCount: 1, RawExcerpts: []string{"alpha", "alpha"},
+			StartLines: []int{2, 0}, ChunkScores: []float64{1.2345, 1.2345}, ChunkTermCounts: []int{1, 1},
+		}}}
+		encoded, err := json.Marshal(buildJSONOutput(args, outcome))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded jsonOutput
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Results[0].Score != 4.0328 || decoded.Results[0].Excerpts[0].Score != 1.2345 {
+			t.Fatalf("fractional JSON: %s", encoded)
+		}
+		var plain bytes.Buffer
+		writePlainOutput(&plain, args, outcome)
+		for _, want := range []string{"MATCH 1/1 [Score: 4.0328 (1/3 terms)]", "EXCERPT 1 [L2, Score: 1.2345 (1 terms)]", "EXCERPT 2 [Score: 1.2345 (1 terms)]"} {
+			if !strings.Contains(plain.String(), want) {
+				t.Errorf("missing %q in %s", want, plain.String())
+			}
+		}
+	})
 	root := buildRankedSubsetFixture(t)
 	args := parseArguments([]string{
 		"alpha", "beta", "gamma",
@@ -903,10 +928,10 @@ func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {
 			t.Fatalf("JSON excerpt count = %d, want 2 (both quality levels)", len(excerpts))
 		}
 		if excerpts[0].Score != 14 || excerpts[0].TermCount != 3 {
-			t.Fatalf("first excerpt quality = (score %d, terms %d), want (14, 3)", excerpts[0].Score, excerpts[0].TermCount)
+			t.Fatalf("first excerpt quality = (score %v, terms %d), want (14, 3)", excerpts[0].Score, excerpts[0].TermCount)
 		}
 		if excerpts[1].Score != 9 || excerpts[1].TermCount != 2 {
-			t.Fatalf("second excerpt quality = (score %d, terms %d), want (9, 2)", excerpts[1].Score, excerpts[1].TermCount)
+			t.Fatalf("second excerpt quality = (score %v, terms %d), want (9, 2)", excerpts[1].Score, excerpts[1].TermCount)
 		}
 		if !strings.Contains(excerpts[0].Text, "gamma") {
 			t.Fatalf("first excerpt should be the best cluster: %q", excerpts[0].Text)
