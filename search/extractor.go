@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	stdunicode "unicode"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -1003,15 +1004,19 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		return strings.TrimSpace(s)
 	}
 
+	// Trim MAPI terminators and whitespace together before testing for empty text.
+	trimMSGText := func(s string) string {
+		return strings.TrimFunc(s, func(r rune) bool { return r == 0 || stdunicode.IsSpace(r) })
+	}
 	var subject, body string
 
 	// PR_SUBJECT: 0037 (Unicode 001F; ANSI 001E)
 	if name, b, ok := findStream("__substg1.0_0037001F", "__substg1.0_0037001E"); ok {
-		subject = decodeMSGText(name, b)
+		subject = trimMSGText(decodeMSGText(name, b))
 	}
 	// PR_BODY: 1000 (Unicode 001F; ANSI 001E)
 	if name, b, ok := findStream("__substg1.0_1000001F", "__substg1.0_1000001E"); ok {
-		body = decodeMSGText(name, b)
+		body = trimMSGText(decodeMSGText(name, b))
 	}
 	// PR_HTML: 1013 (Unicode 001F; ANSI 001E; sometimes 0102 binary); use as fallback for body
 	if body == "" {
@@ -1020,13 +1025,10 @@ func (e *MSGExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			if html == "" {
 				html = string(b)
 			}
-			body = strings.TrimSpace(stripHTMLTags(html))
+			body = trimMSGText(stripHTMLTags(html))
 		}
 	}
 
-	// MAPI string streams may carry NUL terminators, even for empty text.
-	subject = strings.TrimSpace(strings.Trim(subject, "\x00"))
-	body = strings.TrimSpace(strings.Trim(body, "\x00"))
 	if subject != "" || body != "" {
 		return mailSearchText(subject, body), nil
 	}

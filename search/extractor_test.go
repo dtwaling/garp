@@ -396,14 +396,36 @@ func TestMSGExtractorRequiresCFBContainer(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		data []byte
+		want string
 	}{
-		{"no MAPI text streams", cfbWithRootStreams([2]string{"__nameid_version1.0", "__substg1.0_001A001E"}, [2][]byte{nil, []byte("IPM.Note")})},
-		{"NUL-terminated empty strings", cfbWithRootStreams([2]string{"__substg1.0_0037001E", "__substg1.0_1000001F"}, [2][]byte{{0}, {0, 0}})},
+		{"no MAPI text streams", cfbWithRootStreams([2]string{"__nameid_version1.0", "__substg1.0_001A001E"}, [2][]byte{nil, []byte("IPM.Note")}), ""},
+		{"NUL-terminated empty strings", cfbWithRootStreams([2]string{"__substg1.0_0037001E", "__substg1.0_1000001F"}, [2][]byte{{0}, {0, 0}}), ""},
+		{"NUL-only plain body uses Unicode HTML", cfbWithRootStreams(
+			[2]string{"__substg1.0_1000001F", "__substg1.0_1013001F"},
+			[2][]byte{{0, 0}, utf16LE("<p>HTML body</p>\x00")}), "HTML body"},
+		{"NUL and whitespace plain body uses ANSI HTML", cfbWithRootStreams(
+			[2]string{"__substg1.0_1000001E", "__substg1.0_1013001E"},
+			[2][]byte{[]byte("\x00 	\x00"), []byte("<p>HTML body</p>\x00")}), "HTML body"},
+		{"plain body wins over HTML", cfbWithRootStreams(
+			[2]string{"__substg1.0_1000001F", "__substg1.0_1013001F"},
+			[2][]byte{utf16LE("plain body\x00"), utf16LE("<p>HTML body</p>")}), "plain body"},
+		{"subject trims NUL and whitespace", cfbWithRootStreams(
+			[2]string{"__substg1.0_0037001F", "__substg1.0_1000001E"},
+			[2][]byte{utf16LE("\x00 	 subject \x00 \x00"), nil}), "subject"},
+		{"NUL-only Unicode HTML is empty", cfbWithRootStreams(
+			[2]string{"__substg1.0_1000001F", "__substg1.0_1013001F"},
+			[2][]byte{{0, 0}, {0, 0}}), ""},
+		{"NUL and whitespace ANSI HTML is empty", cfbWithRootStreams(
+			[2]string{"__substg1.0_1013001E", "unused"},
+			[2][]byte{[]byte("\x00 	\x00"), nil}), ""},
+		{"NUL-only binary HTML is empty", cfbWithRootStreams(
+			[2]string{"__substg1.0_10130102", "unused"},
+			[2][]byte{{0, 0}, nil}), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			text, err := (&MSGExtractor{}).ExtractText(tc.data)
-			if text != "" || err != nil {
-				t.Fatalf("extraction = (%q, %v), want empty text and no error", text, err)
+			if text != tc.want || err != nil {
+				t.Fatalf("extraction = (%q, %v), want (%q, nil)", text, err, tc.want)
 			}
 		})
 	}
