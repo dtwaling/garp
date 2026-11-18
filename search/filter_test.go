@@ -285,17 +285,25 @@ func TestLiteralSlotScannerAllocationScaling(t *testing.T) {
 		}
 	}
 	path := filepath.Join(t.TempDir(), "candidate.txt")
-	for _, tc := range []struct{ name, term, body string }{
-		{"ASCII", "missing", "alpha beta "},
-		{"wildcard", "mi?sing", "alpha beta "},
-		{"Unicode", "éxcluded", "alpha beta "},
-		{"Unicode fold", "missing", "Kelvin ſink "},
+	for _, tc := range []struct {
+		name, term, body string
+		observeCanonical bool
+	}{
+		{"ASCII", "missing", "alpha beta ", false},
+		{"wildcard", "mi?sing", "alpha beta ", false},
+		{"Unicode", "éxcluded", "alpha beta ", false},
+		{"Unicode fold", "missing", "Kelvin ſink ", false},
+		{"replacement literal", "\uFFFD", "alpha beta ", false},
+		{"invalid byte literal", "ab\xc3", "alpha beta ", false},
+		{"canonical regex boundary rejected observation", "mi?sing", "xmiQsingx ", true},
+		{"Unicode boundary rejected", "éxcluded", "xéxcludedx ", false},
+		{"byte wildcard backtracking", "ab*\xff*z", "abxxx\xffyyy ", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q := compileQuery([]string{tc.term}, PartialModeOff)
 			var scratch literalScanScratch
 			var baseline float64
-			for _, chunks := range []int{1, 8} {
+			for _, chunks := range []int{1, 100} {
 				raw := strings.Repeat(tc.body, chunks*discoveryChunkSize/len(tc.body))
 				if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 					t.Fatal(err)
@@ -307,9 +315,18 @@ func TestLiteralSlotScannerAllocationScaling(t *testing.T) {
 						t.Fatalf("scan = %+v, err = %v; want %d words and no slots", got, err, wantWords)
 					}
 				})
-				t.Logf("chunks=%d allocations/scan=%.0f", chunks, allocs)
+				t.Logf("bytes=%d allocations/scan=%.0f", len(raw), allocs)
 				if chunks == 1 {
 					baseline = allocs
+				} else if tc.observeCanonical {
+					if q.matchers[0].byteExact {
+						t.Fatal("canonical regex observation must exercise the non-byte-exact fallback")
+					}
+					// Keep measuring this supported path, including semantic assertions
+					// above. Canonical regexp per-hit allocations are deliberately outside
+					// the pooled byte-exact path's no-per-window-allocation contract.
+					// Do not assert a runtime-dependent allocation count as semantics.
+					t.Logf("canonical regex observation (outside reusable-path contract): %.0f -> %.0f allocations/scan", baseline, allocs)
 				} else if allocs > baseline+1 {
 					// Allow fixed runtime overhead, not a copy per window.
 					t.Fatalf("allocations grew from %.0f to %.0f across %d chunks", baseline, allocs, chunks)

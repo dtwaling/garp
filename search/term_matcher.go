@@ -625,6 +625,10 @@ func (m termMatcher) findByteExactWithBoundaries(
 	boundaries []bool,
 	failed map[wildcardByteState]struct{},
 ) (matchRange, bool) {
+	return m.findByteExactWithMemo(text, from, boundaries, wildcardByteMemo{sparse: failed})
+}
+
+func (m termMatcher) findByteExactWithMemo(text string, from int, boundaries []bool, failed wildcardByteMemo) (matchRange, bool) {
 	if from < 0 {
 		from = 0
 	}
@@ -645,8 +649,49 @@ func (m termMatcher) findByteExactWithBoundaries(
 	return matchRange{}, false
 }
 
+// termMatchScratch is worker-owned. Reset boundaries to length zero before
+// changing windows; find reuses the boundary table within that immutable window.
+// The memo is cleared for each matcher because its keys omit matcher identity.
+// Neither buffer retains text. Only byte-exact terms use these reusable buffers;
+// other terms retain canonical regexp boundary and Unicode-fold semantics,
+// including the regexp API's per-hit index allocations.
+type termMatchScratch struct {
+	boundaries []bool
+	failed     []uint8
+}
+
+func (s *termMatchScratch) find(m termMatcher, text string, from int) (matchRange, bool) {
+	if m.term == "" {
+		return matchRange{}, false
+	}
+	if !m.byteExact {
+		return m.find(text, from)
+	}
+	if len(s.boundaries) == 0 {
+		s.boundaries = fillUTF8ByteBoundaries(text, s.boundaries)
+	}
+	if m.validWildcard {
+		if cap(s.failed) < len(text)+1 {
+			s.failed = make([]uint8, len(text)+1)
+		} else {
+			s.failed = s.failed[:len(text)+1]
+			clear(s.failed)
+		}
+	}
+	return m.findByteExactWithMemo(text, from, s.boundaries, wildcardByteMemo{window: s.failed})
+}
+
 func utf8ByteBoundaries(text string) []bool {
-	boundaries := make([]bool, len(text)+1)
+	return fillUTF8ByteBoundaries(text, nil)
+}
+
+func fillUTF8ByteBoundaries(text string, boundaries []bool) []bool {
+	if cap(boundaries) < len(text)+1 {
+		boundaries = make([]bool, len(text)+1)
+	} else {
+		boundaries = boundaries[:len(text)+1]
+		clear(boundaries)
+	}
 	for i := 0; i < len(text); {
 		boundaries[i] = true
 		_, size := utf8.DecodeRuneInString(text[i:])
@@ -660,7 +705,7 @@ func (m termMatcher) matchByteExactAt(
 	text string,
 	start int,
 	boundaries []bool,
-	failed map[wildcardByteState]struct{},
+	failed wildcardByteMemo,
 ) (int, bool) {
 	if m.validWildcard {
 		patternStart, patternEnd := 0, len(m.term)
@@ -735,11 +780,18 @@ type wildcardByteState struct {
 	patternIndex int
 }
 
+// Whole-input callers keep sparse state. Pooled windows use one bit per star
+// (maxWildcardStars is four) at each text offset, avoiding map growth on refill.
+type wildcardByteMemo struct {
+	sparse map[wildcardByteState]struct{}
+	window []uint8
+}
+
 func (m termMatcher) matchWildcardBytes(
 	text string,
 	textIndex, patternIndex, patternEnd, starWidth int,
 	boundaries []bool,
-	failed map[wildcardByteState]struct{},
+	failed wildcardByteMemo,
 ) (end int, ok bool) {
 	if patternIndex == patternEnd {
 		if !boundaries[textIndex] {
@@ -754,7 +806,13 @@ func (m termMatcher) matchWildcardBytes(
 	switch m.term[patternIndex] {
 	case '*':
 		state := wildcardByteState{textIndex: textIndex, patternIndex: patternIndex}
-		if _, seen := failed[state]; seen {
+		_, seen := failed.sparse[state]
+		var bit uint8
+		if failed.window != nil {
+			bit = 1 << strings.Count(m.term[:patternIndex], "*")
+			seen = failed.window[textIndex]&bit != 0
+		}
+		if seen {
 			return 0, false
 		}
 		end := textIndex
@@ -767,7 +825,11 @@ func (m termMatcher) matchWildcardBytes(
 			}
 			end++
 		}
-		failed[state] = struct{}{}
+		if failed.window != nil {
+			failed.window[textIndex] |= bit
+		} else {
+			failed.sparse[state] = struct{}{}
+		}
 		return 0, false
 	case '?':
 		if textIndex >= len(text) || !isWildcardByte(text[textIndex]) {

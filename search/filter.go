@@ -601,6 +601,7 @@ type literalScanScratch struct {
 	rawBuf      [discoveryChunkSize]byte
 	normBuf     []byte
 	tailUnicode []byte
+	matching    termMatchScratch
 }
 
 func slotPresenceInText(cleaned string, q compiledQuery) ([]bool, int) {
@@ -617,7 +618,10 @@ func slotPresenceInText(cleaned string, q compiledQuery) ([]bool, int) {
 
 // matchSlotsInNormWindow must not accept a temporary end-of-window boundary.
 // detectionBytes bounds the evidence needed even for unbounded prefix ranges.
-func matchSlotsInNormWindow(data []byte, q compiledQuery, present []bool, from int, atEOF bool) {
+func matchSlotsInNormWindow(scratch *termMatchScratch, data []byte, q compiledQuery, present []bool, from int, atEOF bool) {
+	scratch.boundaries = scratch.boundaries[:0]
+	// A synchronous read-only view, never retained by matching scratch.
+	text := unsafe.String(unsafe.SliceData(data), len(data))
 	for i := range present {
 		if present[i] {
 			continue
@@ -629,7 +633,14 @@ func matchSlotsInNormWindow(data []byte, q compiledQuery, present []bool, from i
 			alts = q.matchers[i : i+1]
 		}
 		for _, matcher := range alts {
-			idx := discoveryMatchIndex(data, matcher, from)
+			idx := -1
+			if matcher.byteExact {
+				if found, ok := scratch.find(matcher, text, from); ok {
+					idx = found.start
+				}
+			} else {
+				idx = discoveryMatchIndex(data, matcher, from)
+			}
 			if idx >= 0 && (atEOF || !matcher.trailingBound || idx+matcher.detectionBytes < len(data)) {
 				present[i] = true
 				break
@@ -644,6 +655,10 @@ func matchSlotsInNormWindow(data []byte, q compiledQuery, present []bool, from i
 // for callers that report warnings; read failures defer to authoritative Stage 2.
 // Strict files need every slot; relaxed multi-slot files with only one hit can
 // be deferred without loading their text until the corpus rarity gate is known.
+// Warmed byte-exact matching reuses window boundaries and wildcard memo storage
+// without per-window allocations. Non-byte-exact terms preserve canonical regexp
+// semantics; its per-hit index allocations (even for boundary-rejected hits) are
+// outside this reusable-path allocation contract and can grow with file size.
 func scanLiteralSlotsAndWords(scratch *literalScanScratch, path string, q compiledQuery, strict bool, maxBytes int64) (stage1FileScan, error) {
 	f, _, err := openRegularSearchFile(path)
 	if err != nil {
@@ -682,7 +697,7 @@ func scanLiteralSlotsAndWords(scratch *literalScanScratch, path string, q compil
 		// byte). Never manufacture an invalid byte by splitting a valid rune.
 		scratch.normBuf = append(scratch.normBuf, data...)
 		if len(scratch.normBuf) >= windowSize {
-			matchSlotsInNormWindow(scratch.normBuf, q, result.slotPresent, from, false)
+			matchSlotsInNormWindow(&scratch.matching, scratch.normBuf, q, result.slotPresent, from, false)
 			copy(scratch.normBuf, scratch.normBuf[len(scratch.normBuf)-overlap:])
 			scratch.normBuf = scratch.normBuf[:overlap]
 			from = utf8.UTFMax
@@ -730,7 +745,7 @@ func scanLiteralSlotsAndWords(scratch *literalScanScratch, path string, q compil
 							trimmedPresent = make([]bool, len(result.slotPresent))
 						}
 						copy(trimmedPresent, result.slotPresent)
-						matchSlotsInNormWindow(scratch.normBuf, q, trimmedPresent, from, true)
+						matchSlotsInNormWindow(&scratch.matching, scratch.normBuf, q, trimmedPresent, from, true)
 						trimmedWords = result.wordCount
 						spilled = true
 					}
@@ -753,7 +768,7 @@ func scanLiteralSlotsAndWords(scratch *literalScanScratch, path string, q compil
 		copy(result.slotPresent, trimmedPresent)
 		result.wordCount = trimmedWords
 	} else {
-		matchSlotsInNormWindow(scratch.normBuf, q, result.slotPresent, from, true)
+		matchSlotsInNormWindow(&scratch.matching, scratch.normBuf, q, result.slotPresent, from, true)
 	}
 	for _, present := range result.slotPresent {
 		if present {

@@ -5,6 +5,33 @@ import (
 	"testing"
 )
 
+func TestTermMatchScratchAgreesWithMatcher(t *testing.T) {
+	var scratch termMatchScratch
+	for _, text := range []string{
+		"", "alpha beta ALPHAS _alphaValue alpha|beta",
+		"xmiQsingx miQsing ms-first-apiX-ms-second-api abxxxz",
+		"éxcluded xéxcludedx Kelvin ſink sinK sinks ſinK",
+		"ab\xc3 abé ab\xffxxxz ab�xxxz abxxx\xffyyy abxxx\xffz",
+		"DeployED DeployATION alpha\u00a0beta éab\xffz",
+	} {
+		scratch.boundaries = scratch.boundaries[:0]
+		for _, term := range []string{"", "alpha", "alpha|beta", "mi?sing", "ms-*-api", "ab*z", "*ab*z*", "a*b*c*d*z", "éxcluded", "sink", "ſinK", "Deploy", "ab\xc3", "ab?\xff*z", "ab*\xff*z", "�"} {
+			for _, mode := range []PartialMode{PartialModeOff, PartialModePrefix, PartialModeContains} {
+				for _, options := range []QueryOptions{{}, {CaseSensitive: true}, {SmartForms: true}, {CaseSensitive: true, SmartForms: true}} {
+					m := compileTermMatcherWithOptions(term, mode, options)
+					for from := -1; from <= len(text)+1; from++ {
+						want, wantOK := m.find(text, from)
+						got, gotOK := scratch.find(m, text, from)
+						if got != want || gotOK != wantOK {
+							t.Fatalf("term=%q text=%q mode=%s options=%+v from=%d: got %v/%t, want %v/%t", term, text, mode, options, from, got, gotOK, want, wantOK)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestCompiledQuerySlotSeamPreservesLiteralPipe(t *testing.T) {
 	q := compileQuery([]string{" Alpha|Beta ", "gamma", "ALPHA|BETA"}, PartialModeOff)
 	if len(q.slots) != 2 || q.slotCount() != 2 {
