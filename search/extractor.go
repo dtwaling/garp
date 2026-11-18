@@ -313,7 +313,7 @@ func (e *DOCExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 
 	var out strings.Builder
 	for _, b := range parts {
-		text := decodeLegacyStreamText(b, true)
+		text := decodeLegacyStreamText(b)
 		if text != "" {
 			if out.Len() > 0 {
 				out.WriteString("\n")
@@ -1096,45 +1096,21 @@ func utf16LEReadingWithMarkup(b []byte, keepMarkup bool) string {
 	return out.String()
 }
 
-// decodeLegacyStreamText is the shared Stage 1/2/3 legacy-stream rule: UTF-16 when
-// a BOM or dense NUL lane proves it; otherwise one 8-bit reading, plus a UTF-16LE
+// decodeLegacyStreamText is the shared Stage 1/3 DOC legacy-stream rule: UTF-16 when
+// a BOM or dense NUL lane proves it; otherwise printable ASCII, plus a UTF-16LE
 // reading only with sufficient odd-lane NUL density and dominance or aligned
-// UTF-16LE markup.
+// UTF-16LE markup. Angle brackets are blanked to protect text from HTML cleaning.
 // Word 97 files use the piece table first.
-func decodeLegacyStreamText(b []byte, binary bool) string {
+func decodeLegacyStreamText(b []byte) string {
 	if s, ok := tryDecodeUTF16BestEffort(b); ok {
-		if binary {
-			s = strings.NewReplacer("<", " ", ">", " ").Replace(s)
-		}
+		s = strings.NewReplacer("<", " ", ">", " ").Replace(s)
 		return strings.TrimSpace(whitespaceRegex.ReplaceAllString(s, " "))
 	}
-	if !binary {
-		text := stripReadingMarkup(legacyEightBitText(b))
-		if hasUTF16LECadence(b) {
-			text += "\n" + stripReadingMarkup(utf16LEReadingWithMarkup(b, true))
-		}
-		return strings.TrimSpace(text)
-	}
-	text := salvagePrintableASCII(b, binary)
+	text := salvagePrintableASCII(b, true)
 	if hasUTF16LECadence(b) {
 		text += "\n" + utf16LEReading(b)
 	}
 	return strings.TrimSpace(text)
-}
-
-// legacyEightBitText decodes NUL-free streams as UTF-8, else Windows-1252,
-// and salvages printable ASCII from streams containing NULs (binary data).
-func legacyEightBitText(b []byte) string {
-	if bytes.IndexByte(b, 0) >= 0 {
-		return salvagePrintableASCII(b, false)
-	}
-	s := strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return ' '
-		}
-		return r
-	}, decodeANSIText(b))
-	return strings.TrimSpace(whitespaceRegex.ReplaceAllString(s, " "))
 }
 
 // hasUTF16LECadence requires NULs in at least 20% of odd-byte positions and more

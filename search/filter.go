@@ -1521,7 +1521,7 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 				continue
 			}
 
-			state.observe(decodeLegacyStreamText(data, true), query, 0)
+			state.observe(decodeLegacyStreamText(data), query, 0)
 			if state.satisfied(strict) {
 				return true, true
 			}

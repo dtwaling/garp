@@ -792,16 +792,14 @@ func TestHasUTF16LECadence(t *testing.T) {
 	if _, ok := tryDecodeUTF16BestEffort(chineseHTMLUTF16LE); ok {
 		t.Fatal("CJK fixture must exercise the secondary UTF-16LE reading")
 	}
-	for _, binary := range []bool{false, true} {
-		if got := decodeLegacyStreamText(chineseHTMLUTF16LE, binary); !strings.Contains(got, "\u4e00\u5b63\u5ea6\u62a5\u544a") {
-			t.Errorf("binary=%t: legacy decode lost Chinese text: %q", binary, got)
-		}
-		if got := decodeLegacyStreamText(sparseNULCatalogMSG, binary); !strings.Contains(got, "arithmetic overflow invalid database key") || strings.Contains(got, "\u7261\u7469\u6d68\u7465\u6369") {
-			t.Errorf("binary=%t: sparse NUL decode lost 8-bit text or added mojibake: %q", binary, got)
-		}
-		if got := decodeLegacyStreamText(mixedLatin, binary); !strings.Contains(got, "subject body") {
-			t.Errorf("binary=%t: legacy decode lost mixed Latin text: %q", binary, got)
-		}
+	if got := decodeLegacyStreamText(chineseHTMLUTF16LE); !strings.Contains(got, "\u4e00\u5b63\u5ea6\u62a5\u544a") {
+		t.Errorf("legacy decode lost Chinese text: %q", got)
+	}
+	if got := decodeLegacyStreamText(sparseNULCatalogMSG); !strings.Contains(got, "arithmetic overflow invalid database key") || strings.Contains(got, "\u7261\u7469\u6d68\u7465\u6369") {
+		t.Errorf("sparse NUL decode lost 8-bit text or added mojibake: %q", got)
+	}
+	if got := decodeLegacyStreamText(mixedLatin); !strings.Contains(got, "subject body") {
+		t.Errorf("legacy decode lost mixed Latin text: %q", got)
 	}
 	if _, ok := tryDecodeUTF16BestEffort(mixedLatin); ok {
 		t.Fatal("mixed Latin fixture must exercise the secondary UTF-16LE reading")
@@ -829,13 +827,10 @@ func TestTryDecodeUTF16BestEffortRequiresBOMOrDominantNULLane(t *testing.T) {
 				t.Fatalf("decode = (%q, %t), want (%q, %t)", got, ok, tc.want, tc.ok)
 			}
 			if ok {
-				if got := decodeLegacyStreamText(tc.data, false); got != tc.want {
-					t.Errorf("nonbinary legacy decode = %q, want %q", got, tc.want)
-				}
 				want := strings.TrimSpace(whitespaceRegex.ReplaceAllString(strings.NewReplacer("<", " ", ">", " ").Replace(tc.want), " "))
-				got := decodeLegacyStreamText(tc.data, true)
+				got := decodeLegacyStreamText(tc.data)
 				if got != want || strings.ContainsAny(got, "<>") {
-					t.Errorf("binary legacy decode = %q, want %q without angle brackets", got, want)
+					t.Errorf("legacy decode = %q, want %q without angle brackets", got, want)
 				}
 				if cleaned := cleanStage3Content(got, false).text; cleaned != want {
 					t.Errorf("Stage 3 cleaned text = %q, want %q", cleaned, want)
