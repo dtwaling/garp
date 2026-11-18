@@ -2,6 +2,7 @@ package search
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -35,19 +36,79 @@ type matchRange struct {
 	end   int
 }
 
+// querySlot is one concept with alternative matchers. Compilation currently
+// creates one literal term per slot; a pipe is not alternation syntax.
+type querySlot struct {
+	label string
+	alts  []termMatcher
+}
+
+func (s querySlot) matches(text string) bool {
+	for _, matcher := range s.alts {
+		if matcher.matches(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s querySlot) findAll(text string) []matchRange {
+	var ranges []matchRange
+	for _, matcher := range s.alts {
+		ranges = append(ranges, matcher.findAll(text)...)
+	}
+	slices.SortFunc(ranges, func(a, b matchRange) int {
+		if a.start != b.start {
+			return a.start - b.start
+		}
+		return a.end - b.end
+	})
+	return slices.Compact(ranges)
+}
+
 // compiledQuery is the immutable matching form of one normalized query.
-// For a nonempty query, terms[0] and matchers[0] represent the primary query term
-// used for ranked seeding in Stages 2 and 3. Compilation preserves normalized
-// input order and keeps terms and matchers aligned by index.
+// Terms, matchers, and slots remain aligned by normalized input index; candidate
+// eligibility and ranking must not give that input order semantic significance.
 type compiledQuery struct {
 	terms             []string
 	matchers          []termMatcher
+	slots             []querySlot
+	minSlots          int
 	maxMatchBytes     int
 	maxDetectionBytes int
 	// owners is nil except in prefilter admission queries, where matchers[i]
 	// must hit together with all matchers sharing its owner to admit
 	// terms[owners[i]]. Never pass these queries to ranking or excerpt code.
 	owners []int
+}
+
+// Slot accessors also support internal prefilter queries built without slots.
+func (q compiledQuery) slotCount() int {
+	if len(q.slots) > 0 {
+		return len(q.slots)
+	}
+	return len(q.matchers)
+}
+
+func (q compiledQuery) slotLabel(i int) string {
+	if len(q.slots) > 0 {
+		return q.slots[i].label
+	}
+	return q.terms[i]
+}
+
+func (q compiledQuery) slotMatches(i int, text string) bool {
+	if len(q.slots) > 0 {
+		return q.slots[i].matches(text)
+	}
+	return q.matchers[i].matches(text)
+}
+
+func (q compiledQuery) slotFindAll(i int, text string) []matchRange {
+	if len(q.slots) > 0 {
+		return q.slots[i].findAll(text)
+	}
+	return q.matchers[i].findAll(text)
 }
 
 // QueryOptions defines immutable matching behavior for a compiled query.
@@ -187,10 +248,12 @@ func compileQueryWithOptions(terms []string, mode PartialMode, options QueryOpti
 	query := compiledQuery{
 		terms:    append([]string(nil), normalized...),
 		matchers: make([]termMatcher, 0, len(normalized)),
+		slots:    make([]querySlot, 0, len(normalized)),
 	}
 	for _, term := range normalized {
 		matcher := compileTermMatcherWithOptions(term, mode, options)
 		query.matchers = append(query.matchers, matcher)
+		query.slots = append(query.slots, querySlot{label: term, alts: []termMatcher{matcher}})
 		if matcher.maxMatchBytes < 0 {
 			query.maxMatchBytes = -1
 		} else if query.maxMatchBytes >= 0 && matcher.maxMatchBytes > query.maxMatchBytes {

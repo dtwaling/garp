@@ -17,6 +17,88 @@ import (
 	"garp/config"
 )
 
+func TestLiteralSlotScannerMatchesCleanContentCode(t *testing.T) {
+	var scratch literalScanScratch // Reuse across files, including empty files.
+	path := filepath.Join(t.TempDir(), "candidate.txt")
+	queries := []compiledQuery{
+		compileQuery([]string{"alpha", "beta", "missing", "é", "sink", "kelvin", "deploy", "alpha beta", "alpha\u00a0beta"}, PartialModeOff),
+		compileQuery([]string{"al*ha", "b?ta", "ms-*-api", "alpha\u00a0*"}, PartialModeOff),
+		compileQueryWithOptions([]string{"deploy", "Alpha"}, PartialModeOff, QueryOptions{SmartForms: true, CaseSensitive: true}),
+		compileQuery([]string{"deploy", "sink", "kelvin"}, PartialModePrefix),
+		compileQuery([]string{"ploy", "sink", "kelvin"}, PartialModeContains),
+	}
+	raws := []string{
+		"", " \t\x00\u0085\u009f\u00a0 ",
+		"\u00a0\u2003 alpha\u0085beta\u009f \u00a0",
+		"\u00a0alpha\u00a0beta\u00a0", "alpha\u00a0 \u2003 beta\u2003 \u00a0",
+		"Alpha beta deployed deployment redeploy ms-option-api é ſink Kelvin",
+		"alpha\xffbeta \xef\xbf\xbd", "alpha " + strings.Repeat("\u00a0", discoveryChunkSize) + " beta",
+		"alpha" + strings.Repeat("\u00a0 \u2003", discoveryChunkSize),
+		"alpha" + strings.Repeat("\u00a0 \u2003", discoveryChunkSize) + " beta" + strings.Repeat("\u00a0", discoveryChunkSize),
+	}
+	for _, token := range []string{"é", "ſink", "Kelvin", "alpha", "alphabets", "deployed", "ms-option-api", "\u0085", "\u00a0"} {
+		for split := 1; split <= len(token); split++ {
+			raws = append(raws, strings.Repeat("x", discoveryChunkSize-split-1)+" "+token+" beta")
+		}
+	}
+	for _, raw := range raws {
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, capBytes := range []int64{defaultTextMaxBytes, discoveryChunkSize} {
+			cleaned := CleanContentCode(raw[:min(int64(len(raw)), capBytes)])
+			for _, q := range queries {
+				wantPresent, wantCount := slotPresenceInText(cleaned, q)
+				for _, strict := range []bool{false, true} {
+					got, err := scanLiteralSlotsAndWords(&scratch, path, q, strict, capBytes)
+					minimum := min(2, q.slotCount())
+					if strict {
+						minimum = q.slotCount()
+					}
+					if err != nil || !got.readable || !got.exactSlots || got.wordCount != countCleanedWords(cleaned) ||
+						!reflect.DeepEqual(got.slotPresent, wantPresent) || got.slotCount != wantCount || got.needsStage2 != (wantCount >= minimum) {
+						t.Fatalf("raw length=%d cap=%d terms=%q strict=%v: got=%+v err=%v, want words=%d slots=%v count=%d", len(raw), capBytes, q.terms, strict, got, err, countCleanedWords(cleaned), wantPresent, wantCount)
+					}
+				}
+			}
+		}
+	}
+	for _, tc := range []struct {
+		term, ending string
+		mode         PartialMode
+	}{
+		{"ab\xc3", "abé", PartialModeContains},
+		{"alpha", "alphabets", PartialModeOff},
+		{"kelvin", "Kelvin", PartialModeOff},
+	} {
+		q := compileQuery([]string{tc.term}, tc.mode)
+		boundary := discoveryChunkSize + streamQueryOverlap(q) + 4
+		raw := strings.Repeat("x", boundary-len(tc.term)-1) + " " + tc.ending + " "
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := scanLiteralSlotsAndWords(&scratch, path, q, false, 0)
+		want, _ := slotPresenceInText(CleanContentCode(raw), q)
+		if err != nil || !reflect.DeepEqual(got.slotPresent, want) {
+			t.Fatalf("normalized-window boundary for %q: got=%+v err=%v, want=%v", tc.term, got, err, want)
+		}
+	}
+	for _, tc := range []struct {
+		text string
+		want int
+	}{
+		{"", 0}, {" \t\u0085", 0}, {"alpha beta", 2}, {"alpha\u00a0beta", 1}, {"alpha\u009fbeta", 2},
+	} {
+		if got := countCleanedWords(tc.text); got != tc.want {
+			t.Errorf("countCleanedWords(%q)=%d, want %d", tc.text, got, tc.want)
+		}
+	}
+	got, err := scanLiteralSlotsAndWords(&scratch, path+".missing", queries[0], false, 0)
+	if err == nil || !reflect.DeepEqual(got, stage1FileScan{}) {
+		t.Fatalf("open failure: got=%+v err=%v", got, err)
+	}
+}
+
 func TestDiscoveryByteScanner(t *testing.T) {
 	tests := []struct {
 		name string

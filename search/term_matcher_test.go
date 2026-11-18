@@ -5,6 +5,34 @@ import (
 	"testing"
 )
 
+func TestCompiledQuerySlotSeamPreservesLiteralPipe(t *testing.T) {
+	q := compileQuery([]string{" Alpha|Beta ", "gamma", "ALPHA|BETA"}, PartialModeOff)
+	if len(q.slots) != 2 || q.slotCount() != 2 {
+		t.Fatalf("slots=%v, count=%d", q.slots, q.slotCount())
+	}
+	for i, term := range q.terms {
+		if q.slotLabel(i) != term || len(q.slots[i].alts) != 1 || q.slots[i].alts[0].term != q.matchers[i].term {
+			t.Fatalf("slot %d is not aligned with %q", i, term)
+		}
+	}
+	fallback := compiledQuery{terms: q.terms, matchers: q.matchers}
+	for _, query := range []compiledQuery{q, fallback} {
+		if query.slotCount() != 2 || query.slotLabel(0) != "alpha|beta" {
+			t.Fatal("slot accessors lost the literal label")
+		}
+		for _, text := range []string{"alpha", "beta", "alpha beta"} {
+			if query.slotMatches(0, text) || len(query.slotFindAll(0, text)) != 0 {
+				t.Errorf("pipe interpreted as alternation in %q", text)
+			}
+		}
+		text := "ALPHA|BETA gamma alpha|beta"
+		ranges := query.slotFindAll(0, text)
+		if !query.slotMatches(0, text) || len(ranges) != 2 || ranges[0] != (matchRange{0, 10}) || ranges[1] != (matchRange{17, 27}) {
+			t.Errorf("literal pipe matches=%v", ranges)
+		}
+	}
+}
+
 func TestNormalizeQueryTerms(t *testing.T) {
 	got := NormalizeQueryTerms([]string{
 		"  ms-**-api  ",

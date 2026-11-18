@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/richardlehane/mscfb"
 
@@ -539,7 +540,7 @@ func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []s
 }
 
 // discoveryAdmitsTextFile applies the cleaned-text admission proof to Stage 1.
-// Its query contains only the primary term's necessary matchers. For markup
+// Its query specifies the necessary matchers and minimum slot count. For markup
 // formats a boundary-free raw gate scan runs first; only a gate hit pays for the
 // exact pass through cleanerSpacingReader.
 func discoveryAdmitsTextFile(path string, admission, gate compiledQuery, provable bool, maxBytes int64) bool {
@@ -570,6 +571,204 @@ func discoveryAdmitsTextFile(path string, admission, gate compiledQuery, provabl
 
 const discoveryChunkSize = 64 * 1024
 
+// countCleanedWords counts runs under the literal cleaner's C0/C1/space rule,
+// not strings.Fields: internal non-ASCII whitespace belongs to a word.
+func countCleanedWords(text string) int {
+	count, inWord := 0, false
+	for _, r := range text {
+		space := r <= 0x20 || (r >= 0x7f && r <= 0x9f)
+		if !space && !inWord {
+			count++
+		}
+		inWord = !space
+	}
+	return count
+}
+
+type stage1FileScan struct {
+	readable    bool
+	wordCount   int
+	exactSlots  bool
+	slotPresent []bool
+	slotCount   int
+	needsStage2 bool
+}
+
+// literalScanScratch belongs to one worker and is reused across files. Buffers
+// retain capacity, never corpus text in a candidate or per-file descriptor.
+type literalScanScratch struct {
+	rawBuf      [discoveryChunkSize]byte
+	normBuf     []byte
+	tailUnicode []byte
+}
+
+func slotPresenceInText(cleaned string, q compiledQuery) ([]bool, int) {
+	present := make([]bool, q.slotCount())
+	count := 0
+	for i := range present {
+		present[i] = q.slotMatches(i, cleaned)
+		if present[i] {
+			count++
+		}
+	}
+	return present, count
+}
+
+// matchSlotsInNormWindow must not accept a temporary end-of-window boundary.
+// detectionBytes bounds the evidence needed even for unbounded prefix ranges.
+func matchSlotsInNormWindow(data []byte, q compiledQuery, present []bool, from int, atEOF bool) {
+	for i := range present {
+		if present[i] {
+			continue
+		}
+		var alts []termMatcher
+		if len(q.slots) > 0 {
+			alts = q.slots[i].alts
+		} else {
+			alts = q.matchers[i : i+1]
+		}
+		for _, matcher := range alts {
+			idx := discoveryMatchIndex(data, matcher, from)
+			if idx >= 0 && (atEOF || !matcher.trailingBound || idx+matcher.detectionBytes < len(data)) {
+				present[i] = true
+				break
+			}
+		}
+	}
+}
+
+// scanLiteralSlotsAndWords scans the entire searchable prefix, even after all
+// slots hit, to obtain exact corpus statistics. It matches CleanContentCode,
+// including invalid UTF-8 and Unicode edge trimming. Open failures are returned
+// for callers that report warnings; read failures defer to authoritative Stage 2.
+// Strict files need every slot; relaxed multi-slot files with only one hit can
+// be deferred without loading their text until the corpus rarity gate is known.
+func scanLiteralSlotsAndWords(scratch *literalScanScratch, path string, q compiledQuery, strict bool, maxBytes int64) (stage1FileScan, error) {
+	f, _, err := openRegularSearchFile(path)
+	if err != nil {
+		return stage1FileScan{}, err
+	}
+	defer f.Close()
+	_ = adviseSequential(f)
+	defer adviseDontNeed(f)
+	if maxBytes <= 0 {
+		maxBytes = defaultTextMaxBytes
+	}
+	r := io.LimitReader(f, maxBytes)
+	result := stage1FileScan{readable: true, exactSlots: true, slotPresent: make([]bool, q.slotCount())}
+	scratch.normBuf = scratch.normBuf[:0]
+	scratch.tailUnicode = scratch.tailUnicode[:0]
+	// Extra bytes let a retained window skip any sliced UTF-8 rune as well as
+	// the leading-boundary byte, without losing a cross-window match.
+	overlap := streamQueryOverlap(q) + utf8.UTFMax
+	windowSize := overlap + discoveryChunkSize
+	if cap(scratch.normBuf) < windowSize {
+		scratch.normBuf = make([]byte, 0, windowSize)
+	}
+	from := 0
+	inWord := false
+	emit := func(data []byte) {
+		for i := 0; i < len(data); {
+			r, size := utf8.DecodeRune(data[i:])
+			i += size
+			space := r <= 0x20 || (r >= 0x7f && r <= 0x9f)
+			if !space && !inWord {
+				result.wordCount++
+			}
+			inWord = !space
+		}
+		// Each emission ends at a decoded rune boundary (or an actual invalid
+		// byte). Never manufacture an invalid byte by splitting a valid rune.
+		scratch.normBuf = append(scratch.normBuf, data...)
+		if len(scratch.normBuf) >= windowSize {
+			matchSlotsInNormWindow(scratch.normBuf, q, result.slotPresent, from, false)
+			copy(scratch.normBuf, scratch.normBuf[len(scratch.normBuf)-overlap:])
+			scratch.normBuf = scratch.normBuf[:overlap]
+			from = utf8.UTFMax
+		}
+	}
+	started, inSpace := false, false
+	// A trailing Unicode whitespace run may be arbitrarily long. Spill it in
+	// bounded windows, saving the trimmed-EOF answer before the first spill.
+	// If real content follows, the speculative matches/counts become exact;
+	// otherwise restore that answer. No file-sized pending whitespace buffer.
+	spilled := false
+	var trimmedPresent []bool
+	trimmedWords := 0
+	kept := 0
+	for {
+		n, readErr := r.Read(scratch.rawBuf[kept:])
+		if readErr != nil && readErr != io.EOF {
+			return stage1FileScan{needsStage2: true}, nil
+		}
+		data := scratch.rawBuf[:kept+n]
+		i := 0
+		for i < len(data) {
+			if readErr != io.EOF && !utf8.FullRune(data[i:]) {
+				break
+			}
+			ch, size := utf8.DecodeRune(data[i:])
+			piece := data[i : i+size]
+			i += size
+			space := ch <= 0x20 || (ch >= 0x7f && ch <= 0x9f)
+			if space && inSpace {
+				continue
+			}
+			inSpace = space
+			if space {
+				piece = []byte{' '}
+			}
+			if space || unicode.IsSpace(ch) {
+				if !started {
+					continue
+				}
+				scratch.tailUnicode = append(scratch.tailUnicode, piece...)
+				if len(scratch.tailUnicode) >= discoveryChunkSize {
+					if !spilled {
+						if trimmedPresent == nil {
+							trimmedPresent = make([]bool, len(result.slotPresent))
+						}
+						copy(trimmedPresent, result.slotPresent)
+						matchSlotsInNormWindow(scratch.normBuf, q, trimmedPresent, from, true)
+						trimmedWords = result.wordCount
+						spilled = true
+					}
+					emit(scratch.tailUnicode)
+					scratch.tailUnicode = scratch.tailUnicode[:0]
+				}
+				continue
+			}
+			emit(scratch.tailUnicode)
+			scratch.tailUnicode = scratch.tailUnicode[:0]
+			emit(piece)
+			started, spilled = true, false
+		}
+		kept = copy(scratch.rawBuf[:], data[i:])
+		if readErr == io.EOF {
+			break
+		}
+	}
+	if spilled {
+		copy(result.slotPresent, trimmedPresent)
+		result.wordCount = trimmedWords
+	} else {
+		matchSlotsInNormWindow(scratch.normBuf, q, result.slotPresent, from, true)
+	}
+	for _, present := range result.slotPresent {
+		if present {
+			result.slotCount++
+		}
+	}
+	minimum := min(2, q.slotCount())
+	if strict {
+		minimum = q.slotCount()
+	}
+	result.needsStage2 = result.slotCount >= minimum
+	scratch.normBuf = scratch.normBuf[:0]
+	scratch.tailUnicode = scratch.tailUnicode[:0]
+	return result, nil
+}
+
 // discoveryScanner reuses one file-sized (at most chunk-sized) window across
 // the gate and exact passes.
 type discoveryScanner struct {
@@ -577,18 +776,16 @@ type discoveryScanner struct {
 	window []byte
 }
 
-// admits reports whether every matcher of q hits r, or r fails to read.
+// admits reports whether q's slot threshold is met, or r fails to read.
 func (s *discoveryScanner) admits(r io.Reader, q compiledQuery) bool {
-	hit := make([]bool, len(q.matchers))
-	remaining := len(hit)
+	state := newStreamQueryMatches(q)
 	observe := func(data []byte, from int) bool {
 		for i, matcher := range q.matchers {
-			if !hit[i] && discoveryMatchIndex(data, matcher, from) >= 0 {
-				hit[i] = true
-				remaining--
+			if !state.found[i] && discoveryMatchIndex(data, matcher, from) >= 0 {
+				state.found[i] = true
 			}
 		}
-		return remaining == 0
+		return state.satisfied(q.minSlots == 0 && len(q.terms) <= 1)
 	}
 	overlap := streamQueryOverlap(q)
 	if len(s.window) < overlap+s.chunk {
@@ -829,14 +1026,9 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 		return nil, nil
 	}
 
-	primaryMatcher := query.matchers[0]
-	primaryQuery := compiledQuery{
-		terms:             query.terms[:1],
-		matchers:          query.matchers[:1],
-		maxMatchBytes:     primaryMatcher.maxMatchBytes,
-		maxDetectionBytes: primaryMatcher.detectionBytes,
-	}
-	admission, provable := prefilterAdmissionQuery(primaryQuery)
+	anyQuery := query
+	anyQuery.minSlots = 1
+	admission, provable := prefilterAdmissionQuery(anyQuery)
 	gate := prefilterRawGate(admission)
 
 	// Results and synchronization
@@ -891,10 +1083,10 @@ func findFilesWithFirstWordProgressQueryWithRoot(query compiledQuery, fileTypes 
 				mu.Unlock()
 				return nil
 			}
-			// For non-PDF heavy types, run a small capped streaming prefilter for the first term.
+			// For non-PDF heavy types, run a small capped prefilter for any slot.
 			// Only skip when conclusively absent; undecided or found => include.
 			capBytes := capForBinaryPrefilter(ext)
-			found, decided := binaryStreamingPrefilterDecidedQuery(path, primaryQuery, capBytes, true)
+			found, decided := binaryStreamingPrefilterDecidedQuery(path, anyQuery, capBytes, false)
 			if decided && !found {
 				return nil // safe to skip
 			}
@@ -951,7 +1143,7 @@ func StreamContainsAllWords(filePath string, words []string) bool {
 
 // StreamContainsRankedWordsDecided streams a text file and determines whether
 // it can satisfy ranked matching before the distance check. Relaxed matching
-// requires the primary term plus at least one secondary term; strict matching
+// requires any two distinct slots (or the sole slot); strict matching
 // requires every query term.
 func StreamContainsRankedWordsDecided(filePath string, words []string, strict bool) (found bool, decided bool) {
 	return StreamContainsRankedWordsDecidedPartial(filePath, words, strict, PartialModeOff)
@@ -1050,9 +1242,21 @@ func readerValidatedEOF(r io.Reader) bool {
 }
 
 type streamQueryMatches struct {
-	found  []bool
-	owners []int
-	terms  int
+	found    []bool
+	owners   []int
+	terms    int
+	minSlots int
+}
+
+func newStreamQueryMatches(q compiledQuery) streamQueryMatches {
+	return streamQueryMatches{found: make([]bool, len(q.matchers)), owners: q.owners, terms: len(q.terms), minSlots: q.minSlots}
+}
+
+func (m *streamQueryMatches) slotTotal() int {
+	if m.owners != nil {
+		return m.terms
+	}
+	return len(m.found)
 }
 
 func (m *streamQueryMatches) observe(text string, query compiledQuery, from int) {
@@ -1066,6 +1270,16 @@ func (m *streamQueryMatches) observe(text string, query compiledQuery, from int)
 }
 
 func (m *streamQueryMatches) satisfied(strict bool) bool {
+	if strict || m.slotTotal() <= 1 {
+		return m.satisfiedMin(m.slotTotal())
+	}
+	if m.minSlots > 0 {
+		return m.satisfiedMin(m.minSlots)
+	}
+	return m.satisfiedMin(2)
+}
+
+func (m *streamQueryMatches) satisfiedMin(minSlots int) bool {
 	if m.owners != nil {
 		grouped := streamQueryMatches{found: make([]bool, m.terms)}
 		for i := range grouped.found {
@@ -1074,28 +1288,15 @@ func (m *streamQueryMatches) satisfied(strict bool) bool {
 		for i, owner := range m.owners {
 			grouped.found[owner] = grouped.found[owner] && m.found[i]
 		}
-		return grouped.satisfied(strict)
+		return grouped.satisfiedMin(minSlots)
 	}
-	if len(m.found) == 0 {
-		return true
-	}
-	if strict || len(m.found) <= 2 {
-		for _, found := range m.found {
-			if !found {
-				return false
-			}
-		}
-		return true
-	}
-	if !m.found[0] {
-		return false
-	}
-	for _, found := range m.found[1:] {
+	count := 0
+	for _, found := range m.found {
 		if found {
-			return true
+			count++
 		}
 	}
-	return false
+	return count >= minSlots
 }
 
 func streamQueryOverlap(query compiledQuery) int {
@@ -1111,7 +1312,7 @@ func streamMatchesQuery(r io.Reader, query compiledQuery, strict bool, maxBytes 
 	if len(query.matchers) == 0 {
 		return true, true, nil
 	}
-	state := streamQueryMatches{found: make([]bool, len(query.matchers)), owners: query.owners, terms: len(query.terms)}
+	state := newStreamQueryMatches(query)
 	const chunkSize = 64 * 1024
 	overlap := streamQueryOverlap(query)
 	window := make([]byte, overlap+chunkSize)
@@ -1156,7 +1357,7 @@ func prefilterAdmissionQuery(q compiledQuery) (compiledQuery, bool) {
 	if !hasPhrase {
 		return q, true
 	}
-	aq := compiledQuery{terms: q.terms, owners: make([]int, 0, len(q.matchers))}
+	aq := compiledQuery{terms: q.terms, owners: make([]int, 0, len(q.matchers)), minSlots: q.minSlots}
 	for i, p := range q.matchers {
 		start := len(aq.matchers)
 		if !strings.Contains(p.term, " ") {
@@ -1190,7 +1391,7 @@ func prefilterAdmissionQuery(q compiledQuery) (compiledQuery, bool) {
 // a gate match, so a raw gate miss proves a cleaned miss. Its matchers are nil
 // when a term cannot be relaxed (2 bytes or fewer, or an invalid wildcard).
 func prefilterRawGate(q compiledQuery) compiledQuery {
-	gate := compiledQuery{terms: q.terms, owners: q.owners, matchers: make([]termMatcher, len(q.matchers))}
+	gate := compiledQuery{terms: q.terms, owners: q.owners, matchers: make([]termMatcher, len(q.matchers)), minSlots: q.minSlots}
 	for i, m := range q.matchers {
 		if m.mode != PartialModeContains {
 			m = compileTermMatcherWithOptions(m.term, PartialModeContains, QueryOptions{CaseSensitive: !m.caseInsensitive})
@@ -1337,7 +1538,7 @@ func encodingAwarePrefilter(filePath string, query compiledQuery, strict bool, c
 		escaped := strings.Contains(lower, `\'`) || strings.Contains(lower, `\u`) || strings.Contains(lower, `\bin`)
 		text, _ := (&RTFExtractor{}).ExtractText([]byte(raw.String()))
 		text = cleanSearchContent(mappedContent{text: text}, false).text
-		state := streamQueryMatches{found: make([]bool, len(query.matchers))}
+		state := newStreamQueryMatches(query)
 		state.observe(text, query, 0)
 		if state.satisfied(strict) {
 			return true, true
@@ -1358,7 +1559,7 @@ func encodingAwarePrefilter(filePath string, query compiledQuery, strict bool, c
 	// raw miss. Raw mail is not extracted body text, so a normalized hit must
 	// still go through extraction. Retain only the bounded scan and preserve
 	// the streaming early-hit path.
-	state := streamQueryMatches{found: make([]bool, len(query.matchers))}
+	state := newStreamQueryMatches(query)
 	state.observe(cleanSearchContent(mappedContent{text: raw.String()}, false).text, query, 0)
 	if state.satisfied(strict) {
 		return false, false
@@ -1499,7 +1700,7 @@ func binaryStreamingPrefilterDecidedQuery(filePath string, query compiledQuery, 
 			"0Table":       true,
 		}
 
-		state := streamQueryMatches{found: make([]bool, len(query.matchers))}
+		state := newStreamQueryMatches(query)
 
 		for ent, err2 := cf.Next(); err2 == nil; ent, err2 = cf.Next() {
 			if total >= maxBytes {
