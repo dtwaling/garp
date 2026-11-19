@@ -212,6 +212,74 @@ does not justify calling relevant content nonrelevant. Comparisons below
 measure the retained key; query/schema correction requires separate approval.
 Keep this assumption visible at the human PR gate rather than silently closing it.
 
+### Paired synonym OR evaluation and known key gaps
+
+`make eval-or` runs the same candidate binary twice: original wording as
+`previous`, and `queries/synonym_or.json` expansions as `candidate`. BM25 and
+ripgrep also use the expansions. The frozen base queries, gold and v0.10.0
+baseline are unchanged. `-synonym-or` is incompatible with `-baseline`; its
+own paired gate replaces the normal baseline requirement. `-no-gate` records
+results without applying either gate.
+
+The overlay's 27 expansions (12 docs, 15 code) were locked from needs and
+original args only, before inspecting gold or corpus content. The pre-judgment
+expansion lock is SHA-256
+`dc20fab4c224de445621f2c6b1641eba345ba8cbc2ec5a9dd146832342352b57`.
+Only sorted/deduplicated `extra_judged_nonrelevant` labels were added afterward;
+args, ordering and other fields remain unchanged. The blind pool introduced
+142 query/path pairs: 141 retained negatives and one confirmed key gap.
+
+**ASSUMED -- judgment-quality caveat requiring human PR-gate review:**
+129 agreeing negative labels were retained under explicit bounded-scope
+approval, not re-certified as complete close reads. Their earlier independent
+passes used shallow/head/keyword-context reading and generic rationales.
+The remaining 13 uncertain/disputed pairs received bounded, source-specific
+primary reads and a fresh isolated third judge: 12 negatives and one relevant
+path, with zero unresolved disagreements. Zero `unjudged10` therefore means
+coverage under this authorized disposition, not complete independent
+source-grounded certification of all 142 pairs. Do not silently close this
+limitation or claim a uniformly close-read two-judge pool.
+
+The required sibling `queries/synonym_or.key_gaps.json` records `id`, `path`
+(query-root-relative), `need`, and `evidence`. Custom overlays likewise require
+`<overlay stem>.key_gaps.json` (use `[]` when empty). The harness validates the
+register against expanded synonym queries, needs, manifest paths and existing
+judgments, and records both overlay and register SHA-256s in result metadata.
+`code-g-011` / `app/tui.go` is confirmed relevant: pinned lines 485-497 and
+826-831 sanitize untrusted excerpts before display. It remains absent from
+both frozen gold and nonrelevant labels. Registered paths count as adjudicated
+for coverage only, never as new gold credit or as nonrelevant.
+
+Query IDs in the register are excluded from `by_kind.synonym` and reported
+separately under `by_kind.known_key_gap` and a Markdown per-query table.
+Per-query rows retain their original kind; corpus aggregates still include
+all queries. Their recall/hit metrics use the incomplete frozen gold and must
+not be interpreted as corrected relevance estimates. Only strict synonym
+lift excludes the registered IDs; single/proximity equality and aggregate
+non-regression checks remain in force, with the bounded exception below.
+The gate requires zero unjudged top-10 paths in all four systems and strict
+R@10 and hit@N lift in both eligible synonym cohorts. JSON is deterministic;
+Markdown timing remains informational.
+
+**ASSUMED -- authorized bounded top-rank precision tradeoff:**
+`code-g-008`'s frozen gold `search/engine.go` moves from rank 1 to rank 2:
+an OR-expanded third slot admits a judged-nonrelevant competitor above it.
+Only this exact single-gold rank transition permits a code synonym R@1 drop
+of at most `0.10` and aggregate code R@1 drop of at most `0.03` (with `1e-9`
+comparison tolerance), and only while strict R@10/hit@N lift holds on both
+eligible cohorts. The observed code R@1 changes are `0.357143 -> 0.285714`
+(synonym) and `0.534722 -> 0.510913` (aggregate). That query's reciprocal rank
+necessarily falls from 1 to 0.5; synonym and aggregate R@5/MRR@10 must still
+not regress. All other code queries and every docs query retain per-query
+R@1/R@5/MRR@10 non-regression at `candidate >= previous - 1e-9`, preventing
+cohort gains from hiding another query's loss. No expansions or frozen keys
+were changed to recover rank.
+
+The bounded precision tradeoff, confirmed key gap, and 129-label caveat
+remain explicit `ASSUMED` items for human review in the eventual PR; the key
+gap and judgment-quality confirmation remain open, not grounds to tune
+expansions after seeing metrics.
+
 ## Metric definitions
 
 Rankings are deduplicated in output order. R@k and MRR@10 use distinct gold

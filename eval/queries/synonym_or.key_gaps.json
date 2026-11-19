@@ -1,0 +1,8 @@
+[
+  {
+    "id": "code-g-011",
+    "path": "app/tui.go",
+    "need": "Find where untrusted text has terminal escape sequences and control characters removed before it is displayed.",
+    "evidence": "Pinned code/garp/app/tui.go:485-497 rebuilds result excerpts from raw text through sanitizeAndHighlightExcerpt before display. Lines 826-831 call terminaltext.SanitizeWithOffsets(raw) and only then apply trusted highlighting. This is the actual pre-display sanitization boundary, not incidental token co-occurrence. Confirmed by independent source inspection and the original two blind judges; retained as an unrecorded relevant path without changing the frozen gold or nonrelevant judgments."
+  }
+]

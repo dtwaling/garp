@@ -19,6 +19,9 @@ func TestRunRG(t *testing.T) {
 	for _, tc := range []struct{ args, want []string }{
 		{[]string{"alpha", "--distance", "300", "beta", "-m", "2", "--strict", "--partial=contains", "--smart-forms"}, []string{".hidden.txt", "a.txt"}},
 		{[]string{"alpha", "beta*"}, []string{".hidden.txt", "a.txt", "b.txt"}},
+		{[]string{"absent|alpha", "beta"}, []string{".hidden.txt", "a.txt"}},
+		{[]string{"absent|beta*", "alpha"}, []string{".hidden.txt", "a.txt", "b.txt"}},
+		{[]string{"a.b-suffix|absent*"}, []string{"literal.txt"}},
 		{[]string{"a.b*"}, []string{"literal.txt"}},
 		{[]string{"absent", "alpha"}, nil},
 		{nil, nil},
