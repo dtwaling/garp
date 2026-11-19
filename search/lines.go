@@ -334,7 +334,8 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		for j := range infos {
 			if first[infos[j].index] != -1 {
 				present = append(present, &infos[j])
-				if anchor == nil || len(infos[j].offsets) < len(anchor.offsets) {
+				if anchor == nil || len(infos[j].offsets) < len(anchor.offsets) ||
+					(len(infos[j].offsets) == len(anchor.offsets) && query.slotLabel(infos[j].index) < query.slotLabel(anchor.index)) {
 					anchor = &infos[j]
 				}
 			}

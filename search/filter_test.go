@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +17,88 @@ import (
 
 	"garp/config"
 )
+
+func TestLiteralSlotScannerMatchesCleanContentCode(t *testing.T) {
+	var scratch literalScanScratch // Reuse across files, including empty files.
+	path := filepath.Join(t.TempDir(), "candidate.txt")
+	queries := []compiledQuery{
+		compileQuery([]string{"alpha", "beta", "missing", "é", "sink", "kelvin", "deploy", "alpha beta", "alpha\u00a0beta"}, PartialModeOff),
+		compileQuery([]string{"al*ha", "b?ta", "ms-*-api", "alpha\u00a0*"}, PartialModeOff),
+		compileQueryWithOptions([]string{"deploy", "Alpha"}, PartialModeOff, QueryOptions{SmartForms: true, CaseSensitive: true}),
+		compileQuery([]string{"deploy", "sink", "kelvin"}, PartialModePrefix),
+		compileQuery([]string{"ploy", "sink", "kelvin"}, PartialModeContains),
+	}
+	raws := []string{
+		"", " \t\x00\u0085\u009f\u00a0 ",
+		"\u00a0\u2003 alpha\u0085beta\u009f \u00a0",
+		"\u00a0alpha\u00a0beta\u00a0", "alpha\u00a0 \u2003 beta\u2003 \u00a0",
+		"Alpha beta deployed deployment redeploy ms-option-api é ſink Kelvin",
+		"alpha\xffbeta \xef\xbf\xbd", "alpha " + strings.Repeat("\u00a0", discoveryChunkSize) + " beta",
+		"alpha" + strings.Repeat("\u00a0 \u2003", discoveryChunkSize),
+		"alpha" + strings.Repeat("\u00a0 \u2003", discoveryChunkSize) + " beta" + strings.Repeat("\u00a0", discoveryChunkSize),
+	}
+	for _, token := range []string{"é", "ſink", "Kelvin", "alpha", "alphabets", "deployed", "ms-option-api", "\u0085", "\u00a0"} {
+		for split := 1; split <= len(token); split++ {
+			raws = append(raws, strings.Repeat("x", discoveryChunkSize-split-1)+" "+token+" beta")
+		}
+	}
+	for _, raw := range raws {
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, capBytes := range []int64{defaultTextMaxBytes, discoveryChunkSize} {
+			cleaned := CleanContentCode(raw[:min(int64(len(raw)), capBytes)])
+			for _, q := range queries {
+				wantPresent, wantCount := slotPresenceInText(cleaned, q)
+				for _, strict := range []bool{false, true} {
+					got, err := scanLiteralSlotsAndWords(&scratch, path, q, strict, capBytes)
+					minimum := min(2, q.slotCount())
+					if strict {
+						minimum = q.slotCount()
+					}
+					if err != nil || !got.readable || !got.exactSlots || got.wordCount != countCleanedWords(cleaned) ||
+						!reflect.DeepEqual(got.slotPresent, wantPresent) || got.slotCount != wantCount || got.needsStage2 != (wantCount >= minimum) {
+						t.Fatalf("raw length=%d cap=%d terms=%q strict=%v: got=%+v err=%v, want words=%d slots=%v count=%d", len(raw), capBytes, q.terms, strict, got, err, countCleanedWords(cleaned), wantPresent, wantCount)
+					}
+				}
+			}
+		}
+	}
+	for _, tc := range []struct {
+		term, ending string
+		mode         PartialMode
+	}{
+		{"ab\xc3", "abé", PartialModeContains},
+		{"alpha", "alphabets", PartialModeOff},
+		{"kelvin", "Kelvin", PartialModeOff},
+	} {
+		q := compileQuery([]string{tc.term}, tc.mode)
+		boundary := discoveryChunkSize + streamQueryOverlap(q) + 4
+		raw := strings.Repeat("x", boundary-len(tc.term)-1) + " " + tc.ending + " "
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := scanLiteralSlotsAndWords(&scratch, path, q, false, 0)
+		want, _ := slotPresenceInText(CleanContentCode(raw), q)
+		if err != nil || !reflect.DeepEqual(got.slotPresent, want) {
+			t.Fatalf("normalized-window boundary for %q: got=%+v err=%v, want=%v", tc.term, got, err, want)
+		}
+	}
+	for _, tc := range []struct {
+		text string
+		want int
+	}{
+		{"", 0}, {" \t\u0085", 0}, {"alpha beta", 2}, {"alpha\u00a0beta", 1}, {"alpha\u009fbeta", 2},
+	} {
+		if got := countCleanedWords(tc.text); got != tc.want {
+			t.Errorf("countCleanedWords(%q)=%d, want %d", tc.text, got, tc.want)
+		}
+	}
+	got, err := scanLiteralSlotsAndWords(&scratch, path+".missing", queries[0], false, 0)
+	if err == nil || !reflect.DeepEqual(got, stage1FileScan{}) {
+		t.Fatalf("open failure: got=%+v err=%v", got, err)
+	}
+}
 
 func TestDiscoveryByteScanner(t *testing.T) {
 	tests := []struct {
@@ -186,6 +269,68 @@ func TestDiscoveryPlainASCIIFastPathAllocations(t *testing.T) {
 			}
 			if allocations != 0 {
 				t.Fatalf("plain ASCII discovery allocations = %v, want 0", allocations)
+			}
+		})
+	}
+}
+
+func TestLiteralSlotScannerAllocationScaling(t *testing.T) {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "-race" && setting.Value == "true" {
+				// Race builds randomly drop regexp machines from sync.Pool;
+				// measure allocation scaling only without that instrumentation.
+				t.Skip("regexp pool allocations are randomized by the race detector")
+			}
+		}
+	}
+	path := filepath.Join(t.TempDir(), "candidate.txt")
+	for _, tc := range []struct {
+		name, term, body string
+		observeCanonical bool
+	}{
+		{"ASCII", "missing", "alpha beta ", false},
+		{"wildcard", "mi?sing", "alpha beta ", false},
+		{"Unicode", "éxcluded", "alpha beta ", false},
+		{"Unicode fold", "missing", "Kelvin ſink ", false},
+		{"replacement literal", "\uFFFD", "alpha beta ", false},
+		{"invalid byte literal", "ab\xc3", "alpha beta ", false},
+		{"canonical regex boundary rejected observation", "mi?sing", "xmiQsingx ", true},
+		{"Unicode boundary rejected", "éxcluded", "xéxcludedx ", false},
+		{"byte wildcard backtracking", "ab*\xff*z", "abxxx\xffyyy ", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := compileQuery([]string{tc.term}, PartialModeOff)
+			var scratch literalScanScratch
+			var baseline float64
+			for _, chunks := range []int{1, 100} {
+				raw := strings.Repeat(tc.body, chunks*discoveryChunkSize/len(tc.body))
+				if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				wantWords := countCleanedWords(CleanContentCode(raw))
+				allocs := testing.AllocsPerRun(3, func() {
+					got, err := scanLiteralSlotsAndWords(&scratch, path, q, false, int64(len(raw)+1))
+					if err != nil || !got.exactSlots || got.wordCount != wantWords || got.slotCount != 0 {
+						t.Fatalf("scan = %+v, err = %v; want %d words and no slots", got, err, wantWords)
+					}
+				})
+				t.Logf("bytes=%d allocations/scan=%.0f", len(raw), allocs)
+				if chunks == 1 {
+					baseline = allocs
+				} else if tc.observeCanonical {
+					if q.matchers[0].byteExact {
+						t.Fatal("canonical regex observation must exercise the non-byte-exact fallback")
+					}
+					// Keep measuring this supported path, including semantic assertions
+					// above. Canonical regexp per-hit allocations are deliberately outside
+					// the pooled byte-exact path's no-per-window-allocation contract.
+					// Do not assert a runtime-dependent allocation count as semantics.
+					t.Logf("canonical regex observation (outside reusable-path contract): %.0f -> %.0f allocations/scan", baseline, allocs)
+				} else if allocs > baseline+1 {
+					// Allow fixed runtime overhead, not a copy per window.
+					t.Fatalf("allocations grew from %.0f to %.0f across %d chunks", baseline, allocs, chunks)
+				}
 			}
 		})
 	}
@@ -1174,7 +1319,7 @@ func TestCheckTextContainsRankedWords(t *testing.T) {
 		words     []string
 		distance  int
 		strict    bool
-		wantScore int
+		wantScore float64
 		wantCount int
 		wantTerms []string
 		wantSpan  int
@@ -1246,11 +1391,15 @@ func TestCheckTextContainsRankedWords(t *testing.T) {
 			wantOK:    true,
 		},
 		{
-			name:     "relaxed three terms rejects missing primary",
-			text:     "beta synchronization",
-			words:    []string{"alpha", "beta", "synchronization"},
-			distance: 30,
-			wantOK:   false,
+			name:      "relaxed three terms accepts missing first term",
+			text:      "beta synchronization",
+			words:     []string{"alpha", "beta", "synchronization"},
+			distance:  30,
+			wantScore: 19,
+			wantCount: 2,
+			wantTerms: []string{"beta", "synchronization"},
+			wantSpan:  20,
+			wantOK:    true,
 		},
 		{
 			name:     "relaxed three terms rejects primary alone",
@@ -1295,7 +1444,7 @@ func TestCheckTextContainsRankedWords(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			score, count, terms, span, ok := CheckTextContainsRankedWords(tt.text, tt.words, tt.distance, tt.strict)
 			if score != tt.wantScore || count != tt.wantCount || span != tt.wantSpan || ok != tt.wantOK {
-				t.Fatalf("CheckTextContainsRankedWords() = (%d, %d, %v, %d, %v), want (%d, %d, %v, %d, %v)", score, count, terms, span, ok, tt.wantScore, tt.wantCount, tt.wantTerms, tt.wantSpan, tt.wantOK)
+				t.Fatalf("CheckTextContainsRankedWords() = (%v, %d, %v, %d, %v), want (%v, %d, %v, %d, %v)", score, count, terms, span, ok, tt.wantScore, tt.wantCount, tt.wantTerms, tt.wantSpan, tt.wantOK)
 			}
 			if strings.Join(terms, "\x00") != strings.Join(tt.wantTerms, "\x00") {
 				t.Fatalf("matched terms = %v, want %v", terms, tt.wantTerms)
@@ -1312,7 +1461,7 @@ func TestCheckTextContainsRankedWordsChoosesBestWindow(t *testing.T) {
 			t.Fatal("expected a valid ranked match")
 		}
 		if score != 19 || count != 2 || strings.Join(terms, ",") != "term,synchronization" || span != 20 {
-			t.Fatalf("best window = (%d, %d, %v, %d), want (19, 2, [term synchronization], 20)", score, count, terms, span)
+			t.Fatalf("best window = (%v, %d, %v, %d), want (19, 2, [term synchronization], 20)", score, count, terms, span)
 		}
 	})
 
@@ -1323,7 +1472,7 @@ func TestCheckTextContainsRankedWordsChoosesBestWindow(t *testing.T) {
 			t.Fatal("expected a valid ranked match")
 		}
 		if score != 23 || count != 3 || strings.Join(terms, ",") != "term,synchronization,beta" || span != 25 {
-			t.Fatalf("best window = (%d, %d, %v, %d), want (23, 3, [term synchronization beta], 25)", score, count, terms, span)
+			t.Fatalf("best window = (%v, %d, %v, %d), want (23, 3, [term synchronization beta], 25)", score, count, terms, span)
 		}
 	})
 
@@ -1334,7 +1483,7 @@ func TestCheckTextContainsRankedWordsChoosesBestWindow(t *testing.T) {
 			t.Fatal("expected a valid ranked match")
 		}
 		if score != 9 || count != 2 || strings.Join(terms, ",") != "alpha,beta" || span != 10 {
-			t.Fatalf("best window = (%d, %d, %v, %d), want (9, 2, [alpha beta], 10)", score, count, terms, span)
+			t.Fatalf("best window = (%v, %d, %v, %d), want (9, 2, [alpha beta], 10)", score, count, terms, span)
 		}
 	})
 }

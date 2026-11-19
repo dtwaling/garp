@@ -5,14 +5,165 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestRoundAndFormatScore(t *testing.T) {
+	for _, tc := range []struct {
+		in, want float64
+		text     string
+	}{
+		{math.NaN(), 0, "0"}, {math.Inf(1), 0, "0"}, {math.Inf(-1), 0, "0"},
+		{math.Copysign(0, -1), 0, "0"}, {-2, 0, "0"}, {2, 2, "2"},
+		{0.00004, 0, "0"}, {0.00005, 0.0001, "0.0001"}, {4.03276, 4.0328, "4.0328"},
+	} {
+		if got := RoundScore(tc.in); got != tc.want || math.Signbit(got) || FormatScore(tc.in) != tc.text {
+			t.Errorf("round/format(%v) = %v/%q, want %v/%q", tc.in, got, FormatScore(tc.in), tc.want, tc.text)
+		}
+	}
+}
+
+func TestCorpusStatsRarityThresholds(t *testing.T) {
+	for _, tc := range []struct{ n, threshold int }{{0, 0}, {1, 0}, {2, 1}, {39, 1}, {40, 2}, {139, 6}, {409, 20}} {
+		df := []int{0, 1, tc.threshold, tc.threshold + 1}
+		stats := buildCorpusStats(len(df), tc.n, float64(tc.n*3), df)
+		for s, count := range df {
+			want := tc.n >= 2 && count >= 1 && count <= tc.threshold
+			if stats.RareSlot[s] != want {
+				t.Errorf("N=%d df=%d rare=%v, want %v", tc.n, count, stats.RareSlot[s], want)
+			}
+		}
+		wantAvg := 3.0
+		if tc.n == 0 {
+			wantAvg = 1
+		}
+		if stats.AvgDL != wantAvg {
+			t.Errorf("avgdl=%v, want %v", stats.AvgDL, wantAvg)
+		}
+	}
+	if buildCorpusStats(1, 2, 0, []int{0}).AvgDL != 1 {
+		t.Fatal("empty readable documents need avgdl=1")
+	}
+}
+
+func TestScoreAnalyzedDocumentAndSubsetCatalog(t *testing.T) {
+	query := compileQuery([]string{"alpha", "beta", "gamma"}, PartialModeOff)
+	gap := strings.Repeat(" x", 30) + " "
+	for _, counts := range [][2]int{{2, 2}, {64, 64}, {65, 65}, {65, 2}} {
+		text := strings.Repeat("alpha beta"+gap, counts[0]) + strings.Repeat("alpha gamma"+gap, counts[1])
+		cat := analyzeRankedCatalog(text, query, 12, false, false)
+		if cat.MaxTermCount != 2 || len(cat.Subsets) != 2 {
+			t.Fatalf("catalog = %+v", cat)
+		}
+		for i, sub := range cat.Subsets {
+			if counts[i] <= 64 && (len(sub.intervals) != counts[i] || sub.intervalOverflow) {
+				t.Fatal("inline intervals lost")
+			}
+			if counts[i] > 64 && (!sub.intervalOverflow || sub.intervals != nil) {
+				t.Fatal("overflow retained intervals")
+			}
+		}
+		for _, weights := range [][]float64{buildCorpusStats(3, 100, 100, []int{20, 10, 1}).IDF, buildCorpusStats(3, 100, 100, []int{20, 1, 1}).IDF, {1, 2, 2 + 5e-13}} {
+			reloads := 0
+			got, ok := resolveRankedCatalog(cat, query, 12, false, false, nil, weights, func() (string, bool) { reloads++; return text, true })
+			wantReloads, wantChunks := 0, counts[1]
+			if math.Abs(weights[1]-weights[2]) <= 1e-12 {
+				wantChunks += counts[0]
+				if counts[0] > 64 || counts[1] > 64 {
+					wantReloads = 1
+				}
+			}
+			if !ok || reloads != wantReloads || got.TopQualityChunks != wantChunks {
+				t.Fatalf("resolved=%+v ok=%v reloads=%d want=%d chunks=%d", got, ok, reloads, wantReloads, wantChunks)
+			}
+			if wantReloads > 0 {
+				if _, ok := resolveRankedCatalog(cat, query, 12, false, false, nil, weights, func() (string, bool) { return "", false }); ok {
+					t.Fatal("failed reload accepted")
+				}
+			}
+		}
+	}
+	single := analyzeRankedCatalog("alpha beta"+gap+"alpha beta", query, 12, false, false)
+	if len(single.Subsets) != 1 || single.Subsets[0].intervals != nil || single.Subsets[0].topQualityChunks != 2 {
+		t.Fatalf("single subset retained intervals: %+v", single)
+	}
+	maximal := analyzeRankedCatalog("alpha beta"+gap+"alpha beta gamma", query, 20, false, true)
+	if maximal.MaxTermCount != 3 || len(maximal.Subsets) != 1 {
+		t.Fatalf("nonmaximal subsets retained: %+v", maximal)
+	}
+	fallbackQuery := compileQuery([]string{"conditions", "TEITAC"}, PartialModeOff)
+	fallback := analyzeRankedCatalog("conditions"+gap+"TEITAC", fallbackQuery, 12, false, true)
+	got, ok := resolveRankedCatalog(fallback, fallbackQuery, 12, false, true, []bool{false, true}, []float64{5, 1}, nil)
+	if !ok || !reflect.DeepEqual(got.MatchedTerms, []string{"teitac"}) {
+		t.Fatalf("rare gate: %+v %v", got, ok)
+	}
+	if _, ok := resolveRankedCatalog(fallback, fallbackQuery, 12, false, true, []bool{false, false}, []float64{5, 1}, nil); ok {
+		t.Fatal("common-only fallback admitted")
+	}
+	// Independent arithmetic: tf=2, dl=4, avgdl=8, N=10, df=2; path contributes for all slots.
+	stats := buildCorpusStats(3, 10, 80, []int{2, 5, 1})
+	an := rankedTextAnalysis{TermCount: 1, SpanLength: 100, WordCount: 4, SlotTF: []int{2, 0, 0}, MatchedSlots: []bool{true, false, false}}
+	idf := math.Log(1 + (10-2+0.5)/(2+0.5))
+	if math.Abs(stats.IDF[0]-idf) > 1e-12 {
+		t.Fatal("Robertson-Walker IDF mismatch")
+	}
+	lex := idf*(2*2.2)/(2+1.2*(0.25+0.75*4/8.0)) + 0.60*stats.IDF[2]
+	want := math.Round(lex/3*1e4) / 1e4
+	if score := scoreAnalyzedDocument(an, query, []bool{false, false, true}, stats, 20); score != want {
+		t.Fatalf("single score=%v want %v", score, want)
+	}
+	an.TermCount = 2
+	an.MatchedSlots[1] = true
+	an.SlotTF[1] = 1
+	lex += stats.IDF[1] * 2.2 / (1 + 1.2*(0.25+0.75*4/8.0))
+	want = math.Round(lex*(1+0.35/(1+100/20.0))*2/3*1e4) / 1e4
+	if score := scoreAnalyzedDocument(an, query, []bool{false, false, true}, stats, 20); score != want {
+		t.Fatalf("multi score=%v want %v", score, want)
+	}
+	if canonicalFloatSum([]float64{1e16, 1, 1}, []string{"c", "a", "b"}) != canonicalFloatSum([]float64{1, 1e16, 1}, []string{"b", "c", "a"}) {
+		t.Fatal("float sum depends on input order")
+	}
+	oneQuery := compileQuery([]string{"alpha"}, PartialModeOff)
+	one, _ := analyzeRankedText("alpha alpha", oneQuery, 20, false)
+	oneStats := buildCorpusStats(1, 2, 4, []int{1})
+	for _, distance := range []int{0, 1, 20, 5000} {
+		if score := scoreAnalyzedDocument(one, oneQuery, nil, oneStats, distance); score != RoundScore(math.Log(2)*4.4/3.2) {
+			t.Fatalf("single-query proximity applied: %v", score)
+		}
+	}
+	var baseline float64
+	for _, terms := range [][]string{{"alpha", "beta", "gamma"}, {"alpha", "gamma", "beta"}, {"beta", "alpha", "gamma"}, {"beta", "gamma", "alpha"}, {"gamma", "alpha", "beta"}, {"gamma", "beta", "alpha"}} {
+		q := compileQuery(terms, PartialModeOff)
+		df := make([]int, 3)
+		for s := range df {
+			df[s] = map[string]int{"alpha": 2, "beta": 5, "gamma": 1}[q.slotLabel(s)]
+		}
+		stats := buildCorpusStats(3, 10, 80, df)
+		a, ok := analyzeRankedTextWithOptions("alpha beta alpha", q, 20, false, false, nil, stats.IDF)
+		if !ok {
+			t.Fatal("weighted pair rejected")
+		}
+		path, count := pathMatchStats("/repo/gamma.txt", "/repo", q)
+		if count != 1 {
+			t.Fatalf("path count=%d", count)
+		}
+		score := scoreAnalyzedDocument(a, q, path, stats, 20)
+		if baseline == 0 {
+			baseline = score
+		}
+		if score != baseline {
+			t.Fatalf("permutation %v score=%v want=%v", terms, score, baseline)
+		}
+	}
+}
 
 type rankingStaticExtractor struct {
 	text string
@@ -531,7 +682,7 @@ func TestTopQualityChunksFiltersScoreCollisionByTermCount(t *testing.T) {
 		t.Fatal("analysis rejected qualifying text")
 	}
 	if analysis.Score != 10 || analysis.TermCount != 3 {
-		t.Fatalf("best pair = (%d, %d), want (10, 3)", analysis.Score, analysis.TermCount)
+		t.Fatalf("best pair = (%v, %d), want (10, 3)", analysis.Score, analysis.TermCount)
 	}
 	if analysis.TopQualityChunks != 2 {
 		t.Fatalf("TopQualityChunks = %d, want 2", analysis.TopQualityChunks)
@@ -597,11 +748,11 @@ func TestAnalyzeRankedTextQualification(t *testing.T) {
 		t.Fatal("relaxed analysis rejected primary plus one secondary")
 	}
 	if got.Score != 9 || got.TermCount != 2 || strings.Join(got.MatchedTerms, ",") != "alpha,beta" {
-		t.Fatalf("relaxed analysis = (%d, %d, %v), want (9, 2, [alpha beta])", got.Score, got.TermCount, got.MatchedTerms)
+		t.Fatalf("relaxed analysis = (%v, %d, %v), want (9, 2, [alpha beta])", got.Score, got.TermCount, got.MatchedTerms)
 	}
 
-	if _, ok := analyzeRankedText("beta gamma", query, 20, false); ok {
-		t.Fatal("relaxed analysis accepted secondaries without primary term zero")
+	if got, ok := analyzeRankedText("beta gamma", query, 20, false); !ok || got.Score != 9 || got.TermCount != 2 || strings.Join(got.MatchedTerms, ",") != "beta,gamma" {
+		t.Fatalf("missing-first relaxed analysis = %+v, ok=%v", got, ok)
 	}
 }
 
@@ -648,7 +799,7 @@ func TestAnalyzeRankedTextRepresentativePrecedence(t *testing.T) {
 			t.Fatal("analysis rejected qualifying text")
 		}
 		if got.Score != 12 || strings.Join(got.MatchedTerms, ",") != "root,longword" {
-			t.Fatalf("representative = score %d terms %v, want score 12 [root longword]", got.Score, got.MatchedTerms)
+			t.Fatalf("representative = score %v terms %v, want score 12 [root longword]", got.Score, got.MatchedTerms)
 		}
 	})
 
@@ -664,7 +815,7 @@ func TestAnalyzeRankedTextRepresentativePrecedence(t *testing.T) {
 			t.Fatal("analysis rejected qualifying text")
 		}
 		if got.Score != 10 || got.TermCount != 3 || strings.Join(got.MatchedTerms, ",") != "aa,bbb,ccccc" {
-			t.Fatalf("representative = (%d, %d, %v), want (10, 3, [aa bbb ccccc])", got.Score, got.TermCount, got.MatchedTerms)
+			t.Fatalf("representative = (%v, %d, %v), want (10, 3, [aa bbb ccccc])", got.Score, got.TermCount, got.MatchedTerms)
 		}
 	})
 

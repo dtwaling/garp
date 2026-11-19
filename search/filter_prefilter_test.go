@@ -191,9 +191,9 @@ func TestBinaryPrefilterStrictnessAndRelaxedStrategyA(t *testing.T) {
 			found:   true,
 		},
 		{
-			name:    "relaxed rejects secondary without primary",
+			name:    "relaxed accepts any two distinct slots",
 			content: "ms-option-api synchronization",
-			found:   false,
+			found:   true,
 		},
 		{
 			name:    "relaxed rejects primary when every secondary is absent",
@@ -747,9 +747,9 @@ func TestStreamContainsRankedWordsDecided(t *testing.T) {
 			found: false,
 		},
 		{
-			name:  "relaxed mode rejects missing primary",
+			name:  "relaxed mode accepts missing first slot",
 			text:  "beta gamma",
-			found: false,
+			found: true,
 		},
 		{
 			name:   "strict mode rejects missing secondary",
@@ -788,7 +788,7 @@ func TestCheckFileContainsRankedWords(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !ok || score != 10 || count != 2 || strings.Join(terms, ",") != "alpha,gamma" || span != 11 {
-		t.Fatalf("ranked file match = (%d, %d, %v, %d, %v), want (10, 2, [alpha gamma], 11, true)", score, count, terms, span, ok)
+		t.Fatalf("ranked file match = (%v, %d, %v, %d, %v), want (10, 2, [alpha gamma], 11, true)", score, count, terms, span, ok)
 	}
 }
 
@@ -1103,7 +1103,7 @@ func TestPrefiltersStayDecisiveOnOrdinaryMisses(t *testing.T) {
 		if ext == "doc" {
 			continue
 		}
-		for _, terms := range [][]string{{"zzqqx"}, {"review zzqqx"}, {"review", "zzqqx"}, {"pdf3"}, {"repor"}, {"zz"}, {"z?"}} {
+		for _, terms := range [][]string{{"zzqqx"}, {"review zzqqx"}, {"review", "zzqqx"}, {"zzqqx", "review"}, {"pdf3"}, {"repor"}, {"zz"}, {"z?"}} {
 			t.Run(ext+"/"+strings.Join(terms, "+"), func(t *testing.T) {
 				if len(terms) == 1 && strings.Contains(terms[0], " ") && (ext == "eml" || ext == "mbox") {
 					return
@@ -1116,13 +1116,82 @@ func TestPrefiltersStayDecisiveOnOrdinaryMisses(t *testing.T) {
 				if found || !decided {
 					t.Errorf("Stage 2=(%v,%v), want (false,true)", found, decided)
 				}
-				// Discovery only considers the primary term, not absent secondary terms.
+				// Discovery accepts any slot, independently of query order.
 				files, err := findFilesWithFirstWordProgressQueryWithOptions(q, []string{ext}, 1, nil, filepath.Dir(path), nil, PartialModeOff, WalkOptions{})
 				if err != nil || slices.Contains(files, path) != (len(terms) > 1) {
 					t.Errorf("Stage 1: files=%v err=%v", files, err)
 				}
 			})
 		}
+	}
+}
+
+func TestPrefilterSlotThresholdGroupsPhrasePieces(t *testing.T) {
+	for _, tc := range []struct {
+		text                        string
+		minimum                     int
+		strict, want, wantDiscovery bool
+	}{
+		{"alpha", 1, false, false, false},
+		{"alpha beta", 1, false, true, true},
+		{"alpha beta", 2, false, false, false},
+		{"alpha beta gamma", 0, false, true, true},
+		{"alpha beta gamma", 1, true, false, true},
+		{"alpha beta gamma", 3, false, false, false},
+		{"missing alpha beta gamma", 3, false, true, true},
+	} {
+		q := compileQuery([]string{"missing", "alpha beta", "gamma"}, PartialModeOff)
+		q.minSlots = tc.minimum
+		admission, ok := prefilterAdmissionQuery(q)
+		if !ok || admission.owners == nil {
+			t.Fatal("fixture did not group phrase pieces")
+		}
+		for _, query := range []compiledQuery{admission, prefilterRawGate(admission)} {
+			state := newStreamQueryMatches(query)
+			state.observe(tc.text, query, 0)
+			if got := state.satisfied(tc.strict); got != tc.want {
+				t.Errorf("text=%q min=%d strict=%v: got %v, want %v", tc.text, tc.minimum, tc.strict, got, tc.want)
+			}
+			scan := discoveryScanner{chunk: 3}
+			if got := scan.admits(strings.NewReader(tc.text), query); got != tc.wantDiscovery {
+				t.Errorf("discovery text=%q min=%d: got %v, want %v", tc.text, tc.minimum, got, tc.wantDiscovery)
+			}
+		}
+	}
+}
+
+func TestStage1ProgressDiscoveryOrderInvariance(t *testing.T) {
+	for _, ext := range []string{"txt", "html", "docx", "eml", "rtf"} {
+		t.Run(ext, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "candidate."+ext)
+			text := "alpha beta"
+			switch ext {
+			case "html":
+				text = "<p>alpha</p><p>beta</p>"
+			case "docx":
+				writeXMLContainer(t, path, "word/document.xml", "<w:document><w:p>alpha beta</w:p></w:document>")
+			case "eml":
+				text = "Subject: alpha\r\n\r\nbeta"
+			case "rtf":
+				text = `{\rtf1 alpha beta}`
+			}
+			if ext != "docx" {
+				if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, terms := range [][]string{
+				{"missing", "alpha", "beta"}, {"missing", "beta", "alpha"},
+				{"alpha", "missing", "beta"}, {"alpha", "beta", "missing"},
+				{"beta", "missing", "alpha"}, {"beta", "alpha", "missing"},
+			} {
+				files, err := FindFilesWithFirstWordProgress(terms, []string{"-g", "*." + ext}, 1, nil, root, nil)
+				if err != nil || !slices.Equal(files, []string{path}) {
+					t.Errorf("%v: files=%v err=%v", terms, files, err)
+				}
+			}
+		})
 	}
 }
 

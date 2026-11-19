@@ -177,6 +177,7 @@
         "app/terminal_sanitize_test.go",
         "app/tui.go",
         "app/tui_test.go",
+        "docs/skills/garp-search/SKILL.md",
         "search/filter_test.go",
         "search/ignore.go",
         "search/path_other.go",
@@ -246,8 +247,10 @@
         "search/cleaner_test.go",
         "search/engine.go",
         "search/filter.go",
+        "search/filter_test.go",
         "search/lines.go",
         "search/lines_test.go",
+        "search/ranking_test.go",
         "search/term_matcher_test.go"
       ]
     },
@@ -312,6 +315,7 @@
         "app/tui.go",
         "app/tui_test.go",
         "docs/plans/2026-05-09-startdir-pathscope.md",
+        "docs/skills/garp-search/SKILL.md",
         "search/engine_test.go",
         "search/ranking.go",
         "search/root_set.go"
@@ -903,6 +907,7 @@
         "crates/core/flags/defs.rs",
         "crates/core/flags/hiargs.rs",
         "crates/printer/src/json.rs",
+        "crates/regex/src/matcher.rs",
         "crates/searcher/src/line_buffer.rs",
         "crates/searcher/src/searcher/mod.rs",
         "crates/searcher/src/testutil.rs",
@@ -1105,6 +1110,9 @@
       "judged_nonrelevant": [
         "crates/core/flags/hiargs.rs",
         "crates/core/main.rs",
+        "crates/core/search.rs",
+        "crates/globset/README.md",
+        "crates/globset/src/lib.rs",
         "crates/ignore/src/dir.rs",
         "crates/ignore/src/overrides.rs",
         "crates/ignore/src/types.rs",
@@ -1145,6 +1153,7 @@
         "crates/globset/src/fnv.rs",
         "crates/ignore/src/lib.rs",
         "crates/printer/src/hyperlink_aliases.rs",
+        "crates/printer/src/json.rs",
         "crates/searcher/src/searcher/mod.rs",
         "tests/regression.rs"
       ]

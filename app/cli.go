@@ -705,17 +705,17 @@ func showVersion() {
 // source lines. score/term_count are omitted when the chunk did not frame
 // a ranked window (fallback paths).
 type jsonExcerpt struct {
-	Text      string `json:"text"`
-	StartLine int    `json:"start_line,omitempty"`
-	Score     int    `json:"score,omitempty"`
-	TermCount int    `json:"term_count,omitempty"`
+	Text      string   `json:"text"`
+	StartLine int      `json:"start_line,omitempty"`
+	Score     *float64 `json:"score,omitempty"`
+	TermCount int      `json:"term_count,omitempty"`
 }
 
 // jsonResult is a single file match in --json output.
 type jsonResult struct {
 	File         string        `json:"file"`
 	SizeB        int64         `json:"size_bytes"`
-	Score        int           `json:"score"`
+	Score        float64       `json:"score"`
 	TermCount    int           `json:"term_count"`
 	MatchedTerms []string      `json:"matched_terms"`
 	SpanLength   int           `json:"span_length,omitempty"`
@@ -733,7 +733,7 @@ func excerptStartLineAt(starts []int, i int) int {
 
 // excerptChunkScoreAt returns the ranked score for excerpt index i from the
 // parallel chunk-quality slice on a SearchResult (0 when absent).
-func excerptChunkScoreAt(scores []int, i int) int {
+func excerptChunkScoreAt(scores []float64, i int) float64 {
 	if i >= 0 && i < len(scores) {
 		return scores[i]
 	}
@@ -959,8 +959,11 @@ func buildJSONOutput(args *Arguments, outcome search.ExecutionResult) jsonOutput
 			excerpts[i] = jsonExcerpt{
 				Text:      ex,
 				StartLine: excerptStartLineAt(r.StartLines, i),
-				Score:     excerptChunkScoreAt(r.ChunkScores, i),
-				TermCount: excerptChunkTermCountAt(r.ChunkTermCounts, i),
+			}
+			if terms := excerptChunkTermCountAt(r.ChunkTermCounts, i); terms > 0 {
+				s := search.RoundScore(excerptChunkScoreAt(r.ChunkScores, i))
+				excerpts[i].Score = &s
+				excerpts[i].TermCount = terms
 			}
 		}
 		out.Results = append(out.Results, jsonResult{
@@ -1033,7 +1036,7 @@ func writePlainOutput(w io.Writer, args *Arguments, outcome search.ExecutionResu
 	// Excerpt headers carry per-chunk ranked quality when the chunk framed a
 	// ranked window; the old "[L<start>]" form is kept for quality-less chunks.
 	for i, r := range outcome.Results {
-		fmt.Fprintf(w, "MATCH %d/%d [Score: %d (%d/%d terms)]\n", i+1, outcome.Returned, r.Score, r.TermCount, len(args.SearchWords))
+		fmt.Fprintf(w, "MATCH %d/%d [Score: %s (%d/%d terms)]\n", i+1, outcome.Returned, search.FormatScore(r.Score), r.TermCount, len(args.SearchWords))
 		fmt.Fprintf(w, "FILE: %s\n", escapeOutputLine(r.FilePath))
 		fmt.Fprintf(w, "SIZE: %d\n", r.FileSize)
 		for j, ex := range r.RawExcerpts {
@@ -1041,10 +1044,10 @@ func writePlainOutput(w io.Writer, args *Arguments, outcome search.ExecutionResu
 			score := excerptChunkScoreAt(r.ChunkScores, j)
 			terms := excerptChunkTermCountAt(r.ChunkTermCounts, j)
 			switch {
-			case score > 0 && terms > 0 && formatLine(excerptStartLineAt(r.StartLines, j)) != "":
-				fmt.Fprintf(w, "EXCERPT %d [%s, Score: %d (%d terms)]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), score, terms, ex)
-			case score > 0 && terms > 0:
-				fmt.Fprintf(w, "EXCERPT %d [Score: %d (%d terms)]: %s\n", j+1, score, terms, ex)
+			case terms > 0 && formatLine(excerptStartLineAt(r.StartLines, j)) != "":
+				fmt.Fprintf(w, "EXCERPT %d [%s, Score: %s (%d terms)]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), search.FormatScore(score), terms, ex)
+			case terms > 0:
+				fmt.Fprintf(w, "EXCERPT %d [Score: %s (%d terms)]: %s\n", j+1, search.FormatScore(score), terms, ex)
 			case formatLine(excerptStartLineAt(r.StartLines, j)) != "":
 				fmt.Fprintf(w, "EXCERPT %d [%s]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), ex)
 			default:

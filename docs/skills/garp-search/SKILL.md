@@ -18,8 +18,8 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 
 | Use garp | Use grep/ripgrep |
 |---|---|
-| 2+ terms that must co-occur within a window (`--distance`) | exact symbol / regex lookup |
-| 3+ terms: ranked best-cluster match by default; `--strict` forces AND on all terms | list every literal hit of one token |
+| Order-invariant 2+ term proximity (`--distance`); scarce rare-anchor fallback | exact symbol / regex lookup |
+| 3+ terms admit any 2+ slots; `--strict` requires all terms and disables fallback | list every literal hit of one token |
 | prefix/partial identifier matching (`deploy*`, `--partial`) | full regex syntax needed |
 | PDF / DOC / DOCX / ODT / RTF / eml / mbox / msg content | quick one-shot in a terminal |
 | monster files: ranked excerpt + `start_line` -> one targeted read, no paging | |
@@ -38,7 +38,7 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 - `--max-results N`: maximum ranked matching files returned (default `50` in `--json` and `--plain`; `-l`/`--pathonly` defaults to `0`; `0` = unlimited).
 - `--partial[=prefix|contains]`: boundary-aware prefix (default) or raw substring. Per-term inline wildcards `*` and `?` work at any position: leading, mid-token, or trailing (`deploy*`, `ms-*-api`, `*OptionApi*`, `mark?systems`; quote terms in shells). `--smart-forms`: match word forms (plurals, -ing, -ed, -tion).
 - `-i` and `-s`: select case-insensitive or case-sensitive matching; the last case flag wins.
-- `--strict`: require every term in the window (3+ term searches are ranked by default).
+- `--strict`: full conjunction in the window; disable both partial multi-term admission and single-slot fallback. Otherwise two-term primary matches require both slots and 3+ terms require any 2+, with no first-term privilege. If fewer than five primary files match, append at most `min(3, 5 - len(primary))` single-slot files whose matched slot has `1 <= df <= max(1, floor(0.05*N))` across `N >= 2` readable files. Common-word-only matches are intentionally withheld; no lexical overlap means no match. A pipe in a query term is literal, not OR syntax.
 - `-l`: skip excerpt extraction and emit one distinct matching file path per line in ranked order. Zero matches produce empty stdout.
 - `--not <tokens...>`: exclusions after the flag; `.ext` excludes a file type, bare words exclude whole words.
 
@@ -65,8 +65,8 @@ slash is root-relative.
 One-shot find -> pinpoint -> targeted read: each result carries the file, a ranked excerpt, and the line of the earliest matched term.
 
 - Top-level `matches` counts all matching files; `returned` counts files in `results`. `truncated: true` means only the top `N` ranked files were returned under `--max-results N`; use `--max-results 0` for all matches. `timed_out` counts binary files skipped because extraction exceeded `--file-timeout-binary`; they are absent from `matches`, and a one-line `Warning:` goes to stderr.
-- Sort order: score, matched-term count, path-term count, boundary quality, tighter span, top-quality chunk count, ranking-root-relative path, supplied root order, then canonical path. `matched_terms` lists the terms that actually hit.
-- Each excerpt: `text` (context-padded, newlines collapsed) plus 1-based `start_line` = line of the earliest matched term in that chunk, and per-chunk `score`/`term_count`. Present for text/code; omitted for extracted formats (PDF, DOCX, email).
+- Sort order: primary matches before single-slot fallbacks, then score, matched-term count, path-term count, boundary quality, tighter span, top-quality chunk count, ranking-root-relative path, supplied root order, then canonical path. File `score` is walk-derived BM25F times proximity and slot coverage, rounded to `1e-4` (also in plain output and the TUI), not an integer term-length sum. Inspect `term_count` and `matched_terms` to distinguish full, partial, and single-slot match tiers.
+- Each excerpt: `text` (context-padded, newlines collapsed), per-chunk IDF-sum `score` and `term_count`, plus 1-based `start_line` = line of the earliest matched term. Only `start_line` is omitted for extracted formats (PDF, DOCX, email) without stable source lines.
 - When matched terms are further apart than the excerpt display budget (`span > budget`), multipart excerpts join per-term context windows with `" ... "` (space, three ASCII dots, space). Windows are in source order and overlapping windows are merged; the joiner marks omitted text, not a contiguous source passage.
 - Chunks within a file are a ranked subset, best-first: with `-m N` where `N > 1`, every quality tier can seed a chunk, so a strong cluster no longer hides the file's other clusters. Every chunk is >=90% new content (bounded overlap).
 - Act on results by reading the file at `start_line` (with margin) instead of re-searching or paging through reads.
@@ -74,8 +74,8 @@ One-shot find -> pinpoint -> targeted read: each result carries the file, a rank
 - `query.only_type` remains the singular compatibility field. `query.only_types` appears only for two or more distinct types. `query.case_sensitive` appears only when enabled.
 
 ```jsonc
-"results": [ { "file": "...", "score": 14, "term_count": 2, "matched_terms": ["a", "b"],
-  "excerpts": [ { "text": "...", "start_line": 42, "score": 14, "term_count": 2 } ] } ]
+"results": [ { "file": "...", "score": 14.1509, "term_count": 2, "matched_terms": ["a", "b"],
+  "excerpts": [ { "text": "...", "start_line": 42, "score": 4.0328, "term_count": 2 } ] } ]
 ```
 
 Example: locate deployment base-image notes -> `garp AMI parent base --startdir <repo> -t md --distance 200 --json`. Note: extracted PDF text can normalize tokens (e.g. `RHC03-2516` -> `RHC 03-2516`); if an expected hit misses, retry with looser or split terms.

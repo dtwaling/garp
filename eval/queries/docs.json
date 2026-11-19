@@ -129,6 +129,7 @@
         "govdocs/133284.pdf",
         "govdocs/139345.pdf",
         "govdocs/151049.txt",
+        "govdocs/286891.txt",
         "govdocs/302965.txt",
         "govdocs/314521.txt",
         "govdocs/704296.doc",
@@ -375,6 +376,7 @@
         "govdocs/001857.rtf",
         "govdocs/001858.rtf",
         "govdocs/004320.rtf",
+        "govdocs/005165.rtf",
         "govdocs/009320.html",
         "govdocs/216688.docx",
         "govdocs/216689.docx",
@@ -892,6 +894,7 @@
       ],
       "judged_nonrelevant": [
         "govdocs/012819.html",
+        "govdocs/057730.html",
         "govdocs/217982.txt",
         "govdocs/314521.txt",
         "govdocs/436110.pdf",
@@ -1010,6 +1013,7 @@
       "judged_nonrelevant": [
         "govdocs/012819.html",
         "govdocs/016006.html",
+        "govdocs/017091.docx",
         "govdocs/052528.pdf",
         "govdocs/111807.csv",
         "govdocs/123779.pdf",

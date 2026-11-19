@@ -574,16 +574,16 @@ func (s *cleanerSpacingReader) Read(p []byte) (int, error) {
 
 // excerptSpan is one emitted chunk: its final text plus the [left, right)
 // half-open span it occupies in the cleaned string, plus the ranked-match
-// quality (score = sum of matched distinct-term lengths, termCount = their
-// count) of the window that framed it. Quality fields are zero for
-// fallback-path excerpts that do not frame a ranked window.
+// quality (rounded IDF sum for corpus-weighted callers, byte-length sum for
+// stateless nil-weight helpers, and distinct-slot termCount) of its seed window.
+// Quality fields are zero for fallback-path excerpts without a ranked window.
 type excerptSpan struct {
 	rawStart      int  // earliest raw match in the seed, independent of displayed matches
 	rawStartValid bool // zero is a valid offset; false denotes legacy/synthetic spans
 	text          string
 	left          int
 	right         int
-	score         int
+	score         float64
 	termCount     int
 	matches       []excerptMatch
 	sourceText    string
@@ -904,16 +904,16 @@ func expandToBoundaries(cleaned string, left, right, maxContext int) (int, int) 
 // ExtractMeaningfulExcerpts returns targeted, per-match snippets around each term.
 // We extract tight, local windows around each match with email-aware boundaries,
 // paragraph fallbacks, and punctuation-aware sentence ends. We avoid global scans.
-// targetTerms is the distinct-term coverage target, not the weighted term-length
-// Score. Values <= 0 or above the normalized searchTerms count use that full count.
+// targetTerms is the distinct-term coverage target, independent of score weights.
+// Values <= 0 or above the normalized searchTerms count use that full count.
 func ExtractMeaningfulExcerpts(content string, searchTerms []string, maxExcerpts int, targetTerms int) []string {
 	return ExtractMeaningfulExcerptsPartial(content, searchTerms, maxExcerpts, targetTerms, PartialModeOff)
 }
 
 // ExtractMeaningfulExcerptsPartial returns targeted excerpts using the requested
 // term matching mode.
-// targetTerms is the distinct-term coverage target, not the weighted term-length
-// Score. Values <= 0 or above the normalized searchTerms count use that full count.
+// targetTerms is the distinct-term coverage target, independent of score weights.
+// Values <= 0 or above the normalized searchTerms count use that full count.
 func ExtractMeaningfulExcerptsPartial(content string, searchTerms []string, maxExcerpts int, targetTerms int, partial PartialMode) []string {
 	query := compileQuery(searchTerms, partial)
 	return excerptSpanTexts(extractExcerptSpansQuery(content, query, maxExcerpts, targetTerms, false))
@@ -921,15 +921,15 @@ func ExtractMeaningfulExcerptsPartial(content string, searchTerms []string, maxE
 
 // ExtractMeaningfulExcerptsCode is the code-aware variant of ExtractMeaningfulExcerpts. It uses
 // minimal, code-safe cleaning so source tokens (angle brackets, operators, PHP/markup) survive.
-// targetTerms is the distinct-term coverage target, not the weighted term-length
-// Score. Values <= 0 or above the normalized searchTerms count use that full count.
+// targetTerms is the distinct-term coverage target, independent of score weights.
+// Values <= 0 or above the normalized searchTerms count use that full count.
 func ExtractMeaningfulExcerptsCode(content string, searchTerms []string, maxExcerpts int, targetTerms int) []string {
 	return ExtractMeaningfulExcerptsCodePartial(content, searchTerms, maxExcerpts, targetTerms, PartialModeOff)
 }
 
 // ExtractMeaningfulExcerptsCodePartial is the code-aware partial-match variant.
-// targetTerms is the distinct-term coverage target, not the weighted term-length
-// Score. Values <= 0 or above the normalized searchTerms count use that full count.
+// targetTerms is the distinct-term coverage target, independent of score weights.
+// Values <= 0 or above the normalized searchTerms count use that full count.
 func ExtractMeaningfulExcerptsCodePartial(content string, searchTerms []string, maxExcerpts int, targetTerms int, partial PartialMode) []string {
 	query := compileQuery(searchTerms, partial)
 	return excerptSpanTexts(extractExcerptSpansQuery(content, query, maxExcerpts, targetTerms, true))
@@ -941,16 +941,16 @@ func extractExcerptSpans(content string, searchTerms []string, maxExcerpts int, 
 }
 
 // extractExcerptSpansPartial extracts spans using the requested matching mode.
-// targetTerms is the distinct-term coverage target, not the weighted term-length
-// Score. Values <= 0 or above the normalized searchTerms count use that full count.
+// targetTerms is the distinct-term coverage target, independent of score weights.
+// Values <= 0 or above the normalized searchTerms count use that full count.
 func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetTerms int, isCode bool, partial PartialMode) []excerptSpan {
 	query := compileQuery(searchTerms, partial)
 	return extractExcerptSpansQuery(content, query, maxExcerpts, targetTerms, isCode)
 }
 
 // extractExcerptSpansQuery extracts spans using a compiled query.
-// targetTerms is the distinct-term coverage target, not the weighted term-length
-// Score. Values <= 0 or above len(query.matchers) use that full count.
+// targetTerms is the distinct-term coverage target, independent of score weights.
+// Values <= 0 or above len(query.matchers) use that full count.
 func extractExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetTerms int, isCode bool) []excerptSpan {
 	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetTerms, 0, isCode, unconstrainedDistance)
 }
@@ -959,8 +959,8 @@ func extractExcerptSpansQuery(content string, query compiledQuery, maxExcerpts i
 // coverage level from minTerms up to targetTerms can seed a
 // chunk, so a file's best cluster no longer suppresses its other, separate
 // lower-quality clusters (the per-file result subset).
-// targetTerms is the distinct-term coverage target, not the weighted term-length
-// Score. Values <= 0 or above the normalized searchTerms count use that full count.
+// targetTerms is the distinct-term coverage target, independent of score weights.
+// Values <= 0 or above the normalized searchTerms count use that full count.
 func extractRankedExcerptSpans(content string, searchTerms []string, maxExcerpts int, targetTerms int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
 	return extractRankedExcerptSpansPartial(content, searchTerms, maxExcerpts, targetTerms, minTerms, isCode, partial)
 }
@@ -968,16 +968,16 @@ func extractRankedExcerptSpans(content string, searchTerms []string, maxExcerpts
 // extractRankedExcerptSpansPartial is the shared implementation. minTerms > 0
 // enables multi-level candidate generation (per-file ranked subsets); the
 // legacy single-level behavior runs otherwise.
-// targetTerms is the distinct-term coverage target, not the weighted term-length
-// Score. Values <= 0 or above the normalized searchTerms count use that full count.
+// targetTerms is the distinct-term coverage target, independent of score weights.
+// Values <= 0 or above the normalized searchTerms count use that full count.
 func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxExcerpts int, targetTerms int, minTerms int, isCode bool, partial PartialMode) []excerptSpan {
 	query := compileQuery(searchTerms, partial)
 	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetTerms, minTerms, isCode, unconstrainedDistance)
 }
 
 // extractRankedExcerptSpansQuery reuses the execution's exact matcher ranges.
-// targetTerms is the distinct-term coverage target, not the weighted term-length
-// Score. Values <= 0 or above len(query.matchers) use that full count.
+// targetTerms is the distinct-term coverage target, independent of score weights.
+// Values <= 0 or above len(query.matchers) use that full count.
 // Nonnegative distance matches Stage 2's inclusive start-to-start bound, including
 // zero; NewSearchEngine defaults Distance to 5000. unconstrainedDistance disables
 // the bound for legacy helpers (all negative distances retain that behavior).
@@ -988,17 +988,23 @@ func extractRankedExcerptSpansQuery(content string, query compiledQuery, maxExce
 // extractRankedMappedExcerptSpansQuery consumes the same single cleaning result
 // used for Stage 3's display content. Offsets always refer to the original input.
 func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQuery, maxExcerpts, targetTerms, minTerms, distance int, literal bool) []excerptSpan {
+	return extractRankedMappedExcerptSpansWeighted(mapped, query, maxExcerpts, targetTerms, minTerms, distance, literal, nil, nil)
+}
+
+// Weighted excerpts prioritize coverage before IDF. A supplied rarity mask
+// gates single-slot seeds only. Both slices must align with query slots.
+func extractRankedMappedExcerptSpansWeighted(mapped mappedContent, query compiledQuery, maxExcerpts, targetTerms, minTerms, distance int, literal bool, slotWeights []float64, rareSlots []bool) []excerptSpan {
 	cleaned := mapped.text
 
 	if maxExcerpts <= 0 {
 		maxExcerpts = 3
 	}
-	if len(cleaned) == 0 || len(query.matchers) == 0 {
+	if len(cleaned) == 0 || query.slotCount() == 0 {
 		return []excerptSpan{}
 	}
 
-	if targetTerms <= 0 || targetTerms > len(query.matchers) {
-		targetTerms = len(query.matchers)
+	if targetTerms <= 0 || targetTerms > query.slotCount() {
+		targetTerms = query.slotCount()
 	}
 	// Coverage levels that can seed a chunk. Ranked mode (minTerms > 0) spans
 	// minTerms up to the Stage 2 term count so every allowed quality tier is
@@ -1036,17 +1042,25 @@ func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQu
 		idx   int
 	}
 	all := make([]tmatch, 0, 128)
-	rangesByMatcher := make([][]matchRange, len(query.matchers))
+	rangesByMatcher := make([][]matchRange, query.slotCount())
 	allExactMatches := make([]excerptMatch, 0, 128)
-	for i, matcher := range query.matchers {
-		rangesByMatcher[i] = matcher.findAll(cleaned)
+	for i := 0; i < query.slotCount(); i++ {
+		rangesByMatcher[i] = query.slotFindAll(i, cleaned)
 		for ordinal, loc := range rangesByMatcher[i] {
 			all = append(all, tmatch{start: loc.start, end: loc.end, idx: i})
 			allExactMatches = append(allExactMatches, excerptMatch{matchRange: loc, source: loc, term: i, occurrence: ordinal + 1})
 		}
 	}
 	if len(all) > 0 {
-		sort.Slice(all, func(i, j int) bool { return all[i].start < all[j].start })
+		sort.Slice(all, func(i, j int) bool {
+			if all[i].start != all[j].start {
+				return all[i].start < all[j].start
+			}
+			if all[i].end != all[j].end {
+				return all[i].end < all[j].end
+			}
+			return query.slotLabel(all[i].idx) < query.slotLabel(all[j].idx)
+		})
 
 		// Collect candidate spans at every coverage level in [levelMin, levelMax].
 		// Each candidate records the distinct-term set it covered so its own
@@ -1055,11 +1069,11 @@ func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQu
 			rawStart  int
 			left      int
 			right     int
-			score     int
+			score     float64
 			termCount int
 		}
 		candidates := make([]candidate, 0, maxExcerpts)
-		counts := make([]int, len(query.matchers))
+		counts := make([]int, query.slotCount())
 		for level := levelMax; level >= levelMin; level-- {
 			clear(counts)
 			covered := 0
@@ -1074,10 +1088,12 @@ func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQu
 					r++
 				}
 				// Match Stage 2's inclusive start-to-start proximity window.
-				if covered == level && (minTerms <= 0 || counts[0] > 0) &&
+				if covered == level && (level != 1 || len(rareSlots) == 0 || rareSlots[all[l].idx]) &&
 					(distance <= unconstrainedDistance || all[r-1].start-all[l].start <= distance) {
 					right := all[l].end
-					score, termCount := 0, 0
+					termCount := 0
+					var vals []float64
+					var keys []string
 					for i := l; i < r; i++ {
 						if all[i].end > right {
 							right = all[i].end
@@ -1085,11 +1101,16 @@ func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQu
 					}
 					for idx, count := range counts {
 						if count > 0 {
-							score += len(query.terms[idx])
+							weight := float64(len(query.slotLabel(idx)))
+							if len(slotWeights) > 0 {
+								weight = slotWeights[idx]
+							}
+							vals = append(vals, weight)
+							keys = append(keys, query.slotLabel(idx))
 							termCount++
 						}
 					}
-					candidates = append(candidates, candidate{rawStart: mapped.offsets[all[l].start], left: all[l].start, right: right, score: score, termCount: termCount})
+					candidates = append(candidates, candidate{rawStart: mapped.offsets[all[l].start], left: all[l].start, right: right, score: RoundScore(canonicalFloatSum(vals, keys)), termCount: termCount})
 				}
 				leftm := all[l]
 				counts[leftm.idx]--
@@ -1099,9 +1120,12 @@ func extractRankedMappedExcerptSpansQuery(mapped mappedContent, query compiledQu
 			}
 		}
 
-		// Rank candidates best-first: score desc, term count desc, tighter span
-		// first, then document position (stable, deterministic).
+		// Corpus-weighted candidates prioritize coverage; stateless helpers retain
+		// score-first byte-length weighting. Both end with span and position.
 		sort.SliceStable(candidates, func(i, j int) bool {
+			if len(slotWeights) > 0 && candidates[i].termCount != candidates[j].termCount {
+				return candidates[i].termCount > candidates[j].termCount
+			}
 			if candidates[i].score != candidates[j].score {
 				return candidates[i].score > candidates[j].score
 			}

@@ -15,8 +15,8 @@
 
 </div>
 
-An agent-friendly, high-performance, pure-Go document search tool. garp finds files containing ALL
-specified terms within a proximity window and supports common document formats --
+An agent-friendly, high-performance, pure-Go document search tool. garp ranks
+order-invariant term co-occurrence, with scarce rare-anchor fallback, across common formats --
 text, email, Office, and PDF -- with pure-Go extractors and a clean JSON output.
 
 No relation to the [John Irving novel](https://en.wikipedia.org/wiki/The_World_According_to_Garp).
@@ -44,9 +44,9 @@ garp deploy service --partial             # boundary-aware prefix: deployment, d
 garp deploy* service                      # inline glob: prefix on deploy only; service stays whole-word
 garp deploy service --partial=contains    # raw substring: redeploy, autodeploy
 
-# Three or more terms use Strategy A ranked matching by default
-garp pitch onset midi --distance 500  # ranked by term-length rarity score
-garp pitch onset midi --strict        # enforce all terms with strict AND
+# Multi-term searches use corpus-aware ranking, with no first-term privilege
+garp pitch onset midi --distance 500  # any 2+ terms in the window
+garp pitch onset midi --strict        # all terms; no partial or rare-anchor fallback
 
 # Scope search to specific directories (prunes the walk -- never descends outside scope)
 garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/,tests/' --code
@@ -61,12 +61,14 @@ garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,d
 
 - Pure Go -- zero external tool dependencies
 - Unordered multi-word proximity matching within a window (default 5000 UTF-8 bytes)
-- Strategy A ranked matching for three or more terms: finds the best proximity
-  cluster containing the first query term and at least one secondary term
-- Term-length rarity weighting: chunks matching longer domain terms rank above
-  chunks that match only short, common words
-- One- and two-term searches remain strict AND; `--strict` enforces strict AND
-  for searches with three or more terms
+- Order-invariant matching: two-term primary matches require both terms;
+  three or more terms admit any two or more distinct query slots in a window
+- Walk-derived corpus-aware BM25F ranking with proximity and slot coverage,
+  not term-length weighting or a persistent index
+- Scarce-match fallback: when fewer than five primary files match, append up
+  to three rare single-slot matches, always after multi-term matches
+- `--strict` requires every term in a window and disables both partial
+  multi-term admission and single-slot fallback
 - Directory-scoped search: `--startdir` sets the root, `--pathscope` prunes the walk
 - Machine-readable output: `--json` (structured envelope), `--plain` (line-oriented),
   and `--pathonly` (distinct matching file paths, one per line) designed for scripting
@@ -161,7 +163,7 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `-i`, `--ignore-case` | on | Match terms without case sensitivity. The last case flag wins. |
 | `-s`, `--case-sensitive` | off | Match terms with case sensitivity through discovery, exclusions, ranking, and excerpts. |
 | `--not <excl...>` | (none) | Tokens after this flag are exclusions. Dot-prefixed = extension exclude (`.pdf`); others = word exclude |
-| `--strict` | off | Require every search term in the proximity window, including searches with three or more terms |
+| `--strict` | off | Require every term in a proximity window; disable both partial multi-term admission and single-slot fallback |
 | `-l`, `--files-with-matches`, `--pathonly` | off | Skip TUI; emit only distinct matching file paths in ranked order. |
 | `--json` | off | Skip TUI; emit structured JSON to stdout. Preferred for MCP/agent callers |
 | `--plain` | off | Skip TUI; emit plain line-oriented text to stdout. Useful for shell scripts |
@@ -262,22 +264,22 @@ as positive search terms.
     "path_scope": ["audio2midi/", "docs/"],
     "include_code": true
   },
-  "matches": 2,
-  "returned": 2,
+  "matches": 1,
+  "returned": 1,
   "truncated": false,
   "timed_out": 0,
   "results": [
     {
       "file": "/path/to/audio2midi/dsp.py",
       "size_bytes": 15649,
-      "score": 14,
+      "score": 14.1509,
       "term_count": 2,
       "matched_terms": ["pitch", "frequency"],
       "excerpts": [
         {
           "text": "...clean text snippet around matched terms...",
           "start_line": 42,
-          "score": 14,
+          "score": 4.0328,
           "term_count": 2
         }
       ]
@@ -294,34 +296,45 @@ remains present for one or more selected types. `query.only_types` appears only
 for two or more distinct types. `query.case_sensitive` appears only when
 case-sensitive mode is active.
 
-Each result includes ranked-match metadata. `score` is the sum of the lengths
-of the distinct matched query terms, `term_count` is their count, and
-`matched_terms` lists them in query order.
+Each result includes ranked-match metadata. File `score` is a floating-point
+BM25F score using walk-derived document frequency, cleaned document length,
+document-wide term frequency and a relative-path bonus, multiplied by proximity
+and the fraction of query slots covered by the representative window. Scores
+are rounded to `1e-4` in JSON, plain output, and the TUI; insignificant trailing
+zeroes need not be printed. Excerpt scores instead sum the matched slots' IDF
+weights. The numbers in the example illustrate the shape, not fixed scores for
+those terms. Scores depend on the searched corpus, not just the matching file.
+`term_count` counts slots in the representative window; `matched_terms` lists
+them in query order. Inspect both to distinguish partial and single-slot matches.
 
-Every output mode uses the same seven ranking tiers:
+Every output mode uses the same ten ranking tiers:
 
-1. `score`, descending
-2. `term_count`, descending
-3. `PathMatchCount`, descending
-4. `BoundaryQuality`, descending
-5. match span length, ascending
-6. `TopQualityChunks`, descending
-7. ranking-root-relative path, ascending: slash-normalized, case-insensitive
-   byte order, then exact byte order; supplied root order; canonical path
+1. `!IsFallback` first: primary matches always precede single-slot fallbacks
+2. rounded `score`, descending
+3. `term_count`, descending
+4. `PathMatchCount`, descending
+5. `BoundaryQuality`, descending
+6. `SpanLength` (match span length), ascending
+7. `TopQualityChunks`, descending
+8. ranking-root-relative path, ascending: slash-normalized, case-insensitive
+   byte order, then exact byte order
+9. supplied `rootOrder`, ascending
+10. canonical path, ascending
 
 `PathMatchCount` is the number of distinct query terms represented in the
 path relative to the search root. `BoundaryQuality` rewards terms that match
 on both identifier boundaries. `TopQualityChunks` counts non-overlapping
-windows with the file's best score and term count. These fields set file order
-before excerpt extraction. `--max-excerpts` cannot change file order.
+windows tied for the file's best slot coverage and IDF weight. These fields set
+file order before excerpt extraction. `--max-excerpts` cannot change file order.
 
 Chunks within a file form a per-file ranked subset: with `--max-excerpts N`
 every match quality tier from the query's minimum requirement up to the full
-term set can seed a chunk, emitted best-first (highest score, then most
-matched terms). A file's best cluster no longer hides its separate
-lower-quality clusters. Each `--json` excerpt carries its own `score` and
+term set can seed a chunk, emitted best-first (most matched slots, then highest
+IDF sum). Single-slot fallback seeds must pass the rarity gate. A file's best
+cluster no longer hides its separate lower-quality clusters. Each `--json`
+excerpt carries its own `score` and
 `term_count` (omitted for chunks that did not frame a ranked window), and
-`--plain` excerpt headers include them: `EXCERPT 1 [L42, Score: 14 (3 terms)]`.
+`--plain` excerpt headers include them: `EXCERPT 1 [L42, Score: 4.0328 (2 terms)]`.
 The bounded-overlap guarantee is unchanged: every chunk is >= 90% new content
 relative to earlier chunks from the same file.
 
@@ -466,13 +479,16 @@ content.
 
 ## How it works
 
-1. **Discovery** -- walks the directory tree (respecting `--startdir` and `--pathscope`
-   to prune irrelevant subtrees at directory-entry time), filtering by extension.
-2. **Filter** -- parallel workers check each candidate for all search terms within
-   the proximity window.
-3. **Extract** -- pure-Go extractors pull text from binary formats.
-4. **Clean** -- strips tags, entities, CSS/JS, and quote markers from markup, email, and extracted documents; plain-text and code files keep their text (control characters and whitespace normalized).
-5. **Output** -- TUI with highlighted excerpts, or `--json`/`--plain` for programmatic use.
+1. **Discover and count** -- walk eligible files under the active scope and ignore
+   rules, deduplicate physical candidates, and derive readable-file counts,
+   cleaned word lengths, and per-slot document frequencies. No index is persisted.
+2. **Extract and clean** -- pure-Go readers provide authoritative searchable text.
+   Markup/email/extracted formats are cleaned; literal formats retain source tokens.
+3. **Filter and rank** -- workers collect bounded, text-free window summaries.
+   Corpus-aware BM25F, proximity, and slot coverage rank primary matches; scarce,
+   rare single-slot candidates can then fill the tail. `--strict` requires all slots.
+4. **Output** -- extract ranked excerpts for the TUI, JSON, or plain text; path-only
+   output uses the same file order without excerpt extraction.
 
 ## Architecture
 
@@ -555,6 +571,24 @@ separate from the root module.
 
 ## Known limitations
 
+- **High-frequency single-slot precision boundary:** single-slot fallback is
+  intentionally withheld when at least five primary proximity matches exist,
+  or the only matched word occurs in more than `max(1, floor(0.05*N))` readable
+  files. Common words such as `option` or `signature` must not flood the tail
+  or outrank genuine co-occurrence. For example, the `option agreement`
+  benchmark need targets messages saying `Option 2` and `contract`; nine real
+  co-occurrence hits and high `option` frequency both prevent fallback.
+- **Lexical overlap:** garp is lexical and index-free, not semantic search.
+  `signature authenticated` cannot find a document that says only `signed`.
+  With no matching vocabulary, that document yields zero matches unless
+  `--smart-forms`, `--partial`, or alternative query terms bridge the lexical gap.
+- **Literal pipe:** `a|b` matches literally in v0.11.0; boolean OR slot parsing
+  is deferred to #87. Quote pipes to prevent shell interpretation.
+- **Deferred v0.11.1 extraction/cleaning limits:** trailing whitespace in a
+  `%PDF-1.x ` header (#90), empty-password 40-bit RC4 PDFs (#91), `/LZWDecode`
+  PDF streams (#92), and uppercase-digit splitting of markup/extracted mixed
+  tokens such as `Olk10SideProps_0001` (#94) remain known limits. Evaluation
+  retains the affected misses rather than attributing them to ranking.
 - Markdown and other literal formats are not rendered: text inside inline HTML
   and HTML comments in `.md` (for example `<!-- note -->`) is part of the
   searchable text. A search term can match there, and a word you exclude on the
@@ -584,13 +618,18 @@ separate from the root module.
 ## FAQ
 
 **How does multi-word matching work?**
-One- and two-term searches use unordered strict AND within a proximity window:
-all terms must appear within `--distance` UTF-8 bytes of each other (default
-5000, measured between term starts in the cleaned text; non-ASCII characters
-take 2-4 bytes) somewhere in the file. Searches with three or more terms use Strategy A
-ranked matching by default: a result needs the first query term plus at least
-one secondary term, and the best clusters rank by term-length rarity score.
-Pass `--strict` to require all terms for any search size.
+Query argument order gives no term priority. A single-term query requires that
+term; two-term primary matches require both; three or more distinct terms
+require any two or more slots within `--distance` UTF-8 bytes (default 5000,
+measured between term starts in cleaned text; non-ASCII characters take 2-4 bytes).
+
+For multi-term queries with fewer than five primary matching files, a single-slot
+fallback is eligible only when `N >= 2` and its slot occurs in
+`1 <= df <= max(1, floor(0.05*N))` readable files. At most
+`min(3, 5 - len(primary))` fallback files are appended, strictly after primary
+matches. `N` includes readable empty files but excludes read/extraction errors;
+scope and ignore rules therefore affect rarity. `--strict` enforces full
+conjunction and disables both partial multi-term admission and single-slot fallback.
 
 **Does `--pathscope` filter results or restrict the walk?**
 It filters results and can restrict the walk. Anchored positive prefixes such as

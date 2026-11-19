@@ -46,14 +46,14 @@ func TestCLIOutputFormats(t *testing.T) {
 		if result.Matches != 2 || len(result.Results) != 2 {
 			t.Fatalf("JSON matches/results = %d/%d, want 2/2", result.Matches, len(result.Results))
 		}
-		if got := result.Results[0]; got.Score != 14 || got.TermCount != 3 || got.SpanLength <= 0 {
-			t.Errorf("first JSON ranked metadata = score %d, term_count %d, span_length %d; want 14, 3, positive", got.Score, got.TermCount, got.SpanLength)
+		if got := result.Results[0]; got.Score <= result.Results[1].Score || got.TermCount != 3 || got.SpanLength <= 0 {
+			t.Errorf("first JSON ranked metadata = score %v, term_count %d, span_length %d; want higher score, 3, positive", got.Score, got.TermCount, got.SpanLength)
 		}
 		if got := result.Results[0].MatchedTerms; !slicesEqual(got, []string{"alpha", "beta", "gamma"}) {
 			t.Errorf("first JSON matched_terms = %v, want [alpha beta gamma]", got)
 		}
-		if got := result.Results[1]; got.Score != 9 || got.TermCount != 2 || got.SpanLength <= 0 {
-			t.Errorf("second JSON ranked metadata = score %d, term_count %d, span_length %d; want 9, 2, positive", got.Score, got.TermCount, got.SpanLength)
+		if got := result.Results[1]; got.Score <= 0 || got.TermCount != 2 || got.SpanLength <= 0 {
+			t.Errorf("second JSON ranked metadata = score %v, term_count %d, span_length %d; want positive, 2, positive", got.Score, got.TermCount, got.SpanLength)
 		}
 		if got := result.Results[1].MatchedTerms; !slicesEqual(got, []string{"alpha", "beta"}) {
 			t.Errorf("second JSON matched_terms = %v, want [alpha beta]", got)
@@ -62,9 +62,10 @@ func TestCLIOutputFormats(t *testing.T) {
 
 	t.Run("plain header includes score and term count", func(t *testing.T) {
 		out := string(captureCLIStdout(t, func() int { return runPlain(args) }))
+		result := outputJSONFromCLI(t, args)
 		for _, header := range []string{
-			"MATCH 1/2 [Score: 14 (3/3 terms)]\n",
-			"MATCH 2/2 [Score: 9 (2/3 terms)]\n",
+			fmt.Sprintf("MATCH 1/2 [Score: %s (3/3 terms)]\n", search.FormatScore(result.Results[0].Score)),
+			fmt.Sprintf("MATCH 2/2 [Score: %s (2/3 terms)]\n", search.FormatScore(result.Results[1].Score)),
 		} {
 			if !strings.Contains(out, header) {
 				t.Errorf("plain output missing ranked match header %q:\n%s", header, out)
@@ -446,8 +447,8 @@ func TestOutputModeOrderingParity(t *testing.T) {
 		t.Fatalf("TUI result count = %d, want %d", len(tuiResults), len(want))
 	}
 	tuiPaths := searchResultPaths(tuiResults)
-	if tuiResults[0].Score != tuiResults[1].Score || tuiResults[0].TermCount != tuiResults[1].TermCount {
-		t.Errorf("path-relevance pair differs on higher tiers: %+v / %+v", tuiResults[0], tuiResults[1])
+	if tuiResults[0].Score <= tuiResults[1].Score || tuiResults[0].TermCount != tuiResults[1].TermCount {
+		t.Errorf("path-relevance pair lacks BM25F boost: %+v / %+v", tuiResults[0], tuiResults[1])
 	}
 	if tuiResults[0].PathMatchCount <= tuiResults[1].PathMatchCount {
 		t.Errorf("fixture does not exercise path relevance: %d <= %d", tuiResults[0].PathMatchCount, tuiResults[1].PathMatchCount)
@@ -462,11 +463,11 @@ func TestOutputModeOrderingParity(t *testing.T) {
 	if tuiResults[1].TopQualityChunks <= tuiResults[2].TopQualityChunks {
 		t.Errorf("fixture does not exercise top-quality count: %d <= %d", tuiResults[1].TopQualityChunks, tuiResults[2].TopQualityChunks)
 	}
-	if tuiResults[3].Score != tuiResults[4].Score ||
+	if tuiResults[3].Score <= tuiResults[4].Score ||
 		tuiResults[3].TermCount != tuiResults[4].TermCount ||
 		tuiResults[3].PathMatchCount != tuiResults[4].PathMatchCount ||
 		tuiResults[3].BoundaryQuality != tuiResults[4].BoundaryQuality {
-		t.Errorf("span pair differs on higher tiers: %+v / %+v", tuiResults[3], tuiResults[4])
+		t.Errorf("span pair lacks proximity boost: %+v / %+v", tuiResults[3], tuiResults[4])
 	}
 	if tuiResults[3].SpanLength >= tuiResults[4].SpanLength {
 		t.Errorf("fixture does not exercise span: %d >= %d", tuiResults[3].SpanLength, tuiResults[4].SpanLength)
@@ -543,13 +544,14 @@ func TestOutputModeTopNParity(t *testing.T) {
 func buildOutputOrderingParityFixture(t *testing.T) (string, []string) {
 	t.Helper()
 	root := t.TempDir()
+	padding := strings.Repeat("padding ", 200)
 	fixtures := map[string]string{
-		"neutral/zz-alpha.txt": "alpha beta",
-		"neutral/zz-top.txt":   "alpha beta " + strings.Repeat("x", 1000) + " alpha beta",
-		"neutral/aa-tie.txt":   "alpha beta",
-		"neutral/ab-tie.txt":   "alpha beta",
-		"neutral/01-long.txt":  "alpha " + strings.Repeat("x", 40) + " beta",
-		"neutral/00-edge.txt":  "xalphay beta",
+		"neutral/zz-alpha.txt": "alpha beta " + padding + "alpha beta",
+		"neutral/zz-top.txt":   "alpha beta " + padding + "alpha beta",
+		"neutral/aa-tie.txt":   "alpha beta " + strings.Repeat("padding ", 100) + "alpha " + strings.Repeat("padding ", 100) + "beta",
+		"neutral/ab-tie.txt":   "alpha beta " + strings.Repeat("padding ", 100) + "alpha " + strings.Repeat("padding ", 100) + "beta",
+		"neutral/01-long.txt":  "alpha- beta " + padding + "alpha- beta",
+		"neutral/00-edge.txt":  "alphax beta " + padding + "alphax beta",
 	}
 	for name, content := range fixtures {
 		writeCLISearchFixture(t, root, name, content)
@@ -750,7 +752,7 @@ func TestPlainOutputCannotForgeRecords(t *testing.T) {
 			FilePath: payload, FileSize: 42,
 			RawExcerpts:     []string{payload, payload, payload, payload},
 			StartLines:      []int{2, 0, 3, 0},
-			ChunkScores:     []int{1, 1, 0, 0},
+			ChunkScores:     []float64{1, 1, 0, 0},
 			ChunkTermCounts: []int{1, 1, 0, 0},
 		}},
 	}
@@ -797,7 +799,7 @@ func TestPlainOutputBackslashPathsRoundTripInParityHelpers(t *testing.T) {
 			FileSize:        42,
 			RawExcerpts:     []string{"alpha beta", "alpha gamma"},
 			StartLines:      []int{1, 10},
-			ChunkScores:     []int{10, 8},
+			ChunkScores:     []float64{10, 8},
 			ChunkTermCounts: []int{2, 2},
 		}},
 	}
@@ -880,6 +882,75 @@ func buildRankedSubsetFixture(t *testing.T) string {
 }
 
 func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {
+	t.Run("fractional file and excerpt scores", func(t *testing.T) {
+		args := parseArguments([]string{"alpha", "beta", "gamma"})
+		outcome := search.ExecutionResult{Matches: 1, Returned: 1, Results: []search.SearchResult{{
+			FilePath: "rare.txt", Score: 4.0328, TermCount: 1, RawExcerpts: []string{"alpha", "alpha"},
+			StartLines: []int{2, 0}, ChunkScores: []float64{1.2345, 1.2345}, ChunkTermCounts: []int{1, 1},
+		}}}
+		encoded, err := json.Marshal(buildJSONOutput(args, outcome))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded jsonOutput
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Results[0].Score != 4.0328 || decoded.Results[0].Excerpts[0].Score == nil || *decoded.Results[0].Excerpts[0].Score != 1.2345 {
+			t.Fatalf("fractional JSON: %s", encoded)
+		}
+		var plain bytes.Buffer
+		writePlainOutput(&plain, args, outcome)
+		for _, want := range []string{"MATCH 1/1 [Score: 4.0328 (1/3 terms)]", "EXCERPT 1 [L2, Score: 1.2345 (1 terms)]", "EXCERPT 2 [Score: 1.2345 (1 terms)]"} {
+			if !strings.Contains(plain.String(), want) {
+				t.Errorf("missing %q in %s", want, plain.String())
+			}
+		}
+	})
+	for _, tc := range []struct {
+		name  string
+		terms []int
+		want  []string
+	}{
+		{"zero-score ranked chunks", []int{1, 2}, []string{"EXCERPT 1 [L3, Score: 0 (1 terms)]: alpha", "EXCERPT 2 [Score: 0 (2 terms)]: alpha beta"}},
+		{"unranked fallback chunks", []int{0, 0}, []string{"EXCERPT 1 [L3]: alpha", "EXCERPT 2: alpha beta"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := parseArguments([]string{"alpha", "beta"})
+			outcome := search.ExecutionResult{Matches: 1, Returned: 1, Results: []search.SearchResult{{
+				FilePath: "common.txt", RawExcerpts: []string{"alpha", "alpha beta"},
+				StartLines: []int{3, 0}, ChunkScores: []float64{0, 0}, ChunkTermCounts: tc.terms,
+			}}}
+			out := buildJSONOutput(args, outcome)
+			encoded, err := json.Marshal(out.Results[0].Excerpts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var excerpts []map[string]any
+			if err := json.Unmarshal(encoded, &excerpts); err != nil {
+				t.Fatal(err)
+			}
+			for i, excerpt := range excerpts {
+				score, hasScore := excerpt["score"]
+				terms, hasTerms := excerpt["term_count"]
+				ranked := tc.terms[i] > 0
+				got := out.Results[0].Excerpts[i]
+				if (got.Score != nil) != ranked || (ranked && *got.Score != 0) {
+					t.Errorf("excerpt %d score presence/value: %+v", i, got)
+				}
+				if hasScore != ranked || hasTerms != ranked || (ranked && (score != float64(0) || terms != float64(tc.terms[i]))) {
+					t.Errorf("excerpt %d quality fields: %s", i, encoded)
+				}
+			}
+			var plain bytes.Buffer
+			writePlainOutput(&plain, args, outcome)
+			for _, want := range tc.want {
+				if !strings.Contains(plain.String(), want+"\n") {
+					t.Errorf("missing %q in %s", want, plain.String())
+				}
+			}
+		})
+	}
 	root := buildRankedSubsetFixture(t)
 	args := parseArguments([]string{
 		"alpha", "beta", "gamma",
@@ -902,11 +973,14 @@ func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {
 		if len(excerpts) != 2 {
 			t.Fatalf("JSON excerpt count = %d, want 2 (both quality levels)", len(excerpts))
 		}
-		if excerpts[0].Score != 14 || excerpts[0].TermCount != 3 {
-			t.Fatalf("first excerpt quality = (score %d, terms %d), want (14, 3)", excerpts[0].Score, excerpts[0].TermCount)
+		if excerpts[0].Score == nil || excerpts[1].Score == nil {
+			t.Fatalf("ranked excerpt scores missing: %s", out)
 		}
-		if excerpts[1].Score != 9 || excerpts[1].TermCount != 2 {
-			t.Fatalf("second excerpt quality = (score %d, terms %d), want (9, 2)", excerpts[1].Score, excerpts[1].TermCount)
+		if *excerpts[0].Score <= *excerpts[1].Score || excerpts[0].TermCount != 3 {
+			t.Fatalf("first excerpt quality = (score %v, terms %d), want (higher, 3)", *excerpts[0].Score, excerpts[0].TermCount)
+		}
+		if *excerpts[1].Score <= 0 || excerpts[1].TermCount != 2 {
+			t.Fatalf("second excerpt quality = (score %v, terms %d), want (positive, 2)", *excerpts[1].Score, excerpts[1].TermCount)
 		}
 		if !strings.Contains(excerpts[0].Text, "gamma") {
 			t.Fatalf("first excerpt should be the best cluster: %q", excerpts[0].Text)
@@ -921,13 +995,17 @@ func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {
 
 	t.Run("plain excerpt headers carry per-chunk quality", func(t *testing.T) {
 		out := string(captureCLIStdout(t, func() int { return runPlain(args) }))
+		excerpts := outputJSONFromCLI(t, args).Results[0].Excerpts
+		if len(excerpts) != 2 || excerpts[0].Score == nil || excerpts[1].Score == nil {
+			t.Fatalf("expected two ranked JSON excerpts: %+v", excerpts)
+		}
 		if got := strings.Count(out, "EXCERPT "); got != 2 {
 			t.Fatalf("plain excerpt count = %d, want 2:\n%s", got, out)
 		}
-		if !strings.Contains(out, "EXCERPT 1 [L1, Score: 14 (3 terms)]") {
+		if !strings.Contains(out, fmt.Sprintf("EXCERPT 1 [L1, Score: %s (3 terms)]", search.FormatScore(*excerpts[0].Score))) {
 			t.Errorf("plain output missing per-chunk quality header for the best chunk:\n%s", out)
 		}
-		if !strings.Contains(out, "EXCERPT 2 [L1, Score: 9 (2 terms)]") {
+		if !strings.Contains(out, fmt.Sprintf("EXCERPT 2 [L1, Score: %s (2 terms)]", search.FormatScore(*excerpts[1].Score))) {
 			t.Errorf("plain output missing per-chunk quality header for the lower chunk:\n%s", out)
 		}
 	})

@@ -2,6 +2,7 @@ package search
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -35,19 +36,79 @@ type matchRange struct {
 	end   int
 }
 
+// querySlot is one concept with alternative matchers. Compilation currently
+// creates one literal term per slot; a pipe is not alternation syntax.
+type querySlot struct {
+	label string
+	alts  []termMatcher
+}
+
+func (s querySlot) matches(text string) bool {
+	for _, matcher := range s.alts {
+		if matcher.matches(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s querySlot) findAll(text string) []matchRange {
+	var ranges []matchRange
+	for _, matcher := range s.alts {
+		ranges = append(ranges, matcher.findAll(text)...)
+	}
+	slices.SortFunc(ranges, func(a, b matchRange) int {
+		if a.start != b.start {
+			return a.start - b.start
+		}
+		return a.end - b.end
+	})
+	return slices.Compact(ranges)
+}
+
 // compiledQuery is the immutable matching form of one normalized query.
-// For a nonempty query, terms[0] and matchers[0] represent the primary query term
-// used for ranked seeding in Stages 2 and 3. Compilation preserves normalized
-// input order and keeps terms and matchers aligned by index.
+// Terms, matchers, and slots remain aligned by normalized input index; candidate
+// eligibility and ranking must not give that input order semantic significance.
 type compiledQuery struct {
 	terms             []string
 	matchers          []termMatcher
+	slots             []querySlot
+	minSlots          int
 	maxMatchBytes     int
 	maxDetectionBytes int
 	// owners is nil except in prefilter admission queries, where matchers[i]
 	// must hit together with all matchers sharing its owner to admit
 	// terms[owners[i]]. Never pass these queries to ranking or excerpt code.
 	owners []int
+}
+
+// Slot accessors also support internal prefilter queries built without slots.
+func (q compiledQuery) slotCount() int {
+	if len(q.slots) > 0 {
+		return len(q.slots)
+	}
+	return len(q.matchers)
+}
+
+func (q compiledQuery) slotLabel(i int) string {
+	if len(q.slots) > 0 {
+		return q.slots[i].label
+	}
+	return q.terms[i]
+}
+
+func (q compiledQuery) slotMatches(i int, text string) bool {
+	if len(q.slots) > 0 {
+		return q.slots[i].matches(text)
+	}
+	return q.matchers[i].matches(text)
+}
+
+func (q compiledQuery) slotFindAll(i int, text string) []matchRange {
+	if len(q.slots) > 0 {
+		return q.slots[i].findAll(text)
+	}
+	return q.matchers[i].findAll(text)
 }
 
 // QueryOptions defines immutable matching behavior for a compiled query.
@@ -187,10 +248,12 @@ func compileQueryWithOptions(terms []string, mode PartialMode, options QueryOpti
 	query := compiledQuery{
 		terms:    append([]string(nil), normalized...),
 		matchers: make([]termMatcher, 0, len(normalized)),
+		slots:    make([]querySlot, 0, len(normalized)),
 	}
 	for _, term := range normalized {
 		matcher := compileTermMatcherWithOptions(term, mode, options)
 		query.matchers = append(query.matchers, matcher)
+		query.slots = append(query.slots, querySlot{label: term, alts: []termMatcher{matcher}})
 		if matcher.maxMatchBytes < 0 {
 			query.maxMatchBytes = -1
 		} else if query.maxMatchBytes >= 0 && matcher.maxMatchBytes > query.maxMatchBytes {
@@ -562,6 +625,10 @@ func (m termMatcher) findByteExactWithBoundaries(
 	boundaries []bool,
 	failed map[wildcardByteState]struct{},
 ) (matchRange, bool) {
+	return m.findByteExactWithMemo(text, from, boundaries, wildcardByteMemo{sparse: failed})
+}
+
+func (m termMatcher) findByteExactWithMemo(text string, from int, boundaries []bool, failed wildcardByteMemo) (matchRange, bool) {
 	if from < 0 {
 		from = 0
 	}
@@ -582,8 +649,49 @@ func (m termMatcher) findByteExactWithBoundaries(
 	return matchRange{}, false
 }
 
+// termMatchScratch is worker-owned. Reset boundaries to length zero before
+// changing windows; find reuses the boundary table within that immutable window.
+// The memo is cleared for each matcher because its keys omit matcher identity.
+// Neither buffer retains text. Only byte-exact terms use these reusable buffers;
+// other terms retain canonical regexp boundary and Unicode-fold semantics,
+// including the regexp API's per-hit index allocations.
+type termMatchScratch struct {
+	boundaries []bool
+	failed     []uint8
+}
+
+func (s *termMatchScratch) find(m termMatcher, text string, from int) (matchRange, bool) {
+	if m.term == "" {
+		return matchRange{}, false
+	}
+	if !m.byteExact {
+		return m.find(text, from)
+	}
+	if len(s.boundaries) == 0 {
+		s.boundaries = fillUTF8ByteBoundaries(text, s.boundaries)
+	}
+	if m.validWildcard {
+		if cap(s.failed) < len(text)+1 {
+			s.failed = make([]uint8, len(text)+1)
+		} else {
+			s.failed = s.failed[:len(text)+1]
+			clear(s.failed)
+		}
+	}
+	return m.findByteExactWithMemo(text, from, s.boundaries, wildcardByteMemo{window: s.failed})
+}
+
 func utf8ByteBoundaries(text string) []bool {
-	boundaries := make([]bool, len(text)+1)
+	return fillUTF8ByteBoundaries(text, nil)
+}
+
+func fillUTF8ByteBoundaries(text string, boundaries []bool) []bool {
+	if cap(boundaries) < len(text)+1 {
+		boundaries = make([]bool, len(text)+1)
+	} else {
+		boundaries = boundaries[:len(text)+1]
+		clear(boundaries)
+	}
 	for i := 0; i < len(text); {
 		boundaries[i] = true
 		_, size := utf8.DecodeRuneInString(text[i:])
@@ -597,7 +705,7 @@ func (m termMatcher) matchByteExactAt(
 	text string,
 	start int,
 	boundaries []bool,
-	failed map[wildcardByteState]struct{},
+	failed wildcardByteMemo,
 ) (int, bool) {
 	if m.validWildcard {
 		patternStart, patternEnd := 0, len(m.term)
@@ -672,11 +780,18 @@ type wildcardByteState struct {
 	patternIndex int
 }
 
+// Whole-input callers keep sparse state. Pooled windows use one bit per star
+// (maxWildcardStars is four) at each text offset, avoiding map growth on refill.
+type wildcardByteMemo struct {
+	sparse map[wildcardByteState]struct{}
+	window []uint8
+}
+
 func (m termMatcher) matchWildcardBytes(
 	text string,
 	textIndex, patternIndex, patternEnd, starWidth int,
 	boundaries []bool,
-	failed map[wildcardByteState]struct{},
+	failed wildcardByteMemo,
 ) (end int, ok bool) {
 	if patternIndex == patternEnd {
 		if !boundaries[textIndex] {
@@ -691,7 +806,13 @@ func (m termMatcher) matchWildcardBytes(
 	switch m.term[patternIndex] {
 	case '*':
 		state := wildcardByteState{textIndex: textIndex, patternIndex: patternIndex}
-		if _, seen := failed[state]; seen {
+		_, seen := failed.sparse[state]
+		var bit uint8
+		if failed.window != nil {
+			bit = 1 << strings.Count(m.term[:patternIndex], "*")
+			seen = failed.window[textIndex]&bit != 0
+		}
+		if seen {
 			return 0, false
 		}
 		end := textIndex
@@ -704,7 +825,11 @@ func (m termMatcher) matchWildcardBytes(
 			}
 			end++
 		}
-		failed[state] = struct{}{}
+		if failed.window != nil {
+			failed.window[textIndex] |= bit
+		} else {
+			failed.sparse[state] = struct{}{}
+		}
 		return 0, false
 	case '?':
 		if textIndex >= len(text) || !isWildcardByte(text[textIndex]) {

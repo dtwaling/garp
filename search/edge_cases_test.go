@@ -33,8 +33,8 @@ func TestPartialEdgeCases(t *testing.T) {
 				if !ok {
 					t.Fatal("expected a strict ranked match")
 				}
-				if score != len(tt.words[0])+len(tt.words[1]) || count != 2 {
-					t.Fatalf("ranked match = score %d, term count %d; want score %d and term count 2", score, count, len(tt.words[0])+len(tt.words[1]))
+				if score != float64(len(tt.words[0])+len(tt.words[1])) || count != 2 {
+					t.Fatalf("ranked match = score %v, term count %d; want score %d and term count 2", score, count, len(tt.words[0])+len(tt.words[1]))
 				}
 				if strings.Join(terms, ",") != strings.Join(tt.words, ",") {
 					t.Fatalf("matched terms = %v, want %v", terms, tt.words)
@@ -45,8 +45,8 @@ func TestPartialEdgeCases(t *testing.T) {
 
 	t.Run("quoted phrase expands only its terminal word", func(t *testing.T) {
 		score, count, terms, _, ok := search.CheckTextContainsRankedWordsPartial("deploy services", []string{"deploy service"}, 50, true, search.PartialModePrefix)
-		if !ok || score != len("deploy service") || count != 1 || strings.Join(terms, ",") != "deploy service" {
-			t.Fatalf("terminal-word phrase match = (%d, %d, %v, %v), want (%d, 1, [deploy service], true)", score, count, terms, ok, len("deploy service"))
+		if !ok || score != float64(len("deploy service")) || count != 1 || strings.Join(terms, ",") != "deploy service" {
+			t.Fatalf("terminal-word phrase match = (%v, %d, %v, %v), want (%d, 1, [deploy service], true)", score, count, terms, ok, len("deploy service"))
 		}
 		if _, _, _, _, ok := search.CheckTextContainsRankedWordsPartial("deployment service", []string{"deploy service"}, 50, true, search.PartialModePrefix); ok {
 			t.Fatal("prefix mode expanded the first word of a quoted phrase")

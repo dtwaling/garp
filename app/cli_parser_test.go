@@ -216,7 +216,7 @@ func TestCLIArgumentsCanonicalTerms(t *testing.T) {
 	view := (model{
 		results: []search.SearchResult{{
 			FilePath:     fixture,
-			Score:        len("ms-*-api"),
+			Score:        float64(len("ms-*-api")),
 			TermCount:    1,
 			MatchedTerms: []string{"ms-*-api"},
 			Excerpts:     []string{"ms-option-api"},

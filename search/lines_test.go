@@ -823,6 +823,23 @@ func TestStage3LegacyFallbackKeepsTextBetweenStrayBrackets(t *testing.T) {
 	}
 }
 
+func TestComputeExcerptSpanLinesEqualCountOrderInvariance(t *testing.T) {
+	raw := "alpha  \ngamma  \ngamma         \nbeta\nalpha    \nbeta      \n"
+	want := []int{3}
+	for _, terms := range [][]string{{"alpha", "beta", "gamma"}, {"alpha", "gamma", "beta"}, {"beta", "alpha", "gamma"}, {"beta", "gamma", "alpha"}, {"gamma", "alpha", "beta"}, {"gamma", "beta", "alpha"}} {
+		q := compileQuery(terms, PartialModeOff)
+		// Synthetic identities force the legacy fallback, not the exact raw seed path.
+		spans := lineSpans([]int{0, 1, 2})
+		for i := range spans[0].matches {
+			spans[0].matches[i].source.start = 0
+		}
+		got := computeExcerptSpanLinesQuery(raw, spans, q, 100)
+		if !slices.Equal(got, want) {
+			t.Fatalf("terms=%v lines=%v want=%v", terms, got, want)
+		}
+	}
+}
+
 func TestStage3RawAnchorValidity(t *testing.T) {
 	raw := "header\nneedle\n"
 	query := compileQuery([]string{"needle"}, PartialModeOff)

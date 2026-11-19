@@ -47,8 +47,8 @@ func TestRunGarp(t *testing.T) {
 		corpus string
 		want   []string
 	}{
-		{"docs", []string{"a.txt", "b.txt"}},
-		{"code", []string{"a.txt", "b.txt", "c.go"}},
+		{"docs", []string{"b.txt", "a.txt"}},
+		{"code", []string{"b.txt", "a.txt", "c.go"}},
 	} {
 		t.Run(tc.corpus, func(t *testing.T) {
 			r, err := RunGarp(bin, tc.corpus, root, []string{"alpha"})
