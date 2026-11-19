@@ -15,9 +15,14 @@
 
 </div>
 
-An agent-friendly, high-performance, pure-Go document search tool. garp ranks
-order-invariant term co-occurrence, with scarce rare-anchor fallback, across common formats --
-text, email, Office, and PDF -- with pure-Go extractors and a clean JSON output.
+Ranked lexical proximity search over unindexed, mixed-format document trees,
+built for agent callers and interactive TUI triage. One static pure-Go binary
+extracts and searches PDF, DOC, DOCX, ODT, RTF, eml, mbox, and msg alongside
+Markdown, plain text, HTML/XML, and config files on a live filesystem -- no
+external tools and no persistent index. `garp` ranks order-invariant multi-term
+co-occurrence (with single-call `a|b|c` OR-group slots, scarce rare-anchor
+fallback, and structured `--json` output); `--code` extends the same proximity
+search to source trees as a secondary mode.
 
 No relation to the [John Irving novel](https://en.wikipedia.org/wiki/The_World_According_to_Garp).
 More like a mispronounced "grep" that's easy to remember.
@@ -28,63 +33,50 @@ core search engine, TUI, and document extraction are the work of
 
 ![garp TUI](garp.png)
 
+## What garp is not
+
+- **Not semantic search:** `garp` is purely lexical and index-free -- no embeddings, vector index, or synonym inference. A natural-language query such as `garp "how are ignored directories skipped"` returns zero matches unless those literal words co-occur; the caller supplies vocabulary via domain terms, `a|b|c` OR-groups, `--partial`, `*`/`?`, or `--smart-forms`.
+- **Not a ripgrep (`rg`) replacement:** Use `rg` instead for single-token or exact symbol/string lookup, full regular expressions, `-C`/`-A`/`-B` line context, or exhaustive line-by-line matches in plain text and source code. `rg` scans raw bytes directly without document extraction or corpus-counting passes (for example, informational single-pass wall time across the pinned 42-query, 206-file `code` corpus in [eval/results/v0.10.0.md](eval/results/v0.10.0.md) is `0.662515 s` total for `rg` versus `1.481326 s` for `garp v0.10.0`; see [eval/README.md#known-limitations](eval/README.md#known-limitations) -- one timed pass is not a statistical performance benchmark).
+- **Not a code-structure tool:** `garp` has no AST, symbol table, call graph, or type/import resolution. Use LSP, `ast-grep`, `ctags`, or `rg` for definitions, callers, references, and structural code queries; use `garp --code` only when locating where 2+ domain words or `a|b|c` alternatives co-occur within a function or module.
+- **Measured retrieval scope (no unverified claims):** On the [retrieval-quality eval harness](eval/README.md) (`make eval` after `make eval-fetch`; pinned 42-query, 430-file mixed `docs` corpus and 42-query, 206-file `code` corpus; see [eval/README.md#readable-corpus-denominator-and-bm25-returned-counts](eval/README.md#readable-corpus-denominator-and-bm25-returned-counts) and [eval/results/v0.10.0.md](eval/results/v0.10.0.md)), corpus-aware `garp` reaches `MRR@10` `0.785714` on `docs` (`409` readable files, excluding `21` `#90` PDFs) and `0.663520` on `code`, versus `garp v0.10.0` (`0.591270` / `0.504195`), whole-document `BM25` sharing `garp`'s extractors (`0.754195` / `0.635185`), and a raw-byte `rg` slot-conjunction pipeline (`0.269841` / `0.341138`, where `rg` uses default binary handling without Office/PDF/MSG extraction). In paired synonym evaluation (`make eval-or`, [eval/README.md#paired-synonym-or-evaluation-and-known-key-gaps](eval/README.md#paired-synonym-or-evaluation-and-known-key-gaps)), caller-authored `a|b|c` expansions lift `R@10` from `0.750000` to `0.916667` on eligible `docs` synonym queries (`12` queries) and from `0.642857` to `0.892857` on eligible `code` synonym queries (`14` queries, excluding registered key gap `code-g-011`; see [Known limitations](#known-limitations) and [eval/README.md](eval/README.md) for frozen-key, top-rank precision, and extractor caveats).
+
 ## Quick start
 
 ```bash
-garp contract payment agreement
-garp contract payment agreement --distance 200 --not .pdf
-garp mutex changed --code
-garp bank wire update --not .txt test
-garp approval crypto gemini --smart-forms
-garp report earnings --only pdf
+# Mixed-format document & email trees (PDF, DOC/DOCX/ODT/RTF, eml/mbox/msg, md, txt)
+garp contract payment agreement --json
+garp report earnings --only pdf --json
+garp 'amendment|addendum|rider' lease termination --distance 1500 --json
+garp wire remittance --not '.txt|.csv' 'draft|sample' --json
 garp auth migration -s -t md -t pdf -g '!archive/**' -l
 
-# Partial word matching
-garp deploy service --partial             # boundary-aware prefix: deployment, deploy_service
-garp deploy* service                      # inline glob: prefix on deploy only; service stays whole-word
-garp deploy service --partial=contains    # raw substring: redeploy, autodeploy
+# Multi-term ranking, strict conjunction, word forms, and partial matching
+garp indemnity liability ceiling --distance 1000 --json   # any 2+ slots in window, BM25F + proximity ranked
+garp indemnity liability ceiling --strict --json          # every slot required; no partial or single-slot fallback
+garp renew notice --smart-forms --json                    # inflections: renews, renewed, renewing, renewal
+garp deploy liability --partial --json                    # boundary-aware prefix: deployment, deploy_plan
+garp deploy* liability --json                             # inline wildcard on deploy* only; liability stays whole-word
+garp deploy liability --partial=contains --json           # raw substring: redeploy, autodeploy
 
-# Multi-term searches use corpus-aware ranking, with no first-term privilege
-garp pitch onset midi --distance 500  # any 2+ terms in the window
-garp pitch onset midi --strict        # all terms; no partial or rare-anchor fallback
+# Scope walks to specific folders or roots (prunes unrelated branches; -l emits ranked paths only)
+garp renewal notice --startdir ~/deals --pathscope 'contracts/,correspondence/' --json
+garp deployment runbook --startdir 'ops-docs,service-a' -g 'docs/**' -l
 
-# Expand one concept slot in a single call (quote pipes in shells)
+# Code search (supported, secondary -- opt in with --code when exact symbols are unknown)
 garp 'ignore|skip|exclude|prune' walk gitignore --code --distance 400 --json
-garp 'deploy*|rollout' service --not 'mock|stub'
-
-# Scope search to specific directories (prunes the walk -- never descends outside scope)
-garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/,tests/' --code
-garp deployment owner --startdir 'repo-a,repo-b' -g 'docs/**' --json
-
-# Machine-readable output for scripts and MCP/agent callers
 garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/' --code --json
-garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/' --code --pathonly
 ```
 
 ## Key features
 
-- Pure Go -- zero external tool dependencies
-- Unordered multi-word proximity matching within a window (default 5000 UTF-8 bytes)
-- Order-invariant matching: two-term primary matches require both terms;
-  three or more terms admit any two or more distinct query slots in a window
-- Walk-derived corpus-aware BM25F ranking with proximity and slot coverage,
-  not term-length weighting or a persistent index
-- Scarce-match fallback: when fewer than five primary files match, append up
-  to three rare single-slot matches, always after multi-term matches
-- Single-call OR-group slots (`a|b|c`): any alternative satisfies one slot,
-  with wildcards, partial matching, and smart forms applied per alternative
-- `--strict` requires every slot in a window and disables both partial
-  multi-term admission and single-slot fallback
-- Directory-scoped search: `--startdir` sets the root, `--pathscope` prunes the walk
-- Machine-readable output: `--json` (structured envelope), `--plain` (line-oriented),
-  and `--pathonly` (distinct matching file paths, one per line) designed for scripting
-  and MCP tool callers
-- Format-aware content cleaning: markup, email, and extracted documents are stripped of tags, entities, CSS/JS, and quote markers; plain-text, config, and code files are matched literally (see [Content cleaning](#content-cleaning))
-- Binary document support: .eml, .mbox, .pdf, .doc/.docx/.odt, .rtf, .msg
-- Code file search with `--code`
-- Advanced exclusion with `--not` for extensions and words, including OR-groups
-- Beautiful TUI with live progress, paging, and highlighted excerpts
-- Safe large-file handling with size-aware reads
+- Pure-Go mixed-document extraction on unindexed live trees -- `.pdf`, `.doc`, `.docx`, `.odt`, `.rtf`, `.eml`, `.mbox`, and `.msg` alongside `.md`, `.txt`, `.html`, `.xml`, `.csv`, and config files in one static binary with zero external tool dependencies and no persistent index
+- Agent-ready machine output and interactive TUI -- `--json` (structured envelope with ranked excerpts, `matched_terms`, `truncated`, `timed_out`, and 1-based `start_line` on text/Markdown/code), `-l`/`--pathonly` (ranked file paths), `--plain` (ANSI-free line-oriented output), plus an interactive TUI with live progress, paging, and highlighted excerpts
+- Unordered lexical proximity matching within `--distance` UTF-8 bytes (default 5000): two-slot primary matches require both slots; three or more slots admit any two or more distinct slots in a window with no first-term privilege
+- Walk-derived corpus-aware BM25F ranking with proximity and slot coverage (not term-length weighting or a persistent index), plus non-strict scarce rare-anchor fallback across `2+`-slot queries: when `N >= 2` readable files exist and fewer than five primary files match, appends at most `min(3, 5 - len(primary))` single-slot files with `1 <= df <= max(1, floor(0.05*N))`, always after primary matches
+- Caller-supplied vocabulary expansion -- single-call OR-group slots (`a|b|c`, with per-alternative wildcards, `--partial`, and `--smart-forms`), `--strict` full-slot conjunction, and `--not` extension/word exclusions (including OR-groups)
+- Format-aware content cleaning and bounded large-file/binary guardrails -- strips tags, entities, `script`/`style`, and quote noise from HTML/XML, email, and extracted documents while matching literal text/Markdown/config/code verbatim, with size caps and `--file-timeout-binary` deadlines (see [Supported formats](#supported-formats) and [Content cleaning](#content-cleaning))
+- Directory-scoped walk pruning via `--startdir`, `--pathscope`, `-g`/`--iglob`, and `.gitignore`/`.ignore` rules
+- Secondary code search with `--code` (including `Dockerfile`/`Containerfile` builds) when searching source trees by multi-term proximity
 
 ## Install
 
@@ -142,10 +134,12 @@ gh release download --repo dtwaling/garp --pattern 'garp-*' --output 'c:/cmd/gar
 
 A ready-made skill definition ships at `docs/skills/garp-search/SKILL.md`.
 Copy the `garp-search/` directory into your harness skills location (e.g.
-`.claude/skills/` or `.cursor/skills/`) and coding agents get a tight,
-current guide to garp: when to reach for garp over grep/ripgrep, the flags
-that matter, and how to consume the `--json` output (find -> pinpoint ->
-targeted read, no result paging). One skill covers Windows and Linux/macOS.
+`.hermes/skills/`, `.claude/skills/`, or `.cursor/skills/`) for a guide to
+when to use `garp` (unindexed mixed-format documents and multi-term proximity)
+versus `rg` (exact code or plain-text symbol/regex lookup), caller-owned
+`a|b|c` query expansion, zero-match recovery, and one-shot `--json` consumption
+(find -> pinpoint -> targeted read, no result paging). One skill covers
+Windows and Linux/macOS.
 
 ## Flags
 
@@ -634,7 +628,7 @@ separate from the root module.
   or outrank genuine co-occurrence. For example, the `option agreement`
   benchmark need targets messages saying `Option 2` and `contract`; nine real
   co-occurrence hits and high `option` frequency both prevent fallback.
-- **Lexical overlap:** garp is lexical and index-free, not semantic search.
+- **Lexical overlap:** garp is lexical and index-free (see [What garp is not](#what-garp-is-not)).
   `signature authenticated` cannot find a document that says only `signed`.
   With no matching vocabulary, that document yields zero matches unless
   `--smart-forms`, `--partial`, or explicit OR-groups bridge the lexical gap
