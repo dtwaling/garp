@@ -2,8 +2,8 @@
   "schema": 1,
   "harness": {
     "query_sha256": {
-      "code": "11d5e12664ae6d45cd441c853881da74077ba090a3a07c750eaea1b8178db039",
-      "docs": "7a39f0a0becd4bc6d21123aceaf958520b9c7c392b5e4d83851a3add8808a904"
+      "code": "e9f3e74c4a651b6adf7fe30344158f4efc461664310a3a4acd118e5746770514",
+      "docs": "90122b9d56ec1ff549fa0c850c7a876a58bac563950211dd707ac4d2c16555eb"
     },
     "manifest_sha256": {
       "code": "6cc4ccd8581d0bff3403e5e28f9a9ebb3b190e7ca8127e359b3702de60f00b3f",
