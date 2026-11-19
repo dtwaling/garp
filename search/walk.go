@@ -104,6 +104,12 @@ func decideTraversalDirectory(
 }
 
 func extensionExcluded(path string, excludes []string) bool {
+	extensions, _ := SplitExcludeWords(excludes)
+	return literalExtensionExcluded(path, extensions)
+}
+
+// literalExtensionExcluded consumes already expanded literal extensions.
+func literalExtensionExcluded(path string, excludes []string) bool {
 	ext := filepath.Ext(path)
 	for _, exclude := range excludes {
 		if strings.HasPrefix(exclude, ".") && strings.EqualFold(ext, exclude) {
@@ -165,6 +171,7 @@ func walkPreparedCandidates(
 		return nil
 	}
 
+	extExcludes, _ := SplitExcludeWords(options.ExcludeWords)
 	var walkDirectory func(logicalDir, physicalDir string, depth int, chain ignoreChain) error
 	walkDirectory = func(logicalDir, physicalDir string, depth int, chain ignoreChain) error {
 		entries, readErr := os.ReadDir(physicalDir)
@@ -209,7 +216,7 @@ func walkPreparedCandidates(
 				len(policy.globPositive) > 0 && config.IsCodeFile(logicalPath) {
 				typeEligible = policy.MatchesPositiveGlob(logicalPath)
 			}
-			if !typeEligible || extensionExcluded(logicalPath, options.ExcludeWords) {
+			if !typeEligible || literalExtensionExcluded(logicalPath, extExcludes) {
 				continue
 			}
 			if !policy.MatchesFile(logicalPath) {

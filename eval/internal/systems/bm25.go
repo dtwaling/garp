@@ -154,18 +154,26 @@ func (idx *Index) Tokens(path string) map[string]bool {
 
 func (idx *Index) queryTokens(terms []string) []string {
 	var tokens []string
+	hasOR := false
 	for _, term := range terms {
-		prefix, wildcard := strings.CutSuffix(term, "*")
-		parts := tokenize(prefix)
-		for i, token := range parts {
-			if wildcard && i == len(parts)-1 {
-				for j := sort.SearchStrings(idx.vocabulary, token); j < len(idx.vocabulary) && strings.HasPrefix(idx.vocabulary[j], token); j++ {
-					tokens = append(tokens, idx.vocabulary[j])
+		hasOR = hasOR || strings.Contains(term, "|")
+		for _, alt := range strings.Split(term, "|") {
+			prefix, wildcard := strings.CutSuffix(alt, "*")
+			parts := tokenize(prefix)
+			for i, token := range parts {
+				if wildcard && i == len(parts)-1 {
+					for j := sort.SearchStrings(idx.vocabulary, token); j < len(idx.vocabulary) && strings.HasPrefix(idx.vocabulary[j], token); j++ {
+						tokens = append(tokens, idx.vocabulary[j])
+					}
+				} else {
+					tokens = append(tokens, token)
 				}
-			} else {
-				tokens = append(tokens, token)
 			}
 		}
+	}
+	if hasOR {
+		// Keep first-seen order; ordinary queries retain legacy multiplicity.
+		tokens = unique(tokens)
 	}
 	return tokens
 }

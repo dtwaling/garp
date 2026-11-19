@@ -51,6 +51,108 @@ func writeRankedFormatFixture(t *testing.T, path, text string, decorated bool) {
 	}
 }
 
+func TestORGroupEnginePipeline(t *testing.T) {
+	root := t.TempDir()
+	target := writeWalkFixture(t, root, "hit.txt", "ignore walk gitignore")
+	writeWalkFixture(t, root, "noise.txt", "unrelated")
+	for _, name := range []string{"mock.txt", "stub.txt", "mockpipe.txt", "hit.pdf", "hit.docx"} {
+		writeWalkFixture(t, root, name, "ignore walk gitignore "+strings.TrimSuffix(name, ".txt"))
+	}
+	writeWalkFixture(t, root, "literal.txt", "ignore walk gitignore mock|pipe")
+	newEngine := func(words []string) *SearchEngine {
+		se := NewSearchEngine(words, []string{"mock|stub", `mock\|pipe`, ".pdf|.docx"}, nil, false, 1, 100)
+		se.StartDir, se.Silent, se.Strict = root, true, true
+		return se
+	}
+	words := []string{"prune|ignore|skip|exclude", "walk", "gitignore"}
+	se := newEngine(words)
+	whole, err := se.ExecuteDetailed()
+	if err != nil || len(whole.Results) != 2 {
+		t.Fatalf("whole: %+v %v", whole, err)
+	}
+	if whole.Results[0].FilePath != target || whole.Results[0].TermCount != 3 || !reflect.DeepEqual(whole.Results[0].MatchedTerms, []string{"ignore", "walk", "gitignore"}) {
+		t.Fatalf("result=%+v", whole.Results[0])
+	}
+	se = newEngine(words)
+	paths, total, err := se.DiscoverCandidates(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range paths {
+		if strings.HasSuffix(p, ".pdf") || strings.HasSuffix(p, ".docx") {
+			t.Fatalf("extension reached discovery: %s", p)
+		}
+	}
+	matches, err := se.FilterCandidates(paths, total, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := se.ExtractAndBuildResults(matches)
+	if err != nil || !reflect.DeepEqual(results, whole.Results) {
+		t.Fatalf("split differs: %+v %v", results, err)
+	}
+	var prior []SearchResult
+	for _, term := range []string{"ignore", "ignore|zzzzunused"} {
+		got, err := newEngine([]string{term, "walk", "gitignore"}).Execute()
+		if err != nil || len(got) != 2 {
+			t.Fatalf("unused synonym: %+v %v", got, err)
+		}
+		if prior != nil && !reflect.DeepEqual(prior, got) {
+			t.Fatal("unused synonym changed results/score")
+		}
+		prior = got
+	}
+}
+
+func TestORGroupEngineValidationAndRarity(t *testing.T) {
+	root := t.TempDir()
+	ordinary := make([]string, 33)
+	for i := range ordinary {
+		ordinary[i] = fmt.Sprintf("t%d", i)
+	}
+	writeWalkFixture(t, root, "all.txt", strings.Join(ordinary, " "))
+	se := NewSearchEngine(ordinary, nil, nil, false, 1, 1000)
+	se.StartDir, se.Silent, se.Strict = root, true, true
+	got, err := se.Execute()
+	if err != nil || len(got) != 1 || got[0].TermCount != 33 {
+		t.Fatalf("non-pipe 33-slot query: %+v %v", got, err)
+	}
+	for _, tc := range []struct{ words, excludes []string }{
+		{[]string{"a||b"}, nil}, {append([]string{"x|y"}, ordinary...), nil},
+		{[]string{"alpha"}, []string{"a||b"}}, {nil, []string{"a||b"}},
+		{[]string{strings.Repeat("a|", 16) + "a"}, nil},
+		{[]string{"alpha"}, append([]string{"a|b"}, append(ordinary, ordinary...)...)},
+	} {
+		se.SearchWords, se.ExcludeWords = tc.words, tc.excludes
+		_, _, a := se.DiscoverCandidates(0)
+		_, b := se.FilterCandidates(nil, 0, time.Now())
+		_, c := se.ExtractAndBuildResults(nil)
+		_, d := se.ExecuteDetailed()
+		_, e := se.Execute()
+		for i, err := range []error{a, b, c, d, e} {
+			if err == nil {
+				t.Fatalf("entry %d accepted %+v", i, tc)
+			}
+		}
+	}
+	root = t.TempDir()
+	writeWalkFixture(t, root, "rare.txt", "rare")
+	writeWalkFixture(t, root, "common.txt", "common")
+	writeWalkFixture(t, root, "noise.txt", "noise")
+	for _, term := range []string{"rare", "rare|common"} {
+		se := NewSearchEngine([]string{term, "missing"}, nil, nil, false, 1, 100)
+		se.StartDir, se.Silent = root, true
+		got, err := se.Execute()
+		want := 0
+		if term == "rare" {
+			want = 1
+		}
+		if err != nil || len(got) != want {
+			t.Fatalf("rarity %q: %+v %v", term, got, err)
+		}
+	}
+}
+
 func TestMultiTermArgumentPermutationInvariance(t *testing.T) {
 	permutations := [][]string{{"missing", "alpha", "beta"}, {"missing", "beta", "alpha"}, {"alpha", "missing", "beta"}, {"alpha", "beta", "missing"}, {"beta", "missing", "alpha"}, {"beta", "alpha", "missing"}}
 	for _, ext := range []string{".txt", ".html", ".docx", ".eml", ".rtf"} {

@@ -8,6 +8,23 @@ import (
 	"testing"
 )
 
+func TestMultiAltExcerptLines(t *testing.T) {
+	for _, groups := range [][][]string{{{"alpha", "beta"}, {"gamma", "delta"}}, {{"beta", "alpha"}, {"delta", "gamma"}}} {
+		q := multiAltQuery(groups, PartialModeOff)
+		raw := "heading\nbeta\ndelta\npadding\nbeta\ndelta\n"
+		spans := lineSpans([]int{0}, []int{1}, []int{0}, []int{1})
+		if got := computeExcerptSpanLinesQuery(raw, spans, q, 15); !slices.Equal(got, []int{2, 3, 5, 6}) {
+			t.Errorf("fallback lines=%v", got)
+		}
+		for i, offset := range []int{strings.Index(raw, "beta"), strings.Index(raw, "delta"), strings.LastIndex(raw, "beta"), strings.LastIndex(raw, "delta")} {
+			spans[i].rawStart, spans[i].rawStartValid = offset, true
+		}
+		if got := computeExcerptSpanLinesQuery(raw, spans, q, 15); !slices.Equal(got, []int{2, 3, 5, 6}) {
+			t.Errorf("mapped lines=%v", got)
+		}
+	}
+}
+
 func TestMappedContentReplaceCaptureGroups(t *testing.T) {
 	for _, tc := range []struct {
 		name, pattern, replacement, want string
@@ -210,6 +227,10 @@ func TestExcerptLinesFallbackWideToTight(t *testing.T) {
 	tight := "alpha beta tight cluster."
 	raw := wide + "\n" + strings.Repeat("gap ", 10) + "\n" + tight + "\n"
 	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	// Equal-rarity anchors must retain legacy label order, not length order.
+	if query.slotKey(0) >= query.slotKey(1) {
+		t.Fatal("single-alternative anchor keys reversed legacy alpha/beta order")
+	}
 	// Supply two separately rendered clusters: the anchoring fallback must not
 	// depend on whether the renderer's context budget merges nearby excerpts.
 	spans := extractRankedExcerptSpansQuery(CleanContent(wide), query, 1, 2, 2, false, 200)

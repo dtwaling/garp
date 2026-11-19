@@ -1,8 +1,10 @@
 package search
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -10,6 +12,11 @@ import (
 )
 
 const (
+	MaxAlternativesPerGroup = 16 // Raw alternatives per OR-group, before deduplication.
+	MaxQuerySlots           = 32 // Normalized slots, only for OR-expanded queries.
+	MaxQueryTerms           = 64 // Normalized alternatives, only for OR-expanded queries.
+	MaxExcludeTerms         = 64 // Expanded exclusions, only for OR-expanded --not.
+
 	minWildcardLiteralBytes = 2
 	maxWildcardLiteralBytes = 128
 	maxWildcardStars        = 4
@@ -36,11 +43,32 @@ type matchRange struct {
 	end   int
 }
 
-// querySlot is one concept with alternative matchers. Compilation currently
-// creates one literal term per slot; a pipe is not alternation syntax.
+// querySlot is one concept satisfied by any alternative. Its label is encoded
+// query syntax; matcher terms are literal bytes with pipe escapes removed.
 type querySlot struct {
-	label string
-	alts  []termMatcher
+	label         string
+	alts          []termMatcher
+	key           string
+	defaultWeight float64
+}
+
+type slotMatch struct {
+	start, end int
+	altTerm    string
+}
+
+// canonicalSlotKey is collision-free and independent of alternative order.
+func canonicalSlotKey(foldKeys []string) string {
+	keys := slices.Clone(foldKeys)
+	slices.Sort(keys)
+	var key strings.Builder
+	for _, part := range keys {
+		key.WriteString(strconv.Itoa(len(part)))
+		key.WriteByte(':')
+		key.WriteString(part)
+		key.WriteByte(';')
+	}
+	return key.String()
 }
 
 func (s querySlot) matches(text string) bool {
@@ -53,22 +81,47 @@ func (s querySlot) matches(text string) bool {
 }
 
 func (s querySlot) findAll(text string) []matchRange {
-	var ranges []matchRange
-	for _, matcher := range s.alts {
-		ranges = append(ranges, matcher.findAll(text)...)
+	if len(s.alts) == 1 {
+		return s.alts[0].findAll(text)
 	}
-	slices.SortFunc(ranges, func(a, b matchRange) int {
+	var ranges []matchRange
+	for _, match := range s.findAllDetailed(text) {
+		ranges = append(ranges, matchRange{match.start, match.end})
+	}
+	return ranges
+}
+
+// findAllDetailed keeps nested and overlapping evidence for proximity windows.
+// Only identical spans collapse, preferring the most specific alternative.
+func (s querySlot) findAllDetailed(text string) []slotMatch {
+	var ranges []slotMatch
+	for _, matcher := range s.alts {
+		for _, r := range matcher.findAll(text) {
+			ranges = append(ranges, slotMatch{r.start, r.end, matcher.term})
+		}
+	}
+	if len(s.alts) <= 1 {
+		return ranges
+	}
+	slices.SortFunc(ranges, func(a, b slotMatch) int {
 		if a.start != b.start {
 			return a.start - b.start
 		}
-		return a.end - b.end
+		if a.end != b.end {
+			return a.end - b.end
+		}
+		if len(a.altTerm) != len(b.altTerm) {
+			return len(b.altTerm) - len(a.altTerm)
+		}
+		return strings.Compare(a.altTerm, b.altTerm)
 	})
-	return slices.Compact(ranges)
+	return slices.CompactFunc(ranges, func(a, b slotMatch) bool { return a.start == b.start && a.end == b.end })
 }
 
 // compiledQuery is the immutable matching form of one normalized query.
-// Terms, matchers, and slots remain aligned by normalized input index; candidate
-// eligibility and ranking must not give that input order semantic significance.
+// Terms and slots align by normalized input index. Flat matchers carry DNF
+// ownership: all matchers of an alternative must hit; any alternative fills a
+// slot. Prefilter phrase pieces must never be passed to ranking/excerpt code.
 type compiledQuery struct {
 	terms             []string
 	matchers          []termMatcher
@@ -76,10 +129,10 @@ type compiledQuery struct {
 	minSlots          int
 	maxMatchBytes     int
 	maxDetectionBytes int
-	// owners is nil except in prefilter admission queries, where matchers[i]
-	// must hit together with all matchers sharing its owner to admit
-	// terms[owners[i]]. Never pass these queries to ranking or excerpt code.
-	owners []int
+	altSlots          []int
+	matcherAlts       []int
+	// An unprefilterable alternative makes its whole slot impossible to refute.
+	preSatisfiedSlots []bool
 }
 
 // Slot accessors also support internal prefilter queries built without slots.
@@ -109,6 +162,47 @@ func (q compiledQuery) slotFindAll(i int, text string) []matchRange {
 		return q.slots[i].findAll(text)
 	}
 	return q.matchers[i].findAll(text)
+}
+
+// slotKey preserves legacy label ordering for single-alternative queries.
+// Multi-alternative keys are canonical; type tags keep the two forms distinct.
+func (q compiledQuery) slotKey(i int) string {
+	if len(q.slots) > 0 && len(q.slots[i].alts) > 1 {
+		return "1" + q.slots[i].key
+	}
+	return "0" + q.slotLabel(i)
+}
+
+func (q compiledQuery) slotDefaultWeight(i int) float64 {
+	if len(q.slots) > 0 {
+		return q.slots[i].defaultWeight
+	}
+	return float64(len(q.matchers[i].term))
+}
+
+func (q compiledQuery) slotAlts(i int) []termMatcher {
+	if len(q.slots) > 0 {
+		return q.slots[i].alts
+	}
+	return q.matchers[i : i+1]
+}
+
+func (q compiledQuery) slotAltTerm(i, alt int) string { return q.slotAlts(i)[alt].term }
+
+func (q compiledQuery) slotFindAllDetailed(i int, text string) []slotMatch {
+	if len(q.slots) > 0 {
+		return q.slots[i].findAllDetailed(text)
+	}
+	return (querySlot{alts: q.slotAlts(i)}).findAllDetailed(text)
+}
+
+func (q compiledQuery) hasMultiAltSlot() bool {
+	for _, slot := range q.slots {
+		if len(slot.alts) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // QueryOptions defines immutable matching behavior for a compiled query.
@@ -146,27 +240,217 @@ func NormalizeQueryTerms(terms []string) []string {
 	return NormalizeQueryTermsWithOptions(terms, QueryOptions{})
 }
 
-// NormalizeQueryTermsWithOptions canonicalizes and deduplicates query terms.
+// NormalizeQueryTermsWithOptions canonicalizes query slots, returning nil on
+// invalid syntax. Error-aware callers should use the validating variant.
 func NormalizeQueryTermsWithOptions(terms []string, options QueryOptions) []string {
+	normalized, _ := NormalizeAndValidateQueryTermsWithOptions(terms, options)
+	return normalized
+}
+
+// splitORGroup interprets backslash runs only immediately before a pipe.
+// Raw groups are bounded before deduplication or matcher allocation.
+func splitORGroup(raw string) ([]string, bool, error) {
+	if !strings.Contains(raw, "|") {
+		return []string{raw}, false, nil
+	}
+	var alts []string
+	var alt strings.Builder
+	hasUnescapedPipe := false
+	for i := 0; i < len(raw); {
+		start := i
+		for i < len(raw) && raw[i] == '\\' {
+			i++
+		}
+		if i < len(raw) && raw[i] == '|' {
+			count := i - start
+			alt.WriteString(raw[start : start+count/2])
+			i++
+			if count%2 == 1 {
+				alt.WriteByte('|')
+				continue
+			}
+			hasUnescapedPipe = true
+			if len(alts) == MaxAlternativesPerGroup-1 {
+				return nil, true, fmt.Errorf("OR-group %q exceeds maximum of %d alternatives per group", raw, MaxAlternativesPerGroup)
+			}
+			alts = append(alts, alt.String())
+			alt.Reset()
+		} else {
+			alt.WriteString(raw[start:i])
+			if i < len(raw) {
+				alt.WriteByte(raw[i])
+				i++
+			}
+		}
+	}
+	alts = append(alts, alt.String())
+	if hasUnescapedPipe {
+		for i := range alts {
+			alts[i] = strings.TrimSpace(alts[i])
+			if alts[i] == "" {
+				return nil, true, fmt.Errorf("invalid OR-group %q: empty alternative", raw)
+			}
+		}
+	}
+	return alts, hasUnescapedPipe, nil
+}
+
+// EscapeLiteralTerm encodes literal matcher bytes for a query-list API.
+// Do not use it with single-term literal APIs such as FindTermIndex.
+func EscapeLiteralTerm(lit string) string {
+	if !strings.Contains(lit, "|") {
+		return lit
+	}
+	var b strings.Builder
+	slashes := 0
+	for i := 0; i < len(lit); i++ {
+		if lit[i] == '|' {
+			b.WriteString(strings.Repeat(`\`, slashes+1))
+		}
+		b.WriteByte(lit[i])
+		if lit[i] == '\\' {
+			slashes++
+		} else {
+			slashes = 0
+		}
+	}
+	return b.String()
+}
+
+// NormalizeLiteralTermWithOptions normalizes one literal alternative without
+// interpreting pipes or adding query-syntax escapes.
+func NormalizeLiteralTermWithOptions(term string, options QueryOptions) string {
+	term = collapseStars(strings.TrimSpace(term))
+	if !options.CaseSensitive {
+		term = lowerWithinSimpleFoldOrbit(term)
+	}
+	return term
+}
+
+func formatCanonicalSlot(alts []string) string {
+	var b strings.Builder
+	for i, alt := range alts {
+		b.WriteString(EscapeLiteralTerm(alt))
+		if i < len(alts)-1 {
+			// Double trailing backslashes so the separator remains unescaped.
+			b.WriteString(alt[len(strings.TrimRight(alt, `\`)):])
+			b.WriteByte('|')
+		}
+	}
+	return b.String()
+}
+
+// NormalizeAndValidateQueryTerms uses the default case-insensitive contract.
+func NormalizeAndValidateQueryTerms(terms []string) ([]string, error) {
+	return NormalizeAndValidateQueryTermsWithOptions(terms, QueryOptions{})
+}
+
+// NormalizeAndValidateQueryTermsWithOptions returns idempotent encoded slots.
+// Non-OR inputs remain uncapped; raw OR use activates bounds even if all of a
+// group's alternatives deduplicate to one literal term.
+func NormalizeAndValidateQueryTermsWithOptions(terms []string, options QueryOptions) ([]string, error) {
 	normalized := make([]string, 0, len(terms))
 	seen := make(map[string]struct{}, len(terms))
-	for _, term := range terms {
-		term = collapseStars(strings.TrimSpace(term))
-		if term == "" {
+	hasOR, total := false, 0
+	for _, raw := range terms {
+		alts, grouped, err := splitORGroup(raw)
+		if err != nil {
+			return nil, err
+		}
+		hasOR = hasOR || grouped
+		var unique, keys []string
+		altSeen := make(map[string]bool, len(alts))
+		for _, alt := range alts {
+			alt = NormalizeLiteralTermWithOptions(alt, options)
+			if alt == "" {
+				continue
+			}
+			key := alt
+			if !options.CaseSensitive {
+				key = unicodeFoldKey(alt)
+			}
+			if !altSeen[key] {
+				altSeen[key] = true
+				unique = append(unique, alt)
+				keys = append(keys, key)
+			}
+		}
+		if len(unique) == 0 {
 			continue
 		}
-		key := term
-		if !options.CaseSensitive {
-			term = lowerWithinSimpleFoldOrbit(term)
-			key = unicodeFoldKey(term)
-		}
+		key := canonicalSlotKey(keys)
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
-		normalized = append(normalized, term)
+		normalized = append(normalized, formatCanonicalSlot(unique))
+		total += len(unique)
 	}
-	return normalized
+	if hasOR && len(normalized) > MaxQuerySlots {
+		return nil, fmt.Errorf("OR-expanded query exceeds maximum of %d search slots", MaxQuerySlots)
+	}
+	if hasOR && total > MaxQueryTerms {
+		return nil, fmt.Errorf("OR-expanded query exceeds maximum of %d total search terms across slots", MaxQueryTerms)
+	}
+	return normalized, nil
+}
+
+// ValidateExcludeTerms validates the shared pipe grammar without applying
+// positive-query normalization, wildcard expansion, or deduplication.
+func ValidateExcludeTerms(terms []string) error {
+	hasOR, total := false, 0
+	for _, raw := range terms {
+		alts, grouped, err := splitORGroup(raw)
+		if err != nil {
+			return err
+		}
+		hasOR = hasOR || grouped
+		total += len(alts)
+	}
+	if hasOR && total > MaxExcludeTerms {
+		return fmt.Errorf("OR-expanded --not exceeds maximum of %d exclusion terms", MaxExcludeTerms)
+	}
+	return nil
+}
+
+// SplitExcludeWords partitions validated query-syntax exclusions into literal
+// extensions (including the dot) and literal words. Returned values must not
+// be parsed as query syntax again. Invalid inputs return no exclusions; public
+// error-aware entry points must call ValidateExcludeTerms first.
+func SplitExcludeWords(terms []string) (extensions, words []string) {
+	if ValidateExcludeTerms(terms) != nil {
+		return nil, nil
+	}
+	for _, raw := range terms {
+		alts, _, _ := splitORGroup(raw)
+		for _, alt := range alts {
+			alt = strings.TrimSpace(alt)
+			if strings.HasPrefix(alt, ".") {
+				extensions = append(extensions, alt)
+			} else if alt != "" {
+				words = append(words, alt)
+			}
+		}
+	}
+	return
+}
+
+// SplitExcludeDisplay removes extension dots and retains word OR-groups as
+// encoded slot labels for display, including mixed extension/word groups.
+func SplitExcludeDisplay(terms []string) (extensions, words []string) {
+	if ValidateExcludeTerms(terms) != nil {
+		return nil, nil
+	}
+	for _, raw := range terms {
+		exts, alts := SplitExcludeWords([]string{raw})
+		for _, ext := range exts {
+			extensions = append(extensions, strings.TrimPrefix(ext, "."))
+		}
+		if len(alts) > 0 {
+			words = append(words, formatCanonicalSlot(alts))
+		}
+	}
+	return
 }
 
 func lowerWithinSimpleFoldOrbit(s string) string {
@@ -244,26 +528,47 @@ func compileQuery(terms []string, mode PartialMode) compiledQuery {
 }
 
 func compileQueryWithOptions(terms []string, mode PartialMode, options QueryOptions) compiledQuery {
-	normalized := NormalizeQueryTermsWithOptions(terms, options)
+	query, _ := compileQueryChecked(terms, mode, options)
+	return query
+}
+
+func compileQueryChecked(terms []string, mode PartialMode, options QueryOptions) (compiledQuery, error) {
+	normalized, err := NormalizeAndValidateQueryTermsWithOptions(terms, options)
+	if err != nil {
+		return compiledQuery{}, err
+	}
 	query := compiledQuery{
 		terms:    append([]string(nil), normalized...),
 		matchers: make([]termMatcher, 0, len(normalized)),
 		slots:    make([]querySlot, 0, len(normalized)),
 	}
-	for _, term := range normalized {
-		matcher := compileTermMatcherWithOptions(term, mode, options)
-		query.matchers = append(query.matchers, matcher)
-		query.slots = append(query.slots, querySlot{label: term, alts: []termMatcher{matcher}})
-		if matcher.maxMatchBytes < 0 {
-			query.maxMatchBytes = -1
-		} else if query.maxMatchBytes >= 0 && matcher.maxMatchBytes > query.maxMatchBytes {
-			query.maxMatchBytes = matcher.maxMatchBytes
+	for s, term := range normalized {
+		alts, _, _ := splitORGroup(term) // Canonical output is valid and round-trips.
+		slot := querySlot{label: term}
+		var keys []string
+		for _, alt := range alts {
+			matcher := compileTermMatcherWithOptions(alt, mode, options)
+			slot.alts = append(slot.alts, matcher)
+			slot.defaultWeight = max(slot.defaultWeight, float64(len(alt)))
+			key := alt
+			if !options.CaseSensitive {
+				key = unicodeFoldKey(alt)
+			}
+			keys = append(keys, key)
+			query.matchers = append(query.matchers, matcher)
+			query.matcherAlts = append(query.matcherAlts, len(query.altSlots))
+			query.altSlots = append(query.altSlots, s)
+			if matcher.maxMatchBytes < 0 {
+				query.maxMatchBytes = -1
+			} else if query.maxMatchBytes >= 0 && matcher.maxMatchBytes > query.maxMatchBytes {
+				query.maxMatchBytes = matcher.maxMatchBytes
+			}
+			query.maxDetectionBytes = max(query.maxDetectionBytes, matcher.detectionBytes)
 		}
-		if matcher.detectionBytes > query.maxDetectionBytes {
-			query.maxDetectionBytes = matcher.detectionBytes
-		}
+		slot.key = canonicalSlotKey(keys)
+		query.slots = append(query.slots, slot)
 	}
-	return query
+	return query, nil
 }
 
 func compileTermMatcher(term string, requestedMode PartialMode, caseInsensitive bool) termMatcher {

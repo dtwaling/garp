@@ -484,10 +484,13 @@ func parseArguments(args []string) *Arguments {
 			}
 		}
 	}
-	result.SearchWords = search.NormalizeQueryTermsWithOptions(result.SearchWords, search.QueryOptions{
+	normalized, normErr := search.NormalizeAndValidateQueryTermsWithOptions(result.SearchWords, search.QueryOptions{
 		CaseSensitive: result.CaseSensitive,
 		SmartForms:    result.SmartForms,
 	})
+	result.SearchWords = normalized
+	setParseError(normErr)
+	setParseError(search.ValidateExcludeTerms(result.ExcludeWords))
 
 	// Auto-derive HeavyConcurrency when not explicitly provided: base on workers and available RAM
 	if !heavyProvided {
@@ -633,6 +636,8 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("                          Bare form selects prefix; off and none select whole-word matching."))
 	fmt.Println(infoStyle.Render("                          Tip: valid query terms support inline * and ?."))
 	fmt.Println(infoStyle.Render("                          Invalid or over-limit wildcard terms match literally. See README for bounds."))
+	fmt.Println(infoStyle.Render(`  'a|b|c'                 OR-group: alternatives fill one search term slot; quote in the shell.`))
+	fmt.Println(infoStyle.Render(`                          Use \| for a literal pipe, e.g. 'alpha\|beta'.`))
 	fmt.Println(infoStyle.Render("  --distance N            Proximity window in UTF-8 bytes (default 5000)"))
 	fmt.Println(infoStyle.Render("  -m, --max-count N       Alias for --max-excerpts, not an rg line-count limit"))
 	fmt.Println(infoStyle.Render("  --max-excerpts N        Maximum excerpts per file; >=90% new content (up to 10% overlap; default 1, max 50)"))
@@ -671,6 +676,7 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("                         Preferred over --plain for agent/MCP callers -- unambiguous, no parse fragility."))
 	fmt.Println(infoStyle.Render("  --not ...               Tokens after this are exclusions;"))
 	fmt.Println(infoStyle.Render("                          extensions starting with '.' exclude types; others exclude words"))
+	fmt.Println(infoStyle.Render("                          --not 'a|b' excludes either word; --not '.pdf|.docx' excludes both types"))
 	fmt.Println(infoStyle.Render("  --                      Stop flag parsing; remaining tokens are literal terms or exclusions"))
 	fmt.Println(infoStyle.Render("  -C/-A/-B context flags are not supported; use --distance and --max-excerpts"))
 	fmt.Println(infoStyle.Render("  Value flags accept both --flag VALUE and --flag=VALUE forms"))
@@ -684,6 +690,7 @@ func showUsage() {
 	fmt.Println(infoStyle.Render("  garp contract payment agreement"))
 	fmt.Println(infoStyle.Render("  garp contract payment agreement --distance 200"))
 	fmt.Println(infoStyle.Render("  garp mutex changed --code"))
+	fmt.Println(infoStyle.Render("  garp 'ignore|skip|exclude|prune' walk gitignore --code"))
 	fmt.Println(infoStyle.Render("  garp bank wire update --not .txt test"))
 	fmt.Println(infoStyle.Render("  garp approval crypto gemini --smart-forms"))
 	fmt.Println(infoStyle.Render("  garp report earnings --only pdf"))

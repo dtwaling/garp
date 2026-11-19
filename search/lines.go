@@ -170,7 +170,8 @@ func (li *lineIndexer) lineOf(off int) int {
 // lines. A value of 0 means unknown.
 func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compiledQuery, window int) []int {
 	out := make([]int, len(spans))
-	if raw == "" || len(spans) == 0 || len(query.matchers) == 0 {
+	slotCount := query.slotCount()
+	if raw == "" || len(spans) == 0 || slotCount == 0 {
 		return out
 	}
 
@@ -206,10 +207,10 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 		index   int
 		offsets []int
 	}
-	infos := make([]termInfo, 0, len(query.matchers))
+	infos := make([]termInfo, 0, slotCount)
 
-	for index, matcher := range query.matchers {
-		locs := matcher.findAll(raw)
+	for index := 0; index < slotCount; index++ {
+		locs := query.slotFindAll(index, raw)
 		offs := make([]int, 0, len(locs))
 		for _, l := range locs {
 			if retained[l.start] {
@@ -242,8 +243,8 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 	var prefixes map[int]codePrefix
 	var documents []mappedContent
 	documentsReady := false
-	sourceCounts := make([]int, len(query.matchers))
-	first := make([]int, len(query.matchers))
+	sourceCounts := make([]int, slotCount)
+	first := make([]int, slotCount)
 	present := make([]*termInfo, 0, len(infos))
 	// The fallback prefers anchors beyond every match in the previous cluster.
 	// Exact identities may still resolve excerpts emitted in ranking order.
@@ -335,7 +336,7 @@ func computeExcerptSpanLinesQuery(raw string, spans []excerptSpan, query compile
 			if first[infos[j].index] != -1 {
 				present = append(present, &infos[j])
 				if anchor == nil || len(infos[j].offsets) < len(anchor.offsets) ||
-					(len(infos[j].offsets) == len(anchor.offsets) && query.slotLabel(infos[j].index) < query.slotLabel(anchor.index)) {
+					(len(infos[j].offsets) == len(anchor.offsets) && query.slotKey(infos[j].index) < query.slotKey(anchor.index)) {
 					anchor = &infos[j]
 				}
 			}

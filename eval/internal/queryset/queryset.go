@@ -69,6 +69,8 @@ var termPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+\*?$`)
 // Only the listed spellings are allowed; numeric values follow garp's positive
 // integer contract. Harness-owned options must never reach the term fallback.
 func validateArgs(args []string) error {
+	slots, alternatives := 0, 0
+	hasOR := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch a {
@@ -83,10 +85,25 @@ func validateArgs(args []string) error {
 				return fmt.Errorf("%s needs a positive integer, got %q", a, args[i])
 			}
 		default:
-			if strings.HasPrefix(a, "-") || !termPattern.MatchString(a) {
+			if strings.HasPrefix(a, "-") {
 				return fmt.Errorf("disallowed token %q", a)
 			}
+			alts := strings.Split(a, "|")
+			hasOR = hasOR || len(alts) > 1
+			if len(alts) > search.MaxAlternativesPerGroup {
+				return fmt.Errorf("too many alternatives in %q", a)
+			}
+			for _, alt := range alts {
+				if !termPattern.MatchString(alt) {
+					return fmt.Errorf("disallowed alternative %q in %q", alt, a)
+				}
+			}
+			slots++
+			alternatives += len(alts)
 		}
+	}
+	if hasOR && (slots > search.MaxQuerySlots || alternatives > search.MaxQueryTerms) {
+		return fmt.Errorf("OR-expanded query exceeds slot or term limit")
 	}
 	return nil
 }

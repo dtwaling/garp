@@ -10,11 +10,187 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestMultiAltProximityEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		text           string
+		alts           []string
+		distance, span int
+		winner         string
+		mode           PartialMode
+	}{
+		{"alpha beta gamma delta", []string{"alpha beta gamma", "gamma"}, 6, 11, "gamma", PartialModeOff},
+		{"delta alpha beta gamma", []string{"alpha beta gamma", "gamma"}, 8, 22, "alpha beta gamma", PartialModeOff},
+		{"alpha beta gamma delta", []string{"alpha beta", "beta gamma"}, 11, 16, "beta gamma", PartialModeOff},
+		{"delta alpha beta gamma", []string{"alpha beta", "beta gamma"}, 8, 16, "alpha beta", PartialModeOff},
+		{"delta xalphax gamma", []string{"alpha", "gamma"}, 20, len("delta xalphax gamma"), "gamma", PartialModeContains},
+		{"gamma xalphax delta", []string{"alpha", "gamma"}, 20, len("gamma xalphax delta"), "gamma", PartialModeContains},
+	} {
+		for _, alts := range [][]string{tc.alts, {tc.alts[1], tc.alts[0]}} {
+			q := multiAltQuery([][]string{alts, {"delta"}}, tc.mode)
+			an, ok := analyzeRankedText(tc.text, q, tc.distance, true)
+			wantTF := 1
+			if tc.mode == PartialModeContains {
+				wantTF = 2
+			}
+			if !ok || an.TermCount != 2 || an.BoundaryQuality != 2 || an.SpanLength != tc.span || !reflect.DeepEqual(an.MatchedTerms, []string{tc.winner, "delta"}) || an.SlotTF[0] != wantTF {
+				t.Errorf("%q %v: analysis=%+v admitted=%v", tc.text, alts, an, ok)
+			}
+			spans := extractRankedExcerptSpansQuery(tc.text, q, 1, 2, 2, true, tc.distance)
+			if len(spans) != 1 || spans[0].termCount != 2 {
+				t.Errorf("Stage 3 lost proximity evidence: %+v", spans)
+			}
+		}
+	}
+}
+
+func TestMultiAltMinimalWitnessWindows(t *testing.T) {
+	for _, tc := range []struct {
+		text                            string
+		terms, winners                  []string
+		distance, span, quality, chunks int
+		mode                            PartialMode
+	}{
+		{"alpha beta gamma", []string{"alpha|alpha beta gamma", "beta"}, []string{"alpha", "beta"}, 100, 10, 2, 1, PartialModeOff},
+		{"alpha beta gamma", []string{"alpha|alpha beta gamma", "gamma"}, []string{"alpha beta gamma", "gamma"}, 100, 16, 2, 1, PartialModeOff},
+		{"alpha beta gamma", []string{"alpha|alpha beta gamma"}, []string{"alpha"}, 100, 5, 1, 1, PartialModeOff},
+		{"beta xx alpha yy zz", []string{"beta", "alpha|xx alpha yy zz"}, []string{"beta", "alpha"}, 100, 13, 2, 1, PartialModeOff},
+		{"beta alpha gamma delta xxxx", []string{"beta", "alpha|alpha gamma delta xxxx", "gamma"}, []string{"beta", "alpha", "gamma"}, 100, 16, 3, 1, PartialModeOff},
+		{"alpha xx beta yy zz ww", []string{"alpha|xx beta yy zz ww", "beta"}, []string{"alpha", "beta"}, 100, 13, 2, 1, PartialModeOff},
+		{"alpha xx beta yy zz ww", []string{"alpha|xx beta yy zz ww", "beta"}, []string{"xx beta yy zz ww", "beta"}, 3, 16, 2, 1, PartialModeOff},
+		{"beta xalpha gamma delta beta xalpha gamma delta", []string{"beta", "alpha|xalpha gamma delta beta", "gamma"}, []string{"beta", "xalpha gamma delta beta", "gamma"}, 100, 23, 3, 2, PartialModeContains},
+		{"alpha beta", []string{"alpha", "beta"}, []string{"alpha", "beta"}, 100, 10, 2, 1, PartialModeOff},
+		{"alpha beta filler omega beta", []string{"alpha|omega", "beta"}, []string{"alpha", "beta"}, 100, 10, 2, 2, PartialModeOff},
+	} {
+		t.Run(tc.text+fmt.Sprint(tc.distance), func(t *testing.T) {
+			var permute func([]string, []string, int)
+			permute = func(terms, winners []string, at int) {
+				if at < len(terms) {
+					for i := at; i < len(terms); i++ {
+						terms[at], terms[i] = terms[i], terms[at]
+						winners[at], winners[i] = winners[i], winners[at]
+						alts := strings.Split(terms[at], "|")
+						for n := 0; n < len(alts); n++ {
+							terms[at] = strings.Join(alts, "|")
+							permute(terms, winners, at+1)
+							slices.Reverse(alts)
+						}
+						terms[at] = strings.Join(alts, "|")
+						terms[at], terms[i] = terms[i], terms[at]
+						winners[at], winners[i] = winners[i], winners[at]
+					}
+					return
+				}
+				q := compileQuery(terms, tc.mode)
+				an, ok := analyzeRankedText(tc.text, q, tc.distance, true)
+				if !ok || an.SpanLength != tc.span || an.BoundaryQuality != tc.quality || an.TopQualityChunks != tc.chunks || !slices.Equal(an.MatchedTerms, winners) {
+					t.Fatalf("terms=%q: admitted=%v analysis=%+v; want span=%d quality=%d chunks=%d winners=%q", terms, ok, an, tc.span, tc.quality, tc.chunks, winners)
+				}
+				cat := analyzeRankedCatalog(tc.text, q, tc.distance, true, false)
+				resolved, ok := resolveRankedCatalog(cat, q, tc.distance, true, false, nil, nil, nil)
+				if !ok || resolved.SpanLength != an.SpanLength || resolved.TopQualityChunks != an.TopQualityChunks || !slices.Equal(resolved.MatchedTerms, an.MatchedTerms) {
+					t.Fatalf("catalog disagrees: %+v vs %+v", resolved, an)
+				}
+			}
+			permute(slices.Clone(tc.terms), slices.Clone(tc.winners), 0)
+		})
+	}
+}
+
+func TestMultiAltDisjointTFAndScoring(t *testing.T) {
+	for _, alts := range [][]string{
+		{"alpha beta", "beta gamma", "gamma delta"},
+		{"alpha beta gamma delta", "alpha beta", "gamma delta"},
+	} {
+		var reference rankedTextAnalysis
+		var referenceScore float64
+		for n, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+			q := multiAltQuery([][]string{{alts[order[0]], alts[order[1]], alts[order[2]]}}, PartialModeOff)
+			text := "alpha beta gamma delta"
+			an, ok := analyzeRankedText(text, q, 100, true)
+			cat := analyzeRankedCatalog(text, q, 100, true, false)
+			if !ok || an.TermCount != 1 || an.SlotTF[0] != 2 || cat.SlotTF[0] != 2 || len(q.slotFindAll(0, text)) != 3 {
+				t.Fatalf("disjoint TF/evidence: %+v catalog=%+v", an, cat)
+			}
+			score := scoreAnalyzedDocument(an, q, nil, buildCorpusStats(1, 10, 40, []int{2}), 100)
+			if n == 0 {
+				reference, referenceScore = an, score
+			} else if !reflect.DeepEqual(an, reference) || score != referenceScore {
+				t.Fatalf("permutation changed analysis/score: %+v/%v vs %+v/%v", an, score, reference, referenceScore)
+			}
+		}
+	}
+	q := multiAltQuery([][]string{{"prune", "ignore", "skip", "exclude"}, {"walk"}, {"gitignore"}}, PartialModeOff)
+	text := "prune ignore skip exclude"
+	for _, strict := range []bool{false, true} {
+		if _, ok := analyzeRankedText(text, q, 100, strict); ok {
+			t.Fatal("alternatives counted as separate slots")
+		}
+	}
+	an, ok := analyzeRankedTextWithOptions(text, q, 100, false, true, []bool{true, false, false}, nil)
+	if !ok || an.TermCount != 1 || an.SlotTF[0] != 4 {
+		t.Fatalf("fallback: %+v %v", an, ok)
+	}
+	if _, ok := analyzeRankedTextWithOptions(text, q, 100, false, true, []bool{false, true, true}, nil); ok {
+		t.Fatal("common slot admitted rare fallback")
+	}
+}
+
+func TestMultiAltSlotPermutationInvariance(t *testing.T) {
+	text := "deploy prune walk ignore skip"
+	groups := [][]string{{"prune", "ignore", "skip"}, {"walk"}, {"deploy", "nomatch"}}
+	dfByKey := map[string]int{"prune": 2, "walk": 4, "deploy": 6}
+	type result struct {
+		score         float64
+		term, quality int
+		span, chunks  int
+		pathCount     int
+		tf0           int
+	}
+	var ref result
+	have := false
+	for _, slotOrder := range [][]int{{0, 1, 2}, {2, 0, 1}, {1, 2, 0}} {
+		for _, flip := range []bool{false, true} {
+			var ordered [][]string
+			df := make([]int, len(groups))
+			for i, g := range slotOrder {
+				alts := append([]string(nil), groups[g]...)
+				if flip {
+					slices.Reverse(alts)
+				}
+				ordered = append(ordered, alts)
+				df[i] = dfByKey[groups[g][0]]
+			}
+			q := multiAltQuery(ordered, PartialModeOff)
+			an, ok := analyzeRankedText(text, q, 100, true)
+			if !ok {
+				t.Fatalf("order=%v flip=%v rejected", slotOrder, flip)
+			}
+			pathSlots, pathCount := pathMatchStats("/root/skip/walk.txt", "/root", q)
+			score := scoreAnalyzedDocument(an, q, pathSlots, buildCorpusStats(3, 20, 200, df), 100)
+			got := result{score, an.TermCount, an.BoundaryQuality, an.SpanLength, an.TopQualityChunks, pathCount, 0}
+			for i, g := range slotOrder {
+				if g == 0 {
+					got.tf0 = an.SlotTF[i]
+				}
+			}
+			if got.term != 3 || got.pathCount != 2 || got.tf0 != 3 {
+				t.Fatalf("order=%v flip=%v: %+v (one path hit per slot, TF per slot)", slotOrder, flip, got)
+			}
+			if !have {
+				ref, have = got, true
+			} else if got != ref {
+				t.Fatalf("order=%v flip=%v: %+v != %+v", slotOrder, flip, got, ref)
+			}
+		}
+	}
+}
 
 func TestRoundAndFormatScore(t *testing.T) {
 	for _, tc := range []struct {

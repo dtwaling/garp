@@ -79,6 +79,14 @@ eval:
 	cd eval && GOPROXY=off go build -o ../bin/eval-harness ./cmd/eval
 	@cd eval && ../bin/eval-harness -cache "$(abspath $(EVAL_CACHE))" -candidate ../bin/garp-eval -previous "$(abspath $(EVAL_CACHE))/bin/garp-$(EVAL_BASELINE_REF)" -previous-ref "$(EVAL_BASELINE_REF)" -baseline "results/$(EVAL_BASELINE_REF).json" -out results/latest; s=$$?; [ $$s -eq 0 ] || echo "eval: harness exit $$s (1 = quality regression, 2 = harness or setup error)" >&2; exit $$s
 
+# Compare synonym expansion with original wording on the same binary.
+eval-or:
+	@mkdir -p bin
+	@$(RESTORE_BINS)
+	CGO_ENABLED=0 GOPROXY=off go build $(BUILD_FLAGS) -o bin/garp-eval .
+	cd eval && GOPROXY=off go build -o ../bin/eval-harness ./cmd/eval
+	@cd eval && ../bin/eval-harness -cache "$(abspath $(EVAL_CACHE))" -candidate ../bin/garp-eval -previous ../bin/garp-eval -previous-ref single-wording -synonym-or queries/synonym_or.json -out results/latest.or; s=$$?; [ $$s -eq 0 ] || echo "eval-or: harness exit $$s (1 = quality regression, 2 = harness or setup error)" >&2; exit $$s
+
 # Record the previous release as candidate without applying the quality gate.
 eval-baseline:
 	@mkdir -p bin
@@ -147,6 +155,7 @@ help:
 	@echo "  eval-test - Unit tests of the eval harness (no corpus)"
 	@echo "  eval-fetch - Fetch pinned eval corpora and build the previous release"
 	@echo "  eval     - Run offline retrieval evaluation and regression gate"
+	@echo "  eval-or  - Run paired synonym OR-expansion evaluation and gate"
 	@echo "  eval-baseline - Record the previous-release evaluation without gating"
 	@echo "  fmt      - Format Go code"
 	@echo "  tidy     - Run go mod tidy"
@@ -158,4 +167,4 @@ help:
 	@echo "  uninstall- Remove from ~/.local/bin"
 	@echo "  help     - Show this help"
 
-.PHONY: all build clean dist release test eval-test eval-fetch eval eval-baseline fmt tidy deps dev run install install-pdfcpu uninstall help
+.PHONY: all build clean dist release test eval-test eval-fetch eval eval-or eval-baseline fmt tidy deps dev run install install-pdfcpu uninstall help

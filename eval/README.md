@@ -13,6 +13,7 @@ Run these targets from the repository root on Linux or macOS, with Go (see
 ```sh
 make eval-fetch     # Network allowed: pinned corpora, Go modules, previous binary
 make eval           # Offline: build candidate and harness, score and gate
+make eval-or        # Offline: paired original wording / synonym OR expansion
 make eval-test      # Harness unit tests, no corpus required
 make eval-baseline  # Record the previous release as candidate, without gating
 ```
@@ -67,7 +68,13 @@ timing; markdown includes machine-dependent timing and unjudged paths.
    slash-separated and relative to that root, and must belong to the manifest.
    Gold `lines: [a,b]` is an inclusive, 1-based LF-counted range for text/code;
    omit it for PDF, DOC, DOCX, RTF, EML, and MSG.
-3. Terms match `[A-Za-z0-9_.-]+` with an optional final `*`. Query flags allowed
+3. Each alternative matches `[A-Za-z0-9_.-]+` with an optional final `*`.
+   The harness accepts `a|b|c` slots for synonym overlays, with at most 16
+   alternatives per group, 32 slots and 64 alternatives total in OR-expanded
+   args (counted before deduplication). Empty alternatives are invalid.
+   Frozen base queries remain single-wording: put expansions in the paired
+   overlay described below, not in `queries/docs.json` or `queries/code.json`.
+   Query flags allowed
    are `--distance N`, `--strict`, `--partial`, `--partial=prefix|contains`,
    `--smart-forms`, and `-m N`. Do not put harness-owned flags (`--json`,
    `--startdir`, `--no-ignore`, `--file-timeout-binary`, `--code`, or
@@ -137,7 +144,10 @@ in both files.
    `--partial=prefix`, `--partial=contains`, or `--smart-forms` skip presence
    checks for all three kinds because exact-token presence cannot establish
    broadened matches; term-count requirements still apply. These checks are
-   not substitutes for reading the source.
+   not substitutes for reading the source. Kind checks run on the frozen
+   single-wording queries **before** applying the OR overlay; base queries
+   containing OR-groups are rejected. The expanded wording deliberately
+   bridges missing vocabulary and is not reclassified by these checks.
 7. **Independent second judge.** An analyst reviews a gold-stripped packet
    and blind pool, deriving answers before opening the author's labels. The
    minimum sample is six docs (one per required extracted format) and six
@@ -212,6 +222,96 @@ does not justify calling relevant content nonrelevant. Comparisons below
 measure the retained key; query/schema correction requires separate approval.
 Keep this assumption visible at the human PR gate rather than silently closing it.
 
+### Paired synonym OR evaluation and known key gaps
+
+`make eval-or` runs the same candidate binary twice: original wording as
+`previous`, and `queries/synonym_or.json` expansions as `candidate`. BM25 and
+ripgrep also use the expansions. The frozen base queries, gold and v0.10.0
+baseline are unchanged. `-synonym-or` is incompatible with `-baseline`; its
+own paired gate replaces the normal baseline requirement. `-no-gate` records
+results without applying either gate.
+
+Outputs are gitignored `results/latest.or.json` and `results/latest.or.md`.
+The table below reproduces persisted six-decimal `by_kind["synonym"]`
+metrics: **12 docs** and **14 code** queries eligible for strict lift,
+excluding registered
+`code-g-011`. Here `previous` means original wording on the **same current
+binary**, not v0.10.0. Single/proximity controls have zero delta, and all four
+systems have `unjudged10 == 0` on both corpora.
+
+| Corpus | Wording/system | R@1 | R@5 | R@10 | MRR@10 | hit@N |
+|---|---|---|---|---|---|---|
+| docs | previous (single-wording) | 0.416667 | 0.750000 | 0.750000 | 0.541667 | 0.750000 |
+| docs | candidate (OR-expanded) | 0.833333 | 0.916667 | 0.916667 | 0.875000 | 0.916667 |
+| code | previous (single-wording) | 0.357143 | 0.500000 | 0.642857 | 0.438776 | 0.500000 |
+| code | candidate (OR-expanded) | 0.285714 | 0.714286 | 0.892857 | 0.476786 | 0.535714 |
+
+Both eligible cohorts improve R@10 and hit@N, under the bounded precision
+exception below. This is **not** a claim of aggregate hit@N non-regression:
+the separately reported key-gap query has frozen-key hit@N `1.000000 ->
+0.000000`, and aggregate code hit@N is `0.572421 -> 0.560516`. The register
+does not award new gold credit. To check determinism, save `latest.or.json`,
+run `make eval-or` again and compare bytes; do not compare Markdown timing.
+
+The overlay's 27 expansions (12 docs, 15 code) were locked from needs and
+original args only, before inspecting gold or corpus content. The pre-judgment
+expansion lock is SHA-256
+`dc20fab4c224de445621f2c6b1641eba345ba8cbc2ec5a9dd146832342352b57`.
+Only sorted/deduplicated `extra_judged_nonrelevant` labels were added afterward;
+args, ordering and other fields remain unchanged. The blind pool introduced
+142 query/path pairs: 141 retained negatives and one confirmed key gap.
+
+**ASSUMED -- judgment-quality caveat requiring human PR-gate review:**
+129 agreeing negative labels were retained under explicit bounded-scope
+approval, not re-certified as complete close reads. Their earlier independent
+passes used shallow/head/keyword-context reading and generic rationales.
+The remaining 13 uncertain/disputed pairs received bounded, source-specific
+primary reads and a fresh isolated third judge: 12 negatives and one relevant
+path, with zero unresolved disagreements. Zero `unjudged10` therefore means
+coverage under this authorized disposition, not complete independent
+source-grounded certification of all 142 pairs. Do not silently close this
+limitation or claim a uniformly close-read two-judge pool.
+
+The required sibling `queries/synonym_or.key_gaps.json` records `id`, `path`
+(query-root-relative), `need`, and `evidence`. Custom overlays likewise require
+`<overlay stem>.key_gaps.json` (use `[]` when empty). The harness validates the
+register against expanded synonym queries, needs, manifest paths and existing
+judgments, and records both overlay and register SHA-256s in result metadata.
+`code-g-011` / `app/tui.go` is confirmed relevant: pinned lines 485-497 and
+826-831 sanitize untrusted excerpts before display. It remains absent from
+both frozen gold and nonrelevant labels. Registered paths count as adjudicated
+for coverage only, never as new gold credit or as nonrelevant.
+
+Query IDs in the register are excluded from `by_kind.synonym` and reported
+separately under `by_kind.known_key_gap` and a Markdown per-query table.
+Per-query rows retain their original kind; corpus aggregates still include
+all queries. Their recall/hit metrics use the incomplete frozen gold and must
+not be interpreted as corrected relevance estimates. Only strict synonym
+lift excludes the registered IDs; single/proximity equality and aggregate
+non-regression checks remain in force, with the bounded exception below.
+The gate requires zero unjudged top-10 paths in all four systems and strict
+R@10 and hit@N lift in both eligible synonym cohorts. JSON is deterministic;
+Markdown timing remains informational.
+
+**ASSUMED -- authorized bounded top-rank precision tradeoff:**
+`code-g-008`'s frozen gold `search/engine.go` moves from rank 1 to rank 2:
+an OR-expanded third slot admits a judged-nonrelevant competitor above it.
+Only this exact single-gold rank transition permits a code synonym R@1 drop
+of at most `0.10` and aggregate code R@1 drop of at most `0.03` (with `1e-9`
+comparison tolerance), and only while strict R@10/hit@N lift holds on both
+eligible cohorts. The observed code R@1 changes are `0.357143 -> 0.285714`
+(synonym) and `0.534722 -> 0.510913` (aggregate). That query's reciprocal rank
+necessarily falls from 1 to 0.5; synonym and aggregate R@5/MRR@10 must still
+not regress. All other code queries and every docs query retain per-query
+R@1/R@5/MRR@10 non-regression at `candidate >= previous - 1e-9`, preventing
+cohort gains from hiding another query's loss. No expansions or frozen keys
+were changed to recover rank.
+
+The bounded precision tradeoff, confirmed key gap, and 129-label caveat
+remain explicit `ASSUMED` items for human review in the eventual PR; the key
+gap and judgment-quality confirmation remain open, not grounds to tune
+expansions after seeing metrics.
+
 ## Metric definitions
 
 Rankings are deduplicated in output order. R@k and MRR@10 use distinct gold
@@ -263,13 +363,18 @@ Step 2 extends settled decision 4 of the implementation plan, which described
 only removing `rootAbs/`: leaving the echoed root would retain machine-local
 path length in token counts. It is an explicit divergence from that plan text.
 
-The candidate and previous run identical args plus `--json --startdir <root>`
+In ordinary evaluation, candidate and previous run identical args; in paired
+OR evaluation, only candidate uses expanded args. Both add `--json --startdir <root>`
 `--no-ignore --file-timeout-binary 60000` and, for code, `--code`. Any timeout
 is a harness error; a nonzero garp process exit is recorded as an error and an
 empty ranking (a scored miss). BM25 uses garp extraction/cleaning, Unicode
 lowercase letter/digit tokens, k1=1.2, b=0.75, no stemming or stopwords, and
-path tie-breaking for its positive-score top 50. rg is an AND pipeline of
-case-insensitive whole-word literal terms with default binary handling,
+path tie-breaking for its positive-score top 50. For OR queries, BM25 flattens
+the union of alternative tokens (deduplicated after trailing-`*` vocabulary
+expansion); it does not enforce slot conjunction. Ordinary queries retain
+their original token multiplicity. rg is an AND-across-slots pipeline with
+OR-within-slot `-e` patterns, using case-insensitive whole-word literal terms
+and default binary handling,
 `--no-config --no-ignore --hidden --sort path`; trailing `*` uses prefix
 matching. BM25 and rg ignore query flags.
 
@@ -389,6 +494,8 @@ build. Timing is informational and omitted from deterministic JSON.
   count as nonrelevant; new retrieval strategies require additional judging.
   The second judge samples the key rather than independently relabeling all
   84 queries. Do not generalize these small-corpus scores to every workload.
-- Query syntax is deliberately limited (no OR groups, `--not`, or mid-term
-  wildcards). There is no agent-in-the-loop evaluation, CI integration, or
-  mbox/XLSX/PPTX corpus. Upstream availability is needed for an uncached fetch.
+- Harness query syntax is deliberately narrower than the CLI: OR-groups are
+  supported in paired synonym overlays, but `--not`, literal-pipe escaping,
+  and mid-term wildcards are not. There is no agent-in-the-loop evaluation,
+  CI integration, or mbox/XLSX/PPTX corpus. Upstream availability is needed
+  for an uncached fetch.

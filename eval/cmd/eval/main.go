@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -36,6 +38,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	previous := flags.String("previous", "", "previous garp binary (required)")
 	previousRef := flags.String("previous-ref", "", "previous release ref (required except with -pool)")
 	baselinePath := flags.String("baseline", "", "baseline results JSON")
+	synonymOR := flags.String("synonym-or", "", "paired synonym OR overlay (incompatible with -baseline)")
 	out := flags.String("out", "results/latest", "output prefix for JSON and markdown")
 	noGate := flags.Bool("no-gate", false, "record results without regression gating")
 	pool := flags.String("pool", "", "blind pool for comma-separated query IDs; writes no results")
@@ -59,6 +62,9 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	if flags.NArg() != 0 {
 		return fail(fmt.Errorf("unexpected positional arguments"))
 	}
+	if *synonymOR != "" && *baselinePath != "" {
+		return fail(fmt.Errorf("-baseline cannot be combined with -synonym-or"))
+	}
 	if _, err := exec.LookPath("rg"); err != nil {
 		return fail(fmt.Errorf("rg is required: %w", err))
 	}
@@ -73,6 +79,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	type input struct {
 		manifest corpus.Manifest
 		set      queryset.Set
+		origSet  queryset.Set
 		paths    []string
 		indexes  map[string]*systems.Index
 	}
@@ -94,7 +101,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		if m.Corpus != name || s.Corpus != name {
 			return fail(fmt.Errorf("%s: corpus name mismatch", name))
 		}
-		in := &input{manifest: m, set: s, indexes: make(map[string]*systems.Index)}
+		in := &input{manifest: m, set: s, origSet: s, indexes: make(map[string]*systems.Index)}
 		for _, f := range m.Files {
 			if err := corpus.Eligible(name, f.Path); err != nil {
 				return fail(err)
@@ -149,6 +156,29 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		}
 		result.Corpora[name] = c
 	}
+	// Kind checks above always see the frozen single-wording sets. Only now
+	// apply expansions; previous executes original args but shares judgments.
+	var keyGaps map[string][]string
+	if *synonymOR != "" {
+		sets, paths := make(map[string]queryset.Set), make(map[string][]string)
+		for _, name := range names {
+			sets[name], paths[name] = inputs[name].set, inputs[name].paths
+		}
+		overlaid, hash, err := loadSynonymOROverlay(*synonymOR, sets, paths)
+		if err != nil {
+			return fail(err)
+		}
+		for _, name := range names {
+			inputs[name].set = overlaid[name]
+		}
+		result.Harness.QuerySHA256["synonym_or"] = hash
+		gapFile := strings.TrimSuffix(*synonymOR, ".json") + ".key_gaps.json"
+		keyGaps, hash, err = loadSynonymORKeyGaps(gapFile, overlaid, paths)
+		if err != nil {
+			return fail(err)
+		}
+		result.Harness.QuerySHA256["synonym_or_key_gaps"] = hash
+	}
 	var baseline *report.Results
 	if *pool == "" {
 		if *baselinePath != "" {
@@ -163,7 +193,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 			if err := json.Unmarshal(data, baseline); err != nil {
 				return fail(err)
 			}
-		} else if !*noGate {
+		} else if !*noGate && *synonymOR == "" {
 			return fail(fmt.Errorf("baseline missing: run make eval-baseline"))
 		}
 		pv, err := systems.GarpVersion(*previous)
@@ -171,7 +201,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		result.Systems.Previous = report.Previous{Version: pv, Ref: *previousRef}
-		if !*noGate {
+		if !*noGate && *synonymOR == "" {
 			if err := report.Stale(*baseline, result); err != nil {
 				return fail(err)
 			}
@@ -195,7 +225,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	for _, name := range names {
 		in := inputs[name]
 		c := result.Corpora[name]
-		for _, q := range in.set.Queries {
+		for qi, q := range in.set.Queries {
 			if *pool != "" && !selected[q.ID] {
 				continue
 			}
@@ -214,7 +244,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 				case "candidate":
 					r, err = systems.RunGarp(*candidate, name, rootAbs, q.Args)
 				case "previous":
-					r, err = systems.RunGarp(*previous, name, rootAbs, q.Args)
+					r, err = systems.RunGarp(*previous, name, rootAbs, in.origSet.Queries[qi].Args)
 				case "rg":
 					r, err = systems.RunRG(rootAbs, q.Args)
 				case "bm25":
@@ -231,7 +261,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 					}
 					continue
 				}
-				scored, err := score(q, system, r, in.set.TokenBudget)
+				scored, err := score(q, system, r, in.set.TokenBudget, keyGaps[q.ID]...)
 				if err != nil {
 					return fail(fmt.Errorf("query %s: %w", q.ID, err))
 				}
@@ -256,10 +286,14 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		for _, system := range []string{"candidate", "previous", "bm25", "rg"} {
 			c.Aggregate[system] = report.Summarize(c.Queries, system)
 		}
-		for _, kind := range []string{"proximity", "synonym", "single"} {
+		for _, kind := range []string{"proximity", "synonym", "single", "known_key_gap"} {
 			var group []report.Query
 			for _, q := range c.Queries {
-				if q.Kind == kind {
+				groupKind := q.Kind
+				if len(keyGaps[q.ID]) > 0 {
+					groupKind = "known_key_gap"
+				}
+				if groupKind == kind {
 					group = append(group, q)
 				}
 			}
@@ -282,6 +316,25 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	if err := report.WriteMarkdown(&md, result, baseline); err != nil {
 		return fail(err)
 	}
+	if len(keyGaps) > 0 {
+		md.WriteString("### known key gaps (excluded from strict synonym lift)\n\nMetrics below and corpus aggregates use the incomplete frozen gold; registered paths are judged relevant but receive no gold credit.\n\n| query | paths | system | R@10 | hit@N |\n|---|---|---|---|---|\n")
+		for _, name := range names {
+			for _, q := range result.Corpora[name].Queries {
+				if len(keyGaps[q.ID]) == 0 {
+					continue
+				}
+				for _, system := range []string{"candidate", "previous", "bm25", "rg"} {
+					s := report.Summarize([]report.Query{q}, system)
+					hit := "n/a"
+					if s.HitN != nil {
+						hit = fmt.Sprintf("%.6f", *s.HitN)
+					}
+					fmt.Fprintf(&md, "| %s | %s | %s | %.6f | %s |\n", q.ID, strings.Join(keyGaps[q.ID], ", "), system, s.R10, hit)
+				}
+			}
+		}
+		md.WriteByte('\n')
+	}
 	status := 0
 	if !*noGate {
 		// Compare exactly the representations persisted on disk, not a rounded
@@ -290,14 +343,22 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		if err := json.Unmarshal(jsonOut.Bytes(), &current); err != nil {
 			return fail(err)
 		}
-		regressions := report.Gate(*baseline, current)
-		fmt.Fprintf(&md, "### regressions vs %s:", *baselinePath)
+		var regressions []string
+		if *synonymOR != "" {
+			regressions = synonymORGate(current)
+			fmt.Fprintf(&md, "### synonym-or gate vs previous (%s):", *previousRef)
+		} else {
+			for _, r := range report.Gate(*baseline, current) {
+				regressions = append(regressions, fmt.Sprintf("%s %s: %.6f -> %.6f", r.Corpus, r.Metric, r.Baseline, r.Candidate))
+			}
+			fmt.Fprintf(&md, "### regressions vs %s:", *baselinePath)
+		}
 		if len(regressions) == 0 {
 			md.WriteString(" none\n")
 		} else {
 			md.WriteByte('\n')
 			for _, r := range regressions {
-				fmt.Fprintf(&md, "%s %s: %.6f -> %.6f\n", r.Corpus, r.Metric, r.Baseline, r.Candidate)
+				fmt.Fprintln(&md, r)
 			}
 			status = 1
 		}
@@ -315,6 +376,235 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 	return status
+}
+
+// synonymOREntry cannot change needs, roots, kinds, or gold. Unknown JSON
+// fields are rejected, not silently ignored, to protect the frozen key.
+type synonymOREntry struct {
+	Args                   []string `json:"args"`
+	ExtraJudgedNonrelevant []string `json:"extra_judged_nonrelevant"`
+}
+
+func loadSynonymOROverlay(filename string, originals map[string]queryset.Set, paths map[string][]string) (map[string]queryset.Set, string, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, "", err
+	}
+	var overlay map[string]map[string]synonymOREntry
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&overlay); err != nil {
+		return nil, "", err
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, "", fmt.Errorf("overlay: expected one JSON object")
+	}
+	sets := make(map[string]queryset.Set)
+	for name := range overlay {
+		if _, ok := originals[name]; !ok {
+			return nil, "", fmt.Errorf("overlay: unknown corpus %q", name)
+		}
+	}
+	for name, orig := range originals {
+		s := orig
+		s.Queries = slices.Clone(orig.Queries)
+		byID := make(map[string]int)
+		for i, q := range s.Queries {
+			byID[q.ID] = i
+		}
+		for id, entry := range overlay[name] {
+			i, ok := byID[id]
+			if !ok {
+				return nil, "", fmt.Errorf("overlay: unknown query %q in %s", id, name)
+			}
+			q := &s.Queries[i]
+			if q.Kind != "synonym" {
+				return nil, "", fmt.Errorf("overlay query %s: not synonym", id)
+			}
+			terms, origTerms := systems.Terms(entry.Args), systems.Terms(q.Args)
+			if len(terms) != len(origTerms) || !slices.Equal(queryFlags(entry.Args), queryFlags(q.Args)) {
+				return nil, "", fmt.Errorf("overlay query %s: changed flags or slot count", id)
+			}
+			expanded := false
+			for j, term := range terms {
+				alts := strings.Split(term, "|")
+				if alts[0] != origTerms[j] || strings.Contains(term, "*") {
+					return nil, "", fmt.Errorf("overlay query %s: changed first alternative or wildcard", id)
+				}
+				expanded = expanded || len(alts) > 1
+			}
+			if !expanded {
+				return nil, "", fmt.Errorf("overlay query %s: no OR expansion", id)
+			}
+			seen := make(map[string]bool)
+			for _, g := range q.Gold {
+				seen[g.File] = true
+			}
+			for _, p := range q.JudgedNonrelevant {
+				seen[p] = true
+			}
+			for j, p := range entry.ExtraJudgedNonrelevant {
+				if seen[p] || (j > 0 && entry.ExtraJudgedNonrelevant[j-1] >= p) {
+					return nil, "", fmt.Errorf("overlay query %s: unsorted, duplicate or colliding judgment", id)
+				}
+				seen[p] = true
+			}
+			q.Args = slices.Clone(entry.Args)
+			q.JudgedNonrelevant = append(slices.Clone(q.JudgedNonrelevant), entry.ExtraJudgedNonrelevant...)
+			sort.Strings(q.JudgedNonrelevant)
+		}
+		if errs := queryset.Validate(s, paths[name], minimums); len(errs) > 0 {
+			return nil, "", errs[0]
+		}
+		sets[name] = s
+	}
+	return sets, fmt.Sprintf("%x", sha256.Sum256(data)), nil
+}
+
+type synonymORKeyGap struct {
+	ID       string `json:"id"`
+	Path     string `json:"path"`
+	Need     string `json:"need"`
+	Evidence string `json:"evidence"`
+}
+
+// The required sibling register makes exclusions explicit and hash-bound, even
+// when empty. It records relevance without mutating either frozen judgment set.
+func loadSynonymORKeyGaps(filename string, sets map[string]queryset.Set, paths map[string][]string) (map[string][]string, string, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, "", err
+	}
+	var entries []synonymORKeyGap
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&entries); err != nil {
+		return nil, "", err
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, "", fmt.Errorf("key gaps: expected one JSON array")
+	}
+	queries, corpora := make(map[string]queryset.Query), make(map[string]string)
+	for name, s := range sets {
+		for _, q := range s.Queries {
+			queries[q.ID], corpora[q.ID] = q, name
+		}
+	}
+	gaps := make(map[string][]string)
+	for _, g := range entries {
+		q, ok := queries[g.ID]
+		if !ok || q.Kind != "synonym" || !strings.Contains(strings.Join(systems.Terms(q.Args), " "), "|") || g.Need != q.Need || strings.TrimSpace(g.Evidence) == "" {
+			return nil, "", fmt.Errorf("key gap %s: unknown/unexpanded synonym, changed need or missing evidence", g.ID)
+		}
+		if !fs.ValidPath(g.Path) || g.Path == "." || strings.Contains(g.Path, `\`) || !slices.Contains(paths[corpora[g.ID]], filepath.ToSlash(filepath.Join(q.Root, g.Path))) {
+			return nil, "", fmt.Errorf("key gap %s: invalid or unmanifested path %q", g.ID, g.Path)
+		}
+		collision := slices.Contains(q.JudgedNonrelevant, g.Path) || slices.Contains(gaps[g.ID], g.Path)
+		for _, gold := range q.Gold {
+			collision = collision || gold.File == g.Path
+		}
+		if collision {
+			return nil, "", fmt.Errorf("key gap %s: duplicate or already judged path %q", g.ID, g.Path)
+		}
+		gaps[g.ID] = append(gaps[g.ID], g.Path)
+	}
+	for id := range gaps {
+		sort.Strings(gaps[id])
+	}
+	return gaps, fmt.Sprintf("%x", sha256.Sum256(data)), nil
+}
+
+// queryFlags retains ordered flag/value pairs, independently of term placement.
+// Unrecognized tokens are rejected by queryset.Validate before any execution.
+func queryFlags(args []string) []string {
+	var flags []string
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			flags = append(flags, args[i])
+			if (args[i] == "--distance" || args[i] == "-m") && i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+		}
+	}
+	return flags
+}
+
+// synonymORGate compares persisted, rounded metrics within a paired run.
+// Non-synonym equality intentionally requires the same binary on both sides.
+func synonymORGate(current report.Results) []string {
+	var failures []string
+	for _, name := range []string{"docs", "code"} {
+		c := current.Corpora[name]
+		// The authorized top-rank tradeoff is fixture-specific, not a general
+		// tolerance. Verify its exact rank transition and guard every other
+		// query so improvements elsewhere cannot hide another regression.
+		boundedR1 := false
+		for _, q := range c.Queries {
+			before, after := q.PerSystem["previous"], q.PerSystem["candidate"]
+			allowed := name == "code" && q.ID == "code-g-008" && q.Kind == "synonym" &&
+				slices.Equal(before.GoldRanks, []int{1}) && slices.Equal(after.GoldRanks, []int{2})
+			boundedR1 = boundedR1 || allowed
+			b, a := report.Summarize([]report.Query{q}, "previous"), report.Summarize([]report.Query{q}, "candidate")
+			for _, m := range []struct {
+				label         string
+				before, after report.Number
+			}{
+				{"r1", b.R1, a.R1}, {"r5", b.R5, a.R5}, {"mrr10", b.MRR10, a.MRR10},
+			} {
+				// Rank 1 -> 2 necessarily halves this query's reciprocal rank;
+				// cohort and aggregate MRR still must not regress below.
+				if allowed && (m.label == "r1" || m.label == "mrr10") {
+					continue
+				}
+				if m.after < m.before-1e-9 {
+					failures = append(failures, fmt.Sprintf("%s query %s %s: %.6f -> %.6f", name, q.ID, m.label, m.before, m.after))
+				}
+			}
+		}
+		for _, system := range []string{"candidate", "previous", "bm25", "rg"} {
+			s, ok := c.Aggregate[system]
+			if !ok || s.Unjudged10 != 0 {
+				failures = append(failures, name+" "+system+": unjudged10 must be zero")
+			}
+		}
+		for _, kind := range []string{"proximity", "single", "synonym", "aggregate"} {
+			group := c.ByKind[kind]
+			if kind == "aggregate" {
+				group = c.Aggregate
+			}
+			before, after := group["previous"], group["candidate"]
+			if before.HitN == nil || after.HitN == nil {
+				failures = append(failures, name+" "+kind+": missing paired metrics")
+				continue
+			}
+			for _, m := range []struct {
+				label         string
+				before, after report.Number
+			}{
+				{"r1", before.R1, after.R1}, {"r5", before.R5, after.R5}, {"r10", before.R10, after.R10}, {"mrr10", before.MRR10, after.MRR10}, {"hit_n", *before.HitN, *after.HitN},
+			} {
+				delta := float64(m.after - m.before)
+				bad := false
+				switch {
+				case kind == "single" || kind == "proximity":
+					bad = math.Abs(delta) > 1e-9
+				case kind == "synonym" && (m.label == "r10" || m.label == "hit_n"):
+					bad = delta <= 1e-9
+				case boundedR1 && m.label == "r1" && kind == "synonym":
+					bad = delta < -.10-1e-9
+				case boundedR1 && m.label == "r1" && kind == "aggregate":
+					bad = delta < -.03-1e-9
+				case m.label == "r1" || m.label == "r5" || m.label == "mrr10":
+					bad = delta < -1e-9
+				}
+				if bad {
+					failures = append(failures, fmt.Sprintf("%s %s %s: %.6f -> %.6f", name, kind, m.label, m.before, m.after))
+				}
+			}
+		}
+	}
+	return failures
 }
 
 // verifyCorpus checks the entire manifest and refuses unmanifested files, so
@@ -386,6 +676,11 @@ func verifyCorpus(cache string, m corpus.Manifest) error {
 // broadened matches. Term-count requirements still apply.
 func checkKind(q queryset.Query, idx *systems.Index) error {
 	terms := systems.Terms(q.Args)
+	for _, term := range terms {
+		if strings.Contains(term, "|") {
+			return fmt.Errorf("query %s: base queries must not contain OR groups", q.ID)
+		}
+	}
 	bad := func() error { return fmt.Errorf("query %s: kind %s contradicts gold tokens", q.ID, q.Kind) }
 	if q.Kind == "single" {
 		if len(terms) != 1 {
@@ -470,7 +765,10 @@ func termPresent(term string, tokens map[string]bool) bool {
 	}
 	return true
 }
-func score(q queryset.Query, system string, r systems.Run, budget int) (report.QueryMetrics, error) {
+
+// Known key gaps are adjudicated relevant, but never added to the frozen gold
+// or nonrelevant sets. They affect coverage only; recall/hit remain incomplete.
+func score(q queryset.Query, system string, r systems.Run, budget int, keyGaps ...string) (report.QueryMetrics, error) {
 	gold := make(map[string]bool)
 	judged := make(map[string]bool)
 	var items []metrics.Gold
@@ -491,6 +789,9 @@ func score(q queryset.Query, system string, r systems.Run, budget int) (report.Q
 		items = append(items, item)
 	}
 	for _, p := range q.JudgedNonrelevant {
+		judged[p] = true
+	}
+	for _, p := range keyGaps {
 		judged[p] = true
 	}
 	m.Unjudged = metrics.Unjudged10(gold, judged, r.Ranking)

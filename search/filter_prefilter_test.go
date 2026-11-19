@@ -17,6 +17,55 @@ import (
 	"garp/config"
 )
 
+func TestMultiAltPrefilterDNF(t *testing.T) {
+	for _, tc := range []struct {
+		groups       [][]string
+		text         string
+		strict, want bool
+	}{
+		{[][]string{{"prune", "ignore"}}, "ignore only", true, true},
+		{[][]string{{"prune", "ignore"}, {"walk"}, {"gitignore"}}, "prune ignore", false, false},
+		{[][]string{{"prune", "ignore"}, {"walk"}, {"gitignore"}}, "ignore gitignore", true, false},
+		{[][]string{{"oom", "out of memory"}, {"crash"}}, "oom crash", true, true},
+		{[][]string{{"oom", "out of memory"}, {"crash"}}, "out of memory crash", true, true},
+		{[][]string{{"oom", "out of memory"}, {"crash"}}, "out of disk crash", true, false},
+		{[][]string{{"a b", "literal"}, {"anchor"}}, "a b anchor", true, true},
+	} {
+		q := multiAltQuery(tc.groups, PartialModeOff)
+		q.minSlots = 2
+		if tc.strict {
+			q.minSlots = q.slotCount()
+		}
+		for _, cleaned := range []bool{false, true} {
+			var got, complete bool
+			var err error
+			if cleaned {
+				got, complete, err = streamMatchesCleanedQuery(strings.NewReader(tc.text), q, tc.strict, 10000, true)
+			} else {
+				got, complete, err = streamMatchesQuery(strings.NewReader(tc.text), q, tc.strict, 10000)
+			}
+			if err != nil || !complete || got != tc.want {
+				t.Errorf("%v %q cleaned=%v: got=%v complete=%v err=%v", tc.groups, tc.text, cleaned, got, complete, err)
+			}
+		}
+		aq, usable := prefilterAdmissionQuery(q)
+		if usable {
+			scan := discoveryScanner{chunk: 3}
+			if got := scan.admits(strings.NewReader(tc.text), aq); got != tc.want {
+				t.Errorf("discovery %v %q: %v want %v", tc.groups, tc.text, got, tc.want)
+			}
+			gate := prefilterRawGate(aq)
+			if len(gate.matchers) > 0 {
+				if got := scan.admits(strings.NewReader(tc.text), gate); got != tc.want {
+					t.Errorf("raw gate %q: %v want %v", tc.text, got, tc.want)
+				}
+			}
+		} else if !tc.want {
+			t.Errorf("unexpected conservative admission for %q", tc.text)
+		}
+	}
+}
+
 // These fixtures contain terms that need decoding or extraction. Reuse the real
 // compound-file layout for ANSI and UTF-16LE DOC and MSG streams.
 func encodedBinaryFixtures() map[string][]byte {
@@ -1143,7 +1192,7 @@ func TestPrefilterSlotThresholdGroupsPhrasePieces(t *testing.T) {
 		q := compileQuery([]string{"missing", "alpha beta", "gamma"}, PartialModeOff)
 		q.minSlots = tc.minimum
 		admission, ok := prefilterAdmissionQuery(q)
-		if !ok || admission.owners == nil {
+		if !ok || admission.matcherAlts == nil {
 			t.Fatal("fixture did not group phrase pieces")
 		}
 		for _, query := range []compiledQuery{admission, prefilterRawGate(admission)} {

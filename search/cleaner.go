@@ -594,6 +594,7 @@ type excerptMatch struct {
 	matchRange
 	source     matchRange
 	term       int
+	altTerm    string
 	occurrence int // 1-based per-term occurrence in sourceText; 0 means unknown
 }
 
@@ -756,6 +757,7 @@ func formatExcerptTextBoundaryMatches(source string, left, right, budget int, ma
 			matchRange: matchRange{start: matchStart - visibleLeft, end: matchEnd - visibleLeft},
 			source:     match.source,
 			term:       match.term,
+			altTerm:    match.altTerm,
 			occurrence: match.occurrence,
 		})
 	}
@@ -950,7 +952,7 @@ func extractExcerptSpansPartial(content string, searchTerms []string, maxExcerpt
 
 // extractExcerptSpansQuery extracts spans using a compiled query.
 // targetTerms is the distinct-term coverage target, independent of score weights.
-// Values <= 0 or above len(query.matchers) use that full count.
+// Values <= 0 or above query.slotCount() use that full count.
 func extractExcerptSpansQuery(content string, query compiledQuery, maxExcerpts int, targetTerms int, isCode bool) []excerptSpan {
 	return extractRankedExcerptSpansQuery(content, query, maxExcerpts, targetTerms, 0, isCode, unconstrainedDistance)
 }
@@ -977,7 +979,7 @@ func extractRankedExcerptSpansPartial(content string, searchTerms []string, maxE
 
 // extractRankedExcerptSpansQuery reuses the execution's exact matcher ranges.
 // targetTerms is the distinct-term coverage target, independent of score weights.
-// Values <= 0 or above len(query.matchers) use that full count.
+// Values <= 0 or above query.slotCount() use that full count.
 // Nonnegative distance matches Stage 2's inclusive start-to-start bound, including
 // zero; NewSearchEngine defaults Distance to 5000. unconstrainedDistance disables
 // the bound for legacy helpers (all negative distances retain that behavior).
@@ -1045,10 +1047,11 @@ func extractRankedMappedExcerptSpansWeighted(mapped mappedContent, query compile
 	rangesByMatcher := make([][]matchRange, query.slotCount())
 	allExactMatches := make([]excerptMatch, 0, 128)
 	for i := 0; i < query.slotCount(); i++ {
-		rangesByMatcher[i] = query.slotFindAll(i, cleaned)
-		for ordinal, loc := range rangesByMatcher[i] {
+		for ordinal, loc := range query.slotFindAllDetailed(i, cleaned) {
+			r := matchRange{loc.start, loc.end}
+			rangesByMatcher[i] = append(rangesByMatcher[i], r)
 			all = append(all, tmatch{start: loc.start, end: loc.end, idx: i})
-			allExactMatches = append(allExactMatches, excerptMatch{matchRange: loc, source: loc, term: i, occurrence: ordinal + 1})
+			allExactMatches = append(allExactMatches, excerptMatch{matchRange: r, source: r, term: i, altTerm: loc.altTerm, occurrence: ordinal + 1})
 		}
 	}
 	if len(all) > 0 {
@@ -1059,7 +1062,7 @@ func extractRankedMappedExcerptSpansWeighted(mapped mappedContent, query compile
 			if all[i].end != all[j].end {
 				return all[i].end < all[j].end
 			}
-			return query.slotLabel(all[i].idx) < query.slotLabel(all[j].idx)
+			return query.slotKey(all[i].idx) < query.slotKey(all[j].idx)
 		})
 
 		// Collect candidate spans at every coverage level in [levelMin, levelMax].
@@ -1074,7 +1077,54 @@ func extractRankedMappedExcerptSpansWeighted(mapped mappedContent, query compile
 		}
 		candidates := make([]candidate, 0, maxExcerpts)
 		counts := make([]int, query.slotCount())
+		multiAlt := query.hasMultiAltSlot()
+		var minEnd []int
+		var present []bool
+		if multiAlt {
+			minEnd = make([]int, query.slotCount())
+			present = make([]bool, query.slotCount())
+		}
 		for level := levelMax; level >= levelMin; level-- {
+			if multiAlt {
+				for l, anchor := range all {
+					if level == 1 && len(rareSlots) > 0 && !rareSlots[anchor.idx] {
+						continue
+					}
+					clear(present)
+					present[anchor.idx] = true
+					covered, maxOtherEnd := 1, 0
+					// Fix the anchor, but use only the shortest witness for each
+					// other slot. Highlighting still uses allExactMatches above.
+					for k := l + 1; level > 1 && k < len(all); k++ {
+						m := all[k]
+						if (distance > unconstrainedDistance && m.start-anchor.start > distance) || (covered == level && m.start >= maxOtherEnd) {
+							break
+						}
+						if m.idx == anchor.idx || (covered == level && !present[m.idx]) {
+							continue
+						}
+						if !present[m.idx] {
+							present[m.idx] = true
+							minEnd[m.idx] = m.end
+							covered++
+						} else if m.end < minEnd[m.idx] {
+							minEnd[m.idx] = m.end
+						} else {
+							continue
+						}
+						maxOtherEnd = 0
+						for s, ok := range present {
+							if ok && s != anchor.idx {
+								maxOtherEnd = max(maxOtherEnd, minEnd[s])
+							}
+						}
+					}
+					if covered == level {
+						candidates = append(candidates, candidate{rawStart: mapped.offsets[anchor.start], left: anchor.start, right: max(anchor.end, maxOtherEnd), score: RoundScore(canonicalSlotMaskWeight(query, present, slotWeights)), termCount: covered})
+					}
+				}
+				continue
+			}
 			clear(counts)
 			covered := 0
 			r := 0
@@ -1101,12 +1151,12 @@ func extractRankedMappedExcerptSpansWeighted(mapped mappedContent, query compile
 					}
 					for idx, count := range counts {
 						if count > 0 {
-							weight := float64(len(query.slotLabel(idx)))
+							weight := query.slotDefaultWeight(idx)
 							if len(slotWeights) > 0 {
 								weight = slotWeights[idx]
 							}
 							vals = append(vals, weight)
-							keys = append(keys, query.slotLabel(idx))
+							keys = append(keys, query.slotKey(idx))
 							termCount++
 						}
 					}
@@ -1208,14 +1258,15 @@ func extractRankedMappedExcerptSpansWeighted(mapped mappedContent, query compile
 					emitted = append(emitted, window)
 				}
 			} else {
-				perTerm := budget / max(1, len(query.matchers))
+				slotCount := query.slotCount()
+				perTerm := budget / max(1, slotCount)
 				if perTerm < 60 {
 					perTerm = 60
 				}
-				parts := make([]string, 0, len(query.matchers))
-				partMatches := make([]excerptMatch, 0, len(query.matchers))
-				locations := make([]matchRange, 0, len(query.matchers))
-				for i := range query.matchers {
+				parts := make([]string, 0, slotCount)
+				partMatches := make([]excerptMatch, 0, slotCount)
+				locations := make([]matchRange, 0, slotCount)
+				for i := 0; i < slotCount; i++ {
 					if loc, ok := firstRangeWithin(rangesByMatcher[i], c.left, c.right); ok {
 						locations = append(locations, loc)
 					}
@@ -1573,13 +1624,9 @@ func HighlightTermsWithOptions(text string, searchTerms []string, partial Partia
 func FindMatchRangesWithOptions(text string, searchTerms []string, partial PartialMode, options QueryOptions) []MatchRange {
 	query := compileQueryWithOptions(searchTerms, partial, options)
 	var ranges []MatchRange
-	for i, matcher := range query.matchers {
-		var term string
-		if i < len(query.terms) {
-			term = query.terms[i]
-		}
-		for _, loc := range matcher.findAll(text) {
-			ranges = append(ranges, MatchRange{Start: loc.start, End: loc.end, Term: term})
+	for s := 0; s < query.slotCount(); s++ {
+		for _, loc := range query.slotFindAllDetailed(s, text) {
+			ranges = append(ranges, MatchRange{Start: loc.start, End: loc.end, Term: loc.altTerm})
 		}
 	}
 	return ranges
@@ -1611,8 +1658,8 @@ func HighlightRanges(text string, ranges []MatchRange) string {
 
 func highlightTermsQuery(text string, query compiledQuery) string {
 	var ranges []matchRange
-	for _, matcher := range query.matchers {
-		ranges = append(ranges, matcher.findAll(text)...)
+	for s := 0; s < query.slotCount(); s++ {
+		ranges = append(ranges, query.slotFindAll(s, text)...)
 	}
 	return highlightExactRanges(text, ranges)
 }
@@ -1620,9 +1667,9 @@ func highlightTermsQuery(text string, query compiledQuery) string {
 func excerptSpanMatchRanges(span excerptSpan, query compiledQuery) []MatchRange {
 	ranges := make([]MatchRange, len(span.matches))
 	for i, match := range span.matches {
-		var term string
-		if match.term >= 0 && match.term < len(query.terms) {
-			term = query.terms[match.term]
+		term := match.altTerm
+		if term == "" && match.term >= 0 && match.term < query.slotCount() {
+			term = query.slotLabel(match.term)
 		}
 		ranges[i] = MatchRange{
 			Start: match.start,

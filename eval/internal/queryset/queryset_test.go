@@ -67,6 +67,10 @@ func TestValidate(t *testing.T) {
 }
 
 func TestArgs(t *testing.T) {
+	slots := make([]string, 33)
+	for i := range slots {
+		slots[i] = fmt.Sprintf("term%d", i)
+	}
 	for _, tc := range []struct {
 		args  []string
 		valid bool
@@ -78,7 +82,12 @@ func TestArgs(t *testing.T) {
 		{[]string{"--json=true"}, false}, {[]string{"--distance"}, false},
 		{[]string{"--distance", "0"}, false}, {[]string{"-m", "-1"}, false},
 		{[]string{"-m", "many"}, false}, {[]string{"--partial=wrong"}, false},
-		{[]string{"a*b"}, false}, {[]string{"a**"}, false}, {[]string{"a|b"}, false},
+		{[]string{"a*b"}, false}, {[]string{"a**"}, false}, {[]string{"a|b"}, true},
+		{[]string{"deploy*|rollout", "walk"}, true},
+		{[]string{"|"}, false}, {[]string{"a||b"}, false}, {[]string{"a|"}, false},
+		{[]string{"a*b|ok"}, false}, {[]string{strings.Join(slots[:17], "|")}, false},
+		{slots, true}, {append([]string{"a|b"}, slots[:32]...), false},
+		{[]string{strings.Join(slots[:16], "|"), strings.Join(slots[:16], "|"), strings.Join(slots[:16], "|"), strings.Join(slots[:16], "|"), "extra"}, false},
 		{[]string{"two words"}, false}, {[]string{"--"}, false}, {[]string{"-unknown"}, false},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {

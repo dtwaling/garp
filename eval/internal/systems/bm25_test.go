@@ -40,11 +40,22 @@ func TestBM25(t *testing.T) {
 	for _, tc := range []struct{ terms, want []string }{
 		{[]string{"APPLE"}, []string{"a.txt", "b.txt"}},
 		{[]string{"app*"}, []string{"a.txt", "b.txt"}},
+		{[]string{"prune|apple"}, []string{"a.txt", "b.txt"}},
+		{[]string{"app*|carrot"}, []string{"b.txt", "a.txt", "c.txt"}}, // equal TF/length in a and c: path tie-break
 		{[]string{"absent"}, nil},
 		{nil, nil},
 	} {
 		if got := idx.Search(tc.terms); !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("%v: %v, want %v", tc.terms, got, tc.want)
+		}
+	}
+	for _, tc := range []struct{ terms, want []string }{
+		{[]string{"apple|app*", "apple"}, []string{"apple"}},
+		{[]string{"apple", "app*"}, []string{"apple", "apple"}},
+	} {
+		tokens := idx.queryTokens(tc.terms)
+		if !reflect.DeepEqual(tokens, tc.want) || idx.score(idx.docs[0], tokens) != idx.score(idx.docs[0], tc.want) {
+			t.Fatalf("query tokens %v: %v, want %v", tc.terms, tokens, tc.want)
 		}
 	}
 	if got := tokenize("Foo_bar-Baz.qux CAFÉ 42"); !reflect.DeepEqual(got, []string{"foo", "bar", "baz", "qux", "café", "42"}) {

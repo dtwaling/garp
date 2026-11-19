@@ -42,10 +42,22 @@ func RunRG(rootAbs string, args []string) (Run, error) {
 		var next []string
 		for begin := 0; begin < len(files); begin += 500 {
 			argv := []string{"--no-config", "-l", "-i", "-w", "--no-ignore", "--hidden", "--sort", "path"}
-			if prefix, ok := strings.CutSuffix(term, "*"); ok {
-				argv = append(argv, "-e", `\b`+regexp.QuoteMeta(prefix)+`[A-Za-z0-9_.-]*`)
-			} else {
+			if !strings.ContainsAny(term, "|*") {
 				argv = append(argv, "-F", term)
+			} else {
+				literal := !strings.Contains(term, "*")
+				if literal {
+					argv = append(argv, "-F")
+				}
+				for _, alt := range strings.Split(term, "|") {
+					pattern := alt
+					if prefix, wild := strings.CutSuffix(alt, "*"); wild {
+						pattern = `\b` + regexp.QuoteMeta(prefix) + `[A-Za-z0-9_.-]*`
+					} else if !literal {
+						pattern = regexp.QuoteMeta(alt)
+					}
+					argv = append(argv, "-e", pattern)
+				}
 			}
 			argv = append(argv, "--")
 			argv = append(argv, files[begin:min(begin+500, len(files))]...)

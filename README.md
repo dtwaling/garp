@@ -48,6 +48,10 @@ garp deploy service --partial=contains    # raw substring: redeploy, autodeploy
 garp pitch onset midi --distance 500  # any 2+ terms in the window
 garp pitch onset midi --strict        # all terms; no partial or rare-anchor fallback
 
+# Expand one concept slot in a single call (quote pipes in shells)
+garp 'ignore|skip|exclude|prune' walk gitignore --code --distance 400 --json
+garp 'deploy*|rollout' service --not 'mock|stub'
+
 # Scope search to specific directories (prunes the walk -- never descends outside scope)
 garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,docs/,tests/' --code
 garp deployment owner --startdir 'repo-a,repo-b' -g 'docs/**' --json
@@ -67,7 +71,9 @@ garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,d
   not term-length weighting or a persistent index
 - Scarce-match fallback: when fewer than five primary files match, append up
   to three rare single-slot matches, always after multi-term matches
-- `--strict` requires every term in a window and disables both partial
+- Single-call OR-group slots (`a|b|c`): any alternative satisfies one slot,
+  with wildcards, partial matching, and smart forms applied per alternative
+- `--strict` requires every slot in a window and disables both partial
   multi-term admission and single-slot fallback
 - Directory-scoped search: `--startdir` sets the root, `--pathscope` prunes the walk
 - Machine-readable output: `--json` (structured envelope), `--plain` (line-oriented),
@@ -76,7 +82,7 @@ garp pitch frequency --startdir ~/projects/audio2midi --pathscope 'audio2midi/,d
 - Format-aware content cleaning: markup, email, and extracted documents are stripped of tags, entities, CSS/JS, and quote markers; plain-text, config, and code files are matched literally (see [Content cleaning](#content-cleaning))
 - Binary document support: .eml, .mbox, .pdf, .doc/.docx/.odt, .rtf, .msg
 - Code file search with `--code`
-- Advanced exclusion with `--not` for extensions and words
+- Advanced exclusion with `--not` for extensions and words, including OR-groups
 - Beautiful TUI with live progress, paging, and highlighted excerpts
 - Safe large-file handling with size-aware reads
 
@@ -144,7 +150,7 @@ targeted read, no result paging). One skill covers Windows and Linux/macOS.
 ## Flags
 
 ```
-garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
+garp <word1|alt2> <word2> ... [flags] [--not <excl1|excl2> ...]
 ```
 
 | Flag | Default | Description |
@@ -162,8 +168,8 @@ garp <word1> <word2> ... [flags] [--not <excl1> <excl2> ...]
 | `--partial[=MODE]` | off | Enable partial matching. Bare form selects `prefix`; modes are `prefix`, `contains`, `off`, and `none`. |
 | `-i`, `--ignore-case` | on | Match terms without case sensitivity. The last case flag wins. |
 | `-s`, `--case-sensitive` | off | Match terms with case sensitivity through discovery, exclusions, ranking, and excerpts. |
-| `--not <excl...>` | (none) | Tokens after this flag are exclusions. Dot-prefixed = extension exclude (`.pdf`); others = word exclude |
-| `--strict` | off | Require every term in a proximity window; disable both partial multi-term admission and single-slot fallback |
+| `--not <excl...>` | (none) | Tokens after this flag are exclusions, including OR-groups (`mock\|stub`). Dot-prefixed alternatives exclude extensions (`.pdf\|.docx`); others exclude whole words |
+| `--strict` | off | Require every search slot in a proximity window; an `a\|b` slot is satisfied by any alternative. Disable both partial multi-term admission and single-slot fallback |
 | `-l`, `--files-with-matches`, `--pathonly` | off | Skip TUI; emit only distinct matching file paths in ranked order. |
 | `--json` | off | Skip TUI; emit structured JSON to stdout. Preferred for MCP/agent callers |
 | `--plain` | off | Skip TUI; emit plain line-oriented text to stdout. Useful for shell scripts |
@@ -253,6 +259,49 @@ Terms supplied after `--not` are always whole-word exclusions, regardless of
 filtering unrelated results. Word exclusions check the same cleaned Stage 2 text
 as positive search terms.
 
+### OR-groups (a|b|c) and literal pipe escaping
+
+An unescaped `|` joins alternatives within **one concept slot**, not extra
+required terms. Quote the argument so the shell does not interpret the pipe:
+
+```sh
+garp 'ignore|skip|exclude|prune' walk gitignore --code --distance 400 --json
+garp 'deploy*|rollout' service --strict --not 'mock|stub'
+garp 'id|identifier' lookup --partial --not '.pdf|.docx'
+garp 'a\|b' --json                  # search for literal a|b
+```
+
+Two-slot primary matches require both slots; three or more slots admit any
+two or more in a window. `--strict` requires every slot, **not every
+alternative**, and disables scarce single-slot fallback. Wildcards, partial
+matching, and `--smart-forms` apply independently to each positive alternative.
+For `id|identifier --partial`, the `len(term) <= 2` byte guardrail keeps `id`
+whole-word while `identifier` gets prefix matching. Exclusion alternatives
+remain whole-word literals (or dot-prefixed extensions), not wildcard or
+partial expansions; any excluded alternative is sufficient to reject a file.
+
+Backslash escaping is contextual: `\|` encodes a literal pipe; `\\|` encodes
+one literal backslash followed by an OR separator. More generally, pairs of
+backslashes immediately before `|` become literal backslashes, and an odd
+remaining backslash escapes the pipe. Other backslashes, including all those
+in tokens without `|`, remain verbatim. `--startdir` and `--pathscope` still
+reject `|`; query OR syntax does not change path parsing.
+
+Alternatives are normalized and deduplicated within each slot; equivalent
+slots also deduplicate regardless of alternative order. Display preserves
+first-seen slot and alternative order, while ranking is permutation-invariant.
+Bounds activate only when the corresponding positive query or `--not` list
+uses an unescaped OR separator, even if duplicates later collapse:
+
+- At most **16 raw alternatives per group**, before deduplication.
+- Positive queries: at most **32 normalized slots** and **64 normalized
+  alternatives across those slots**.
+- Exclusions: at most **64 expanded alternatives**, without deduplication.
+
+Malformed groups (`|`, `a||b`, `a|`) or over-limit groups fail with CLI exit
+code **1** before searching; nothing is silently truncated. Non-OR queries
+and exclusion lists remain uncapped by these OR-specific limits.
+
 ### --json output shape
 
 ```json
@@ -304,8 +353,13 @@ are rounded to `1e-4` in JSON, plain output, and the TUI; insignificant trailing
 zeroes need not be printed. Excerpt scores instead sum the matched slots' IDF
 weights. The numbers in the example illustrate the shape, not fixed scores for
 those terms. Scores depend on the searched corpus, not just the matching file.
-`term_count` counts slots in the representative window; `matched_terms` lists
-them in query order. Inspect both to distinguish partial and single-slot matches.
+`query.terms` echoes normalized canonical slots, for example
+`["ignore|skip|exclude|prune", "walk", "gitignore"]`, retaining syntax escapes
+for literal pipes. `term_count` counts slots in the representative window;
+`matched_terms` reports the selected matched alternative for each covered slot
+in slot order, not every alternative or the entire OR-group label. For example,
+`search/ignore.go` is a 2-of-3 slot hit with `["ignore", "gitignore"]` in the
+query above. Inspect both fields to distinguish partial and single-slot matches.
 
 Every output mode uses the same ten ranking tiers:
 
@@ -350,8 +404,9 @@ into one line). In practice this is what you want: it lands you on the match. Li
 present for text/code files and omitted for binary/extracted formats (PDF, DOCX, email) that have
 no stable source lines. The plain (`--plain`) output prefixes each excerpt with `[L<start>]` when known.
 Each plain result begins with `MATCH X/Y [Score: S (T/N terms)]`, where `Y`
-is the number of returned files, `S` is the score, `T` is the matched-term
-count, and `N` is the total query-term count. When output is truncated, plain
+is the number of returned files, `S` is the score, `T` is the matched-slot
+count, and `N` is the total query-slot count (alternatives do not inflate it).
+`--plain` remains ANSI-free. When output is truncated, plain
 output ends with this exact footer:
 
 ```text
@@ -552,7 +607,8 @@ built from a clean tree and committed on their own.
 The [retrieval-quality eval harness](eval/README.md) compares the working tree
 against the previous release, BM25, and an rg pipeline on pinned, judged corpora.
 Use `make eval-fetch` to fetch corpora and build the previous release,
-`make eval` to run the offline regression gate, `make eval-baseline` to record
+`make eval` to run the offline regression gate, `make eval-or` for paired
+single-wording versus OR-expanded synonym evaluation, `make eval-baseline` to record
 a release baseline, and `make eval-test` for harness unit tests. `make eval`
 is not part of `make test`; the nested module keeps its dependencies and tests
 separate from the root module.
@@ -581,9 +637,13 @@ separate from the root module.
 - **Lexical overlap:** garp is lexical and index-free, not semantic search.
   `signature authenticated` cannot find a document that says only `signed`.
   With no matching vocabulary, that document yields zero matches unless
-  `--smart-forms`, `--partial`, or alternative query terms bridge the lexical gap.
-- **Literal pipe:** `a|b` matches literally in v0.11.0; boolean OR slot parsing
-  is deferred to #87. Quote pipes to prevent shell interpretation.
+  `--smart-forms`, `--partial`, or explicit OR-groups bridge the lexical gap
+  (for example `garp 'signature|signed' authenticated`). Alternatives are
+  supplied by the caller; garp does not infer synonyms.
+- **Pipe escaping & OR-group bounds:** unescaped `|` in query terms and
+  `--not` tokens parses as OR. Quote pipes in shells; search a literal pipe
+  with `\|` (`garp 'a\|b'`). OR-expanded queries have the limits documented
+  above and fail rather than truncate. `--startdir` and `--pathscope` reject `|`.
 - **Deferred v0.11.1 extraction/cleaning limits:** trailing whitespace in a
   `%PDF-1.x ` header (#90), empty-password 40-bit RC4 PDFs (#91), `/LZWDecode`
   PDF streams (#92), and uppercase-digit splitting of markup/extracted mixed

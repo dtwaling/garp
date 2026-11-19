@@ -2,6 +2,27 @@ package search
 
 import "testing"
 
+func TestMultiAltHighlight(t *testing.T) {
+	const hi, nc = "\033[1;31m", "\033[0m"
+	for _, tc := range []struct {
+		text   string
+		groups [][]string
+		want   string
+	}{
+		{"prune ignore walk", [][]string{{"prune", "ignore"}, {"walk"}}, hi + "prune" + nc + " " + hi + "ignore" + nc + " " + hi + "walk" + nc},
+		{"alpha beta gamma", [][]string{{"alpha beta gamma", "gamma", "beta gamma"}}, hi + "alpha beta gamma" + nc},
+	} {
+		q := multiAltQuery(tc.groups, PartialModeOff)
+		if got := highlightTermsQuery(tc.text, q); got != tc.want {
+			t.Errorf("highlight=%q want %q", got, tc.want)
+		}
+		spans := extractRankedExcerptSpansQuery(tc.text, q, 1, q.slotCount(), q.slotCount(), true, 100)
+		if len(spans) != 1 || highlightExcerptSpan(spans[0]) != tc.want {
+			t.Errorf("excerpt highlight=%+v", spans)
+		}
+	}
+}
+
 func TestHighlightTermsPartial(t *testing.T) {
 	const hi = "\033[1;31m"
 	const nc = "\033[0m"

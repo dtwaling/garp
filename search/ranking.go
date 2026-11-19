@@ -58,12 +58,12 @@ func canonicalSlotMaskWeight(query compiledQuery, mask []bool, weights []float64
 		if !present {
 			continue
 		}
-		value := float64(len(query.slotLabel(s)))
+		value := query.slotDefaultWeight(s)
 		if len(weights) > 0 {
 			value = weights[s]
 		}
 		vals = append(vals, value)
-		keys = append(keys, query.slotLabel(s))
+		keys = append(keys, query.slotKey(s))
 	}
 	return canonicalFloatSum(vals, keys)
 }
@@ -111,12 +111,14 @@ type rankedTextAnalysis struct {
 type rankedOccurrence struct {
 	start, end, termIndex int
 	wholeIdentifier       bool
+	altTerm               string
 }
 
 type rankedWindow struct {
 	score                      float64
 	termCount, boundaryQuality int
 	slots                      []bool
+	matchedAlts                []string
 	start, end, left, right    int
 }
 
@@ -152,7 +154,7 @@ type rankedSubsetCatalog struct {
 // capped per subset, or absent entirely for the single-subset common path.
 func analyzeRankedCatalog(text string, query compiledQuery, distance int, strict, allowFallback bool) rankedSubsetCatalog {
 	occurrences := rankedOccurrences(text, query)
-	cat := rankedSubsetCatalog{WordCount: countCleanedWords(text), SlotTF: occurrenceSlotTF(occurrences, query.slotCount()), SlotPresent: make([]bool, query.slotCount())}
+	cat := rankedSubsetCatalog{WordCount: countCleanedWords(text), SlotTF: coalescedSlotTF(occurrences, query), SlotPresent: make([]bool, query.slotCount())}
 	for s, tf := range cat.SlotTF {
 		cat.SlotPresent[s] = tf > 0
 	}
@@ -269,11 +271,11 @@ func scoreAnalyzedDocument(an rankedTextAnalysis, query compiledQuery, pathSlots
 		if an.MatchedSlots[s] {
 			tf := float64(an.SlotTF[s])
 			vals = append(vals, stats.IDF[s]*tf*(bm25K1+1)/(tf+bm25K1*norm))
-			keys = append(keys, query.slotLabel(s))
+			keys = append(keys, query.slotKey(s))
 		}
 		if len(pathSlots) > 0 && pathSlots[s] {
 			vals = append(vals, bm25PathSlotWeight*stats.IDF[s])
-			keys = append(keys, "\x00path:"+query.slotLabel(s))
+			keys = append(keys, "\x00path:"+query.slotKey(s))
 		}
 	}
 	prox, cov := 1.0, 1.0
@@ -290,6 +292,31 @@ func occurrenceSlotTF(occurrences []rankedOccurrence, count int) []int {
 	tf := make([]int, count)
 	for _, occurrence := range occurrences {
 		tf[occurrence.termIndex]++
+	}
+	return tf
+}
+
+// coalescedSlotTF keeps the raw occurrence count for single-alternative slots
+// (their matches are already disjoint). Multi-alternative slots report the
+// maximum number of pairwise non-overlapping occurrences, so SlotTF does not
+// depend on alternative order while every occurrence stays available for
+// proximity windows.
+func coalescedSlotTF(occurrences []rankedOccurrence, query compiledQuery) []int {
+	tf := occurrenceSlotTF(occurrences, query.slotCount())
+	if !query.hasMultiAltSlot() {
+		return tf
+	}
+	intervals := make([][]rankedInterval, query.slotCount())
+	for _, occurrence := range occurrences {
+		s := occurrence.termIndex
+		if len(query.slotAlts(s)) >= 2 {
+			intervals[s] = append(intervals[s], rankedInterval{occurrence.start, occurrence.end})
+		}
+	}
+	for s, slotIntervals := range intervals {
+		if len(slotIntervals) > 0 {
+			tf[s] = topQualityChunkCount(slotIntervals)
+		}
 	}
 	return tf
 }
@@ -329,7 +356,7 @@ func analyzeRankedTextWithOptions(text string, query compiledQuery, distance int
 	})
 	an := analysisFromWindow(best.representative, query)
 	an.WordCount = countCleanedWords(text)
-	an.SlotTF = occurrenceSlotTF(occurrences, query.slotCount())
+	an.SlotTF = coalescedSlotTF(occurrences, query)
 	an.TopQualityChunks = topQualityChunkCount(best.intervals)
 	an.bestIntervals = best.intervals
 	return an, true
@@ -339,13 +366,21 @@ func analysisFromWindow(window rankedWindow, query compiledQuery) rankedTextAnal
 	terms := make([]string, 0, window.termCount)
 	for s, present := range window.slots {
 		if present {
-			terms = append(terms, query.slotLabel(s))
+			if window.matchedAlts != nil {
+				terms = append(terms, window.matchedAlts[s])
+			} else {
+				terms = append(terms, query.slotAltTerm(s, 0))
+			}
 		}
 	}
 	return rankedTextAnalysis{Score: RoundScore(window.score), TermCount: window.termCount, MatchedTerms: terms, MatchedSlots: window.slots, BoundaryQuality: window.boundaryQuality, SpanLength: window.end - window.start, start: window.start, end: window.end}
 }
 
 func visitRankedWindows(occurrences []rankedOccurrence, query compiledQuery, distance int, visit func(rankedWindow)) {
+	if query.hasMultiAltSlot() {
+		visitMultiAltRankedWindows(occurrences, query, distance, visit)
+		return
+	}
 	latest := make([]int, query.slotCount())
 	latestBoundary := make([]int, query.slotCount())
 	for i := range latest {
@@ -373,6 +408,226 @@ func visitRankedWindows(occurrences []rankedOccurrence, query compiledQuery, dis
 	}
 }
 
+// slotOccurrenceIndex keeps both boundary tiers indexed by occurrence position.
+// Minimum-end lookups avoid rescanning dense windows for interior witnesses.
+type slotOccurrenceIndex struct {
+	all, whole []rangeMinimum
+}
+
+// visitMultiAltRankedWindows preserves shorter nested witnesses independently
+// of whole-identifier upgrades. Only this path accepts overlapping alternatives;
+// the single-alternative walk keeps its disjoint-occurrence assumptions.
+func visitMultiAltRankedWindows(occurrences []rankedOccurrence, query compiledQuery, distance int, visit func(rankedWindow)) {
+	slots := query.slotCount()
+	index := slotOccurrenceIndex{all: make([]rangeMinimum, slots), whole: make([]rangeMinimum, slots)}
+	for i, occurrence := range occurrences {
+		s := occurrence.termIndex
+		index.all[s].positions = append(index.all[s].positions, i)
+		if occurrence.wholeIdentifier {
+			index.whole[s].positions = append(index.whole[s].positions, i)
+		}
+	}
+	for s := 0; s < slots; s++ {
+		index.all[s].build(occurrences)
+		index.whole[s].build(occurrences)
+	}
+	active, whole := make([][]int, slots), make([][]int, slots)
+	var lefts []int
+	for right, occurrence := range occurrences {
+		s := occurrence.termIndex
+		active[s] = append(active[s], right)
+		if occurrence.wholeIdentifier {
+			whole[s] = append(whole[s], right)
+		}
+		lefts = lefts[:0]
+		for s := 0; s < slots; s++ {
+			active[s] = activeWitnesses(active[s], occurrences, occurrence.start, distance)
+			whole[s] = activeWitnesses(whole[s], occurrences, occurrence.start, distance)
+			lefts = append(lefts, active[s]...)
+			lefts = append(lefts, whole[s]...)
+		}
+		sort.Ints(lefts)
+		prev := -1
+		for _, left := range lefts {
+			if left == prev {
+				continue
+			}
+			prev = left
+			tier := index.all[s]
+			if occurrence.wholeIdentifier {
+				tier = index.whole[s]
+			}
+			// A nested right edge remains useful if it shortens the witness,
+			// even when its slot and boundary tier already occur in the window.
+			if tier.minimum(left, right) <= occurrence.end {
+				continue
+			}
+			window, anyEnd := buildMultiAltRankedWindow(occurrences, index, left, right)
+			window.matchedAlts, window.boundaryQuality = winningAlts(occurrences, index, window)
+			visit(window)
+			if anyEnd < window.end {
+				// Boundary quality selects the representative, not which tied
+				// slot-set intervals may count as disjoint quality chunks.
+				window.end = anyEnd
+				window.matchedAlts, window.boundaryQuality = winningAlts(occurrences, index, window)
+				visit(window)
+			}
+		}
+	}
+}
+
+// activeWitnesses retains undominated left edges at one boundary tier. A newer
+// completed witness dominates every earlier one; an overhanging witness only
+// dominates earlier witnesses whose ends are no shorter. Each alternative's
+// own matches are disjoint, bounding the remaining overlapping frontier.
+func activeWitnesses(active []int, occurrences []rankedOccurrence, start, distance int) []int {
+	completed := -1
+	for _, i := range active {
+		if occurrences[i].end <= start {
+			completed = i
+		}
+	}
+	kept := active[:0]
+	for _, i := range active {
+		if i < completed || start-occurrences[i].start > distance {
+			continue
+		}
+		for len(kept) > 0 && occurrences[kept[len(kept)-1]].end >= occurrences[i].end {
+			kept = kept[:len(kept)-1]
+		}
+		// At equal starts a longer alternative cannot improve the bound.
+		if len(kept) == 0 || occurrences[kept[len(kept)-1]].start != occurrences[i].start {
+			kept = append(kept, i)
+		}
+	}
+	return kept
+}
+
+// buildMultiAltRankedWindow anchors both endpoints and uses one minimum-end
+// witness per interior slot, preferring whole identifiers. anyEnd additionally
+// preserves the tightest interval regardless of interior boundary quality.
+func buildMultiAltRankedWindow(occurrences []rankedOccurrence, index slotOccurrenceIndex, left, right int) (rankedWindow, int) {
+	first, last := occurrences[left], occurrences[right]
+	window := rankedWindow{start: first.start, end: max(first.end, last.end), left: left, right: right, slots: make([]bool, len(index.all))}
+	anyEnd := window.end
+	for s := range index.all {
+		end := index.all[s].minimum(left, right+1)
+		if end == math.MaxInt {
+			continue
+		}
+		window.slots[s] = true
+		window.termCount++
+		if s == first.termIndex || s == last.termIndex {
+			continue
+		}
+		anyEnd = max(anyEnd, end)
+		if wholeEnd := index.whole[s].minimum(left+1, right); wholeEnd != math.MaxInt {
+			end = wholeEnd
+		}
+		window.end = max(window.end, end)
+	}
+	return window, anyEnd
+}
+
+// winningAlts only considers witnesses inside the actual window bounds, with
+// starts no later than the right endpoint's start. Equal-start occurrences just
+// before left remain eligible. Prefer the earliest whole identifier (else any
+// occurrence), then longest end and smallest altTerm at that start.
+func winningAlts(occurrences []rankedOccurrence, index slotOccurrenceIndex, window rankedWindow) ([]string, int) {
+	alts := make([]string, len(window.slots))
+	quality := 0
+	left := sort.Search(len(occurrences), func(i int) bool { return occurrences[i].start >= window.start })
+	right := sort.Search(len(occurrences), func(i int) bool { return occurrences[i].start > occurrences[window.right].start })
+	for s, present := range window.slots {
+		if !present {
+			continue
+		}
+		tier := index.whole[s]
+		first := tier.firstWithin(left, right, window.end)
+		if first < 0 {
+			tier = index.all[s]
+			first = tier.firstWithin(left, right, window.end)
+		} else {
+			quality++
+		}
+		best := tier.positions[first]
+		for _, i := range tier.positions[first+1:] {
+			if i >= right || occurrences[i].start != occurrences[best].start {
+				break
+			}
+			if occurrences[i].end <= window.end && (occurrences[i].end > occurrences[best].end || (occurrences[i].end == occurrences[best].end && occurrences[i].altTerm < occurrences[best].altTerm)) {
+				best = i
+			}
+		}
+		alts[s] = occurrences[best].altTerm
+	}
+	return alts, quality
+}
+
+// rangeMinimum indexes ends for one slot/tier. Bounds are global occurrence
+// positions; empty ranges return MaxInt. Storage is linear across all slots,
+// and each minimum or first-fitting-witness lookup takes O(log N).
+type rangeMinimum struct {
+	positions []int
+	size      int
+	tree      []int
+}
+
+func (r *rangeMinimum) build(occurrences []rankedOccurrence) {
+	r.size = 1
+	for r.size < len(r.positions) {
+		r.size *= 2
+	}
+	r.tree = make([]int, r.size*2)
+	for i := range r.tree {
+		r.tree[i] = math.MaxInt
+	}
+	for i, pos := range r.positions {
+		r.tree[r.size+i] = occurrences[pos].end
+	}
+	for i := r.size - 1; i > 0; i-- {
+		r.tree[i] = min(r.tree[2*i], r.tree[2*i+1])
+	}
+}
+
+func (r rangeMinimum) minimum(left, right int) int {
+	left = sort.SearchInts(r.positions, left) + r.size
+	right = sort.SearchInts(r.positions, right) + r.size
+	end := math.MaxInt
+	for left < right {
+		if left%2 == 1 {
+			end = min(end, r.tree[left])
+			left++
+		}
+		if right%2 == 1 {
+			right--
+			end = min(end, r.tree[right])
+		}
+		left /= 2
+		right /= 2
+	}
+	return end
+}
+
+func (r rangeMinimum) firstWithin(left, right, end int) int {
+	lo, hi := sort.SearchInts(r.positions, left), sort.SearchInts(r.positions, right)
+	var find func(int, int, int) int
+	find = func(node, start, stop int) int {
+		if stop <= lo || start >= hi || r.tree[node] > end {
+			return -1
+		}
+		if stop-start == 1 {
+			return start
+		}
+		mid := start + (stop-start)/2
+		if first := find(node*2, start, mid); first >= 0 {
+			return first
+		}
+		return find(node*2+1, mid, stop)
+	}
+	return find(1, 0, r.size)
+}
+
 // pathMatchCount counts distinct canonical query slots represented in the
 // slash-normalized path relative to the active search root.
 func pathMatchCount(filePath, startDir string, query compiledQuery) int {
@@ -386,17 +641,18 @@ func pathMatchStats(filePath, startDir string, query compiledQuery) ([]bool, int
 	count := 0
 	for s := 0; s < query.slotCount(); s++ {
 		matched := query.slotMatches(s, relPath)
-		core := alphanumericCore(query.slotLabel(s))
-		if !matched && len(core) >= 2 {
-			matched = strings.Contains(relPath, core)
-			caseInsensitive := false
-			if len(query.slots) > 0 {
-				caseInsensitive = query.slots[s].alts[0].caseInsensitive
-			} else {
-				caseInsensitive = query.matchers[s].caseInsensitive
+		for _, alt := range query.slotAlts(s) {
+			if matched {
+				break
 			}
-			if caseInsensitive {
+			core := alphanumericCore(alt.term)
+			if len(core) < 2 {
+				continue
+			}
+			if alt.caseInsensitive {
 				matched = strings.Contains(strings.ToLower(relPath), strings.ToLower(core))
+			} else {
+				matched = strings.Contains(relPath, core)
 			}
 		}
 		if matched {
@@ -499,8 +755,8 @@ func (best *rankedBestWindows) observe(window rankedWindow) {
 func rankedOccurrences(text string, query compiledQuery) []rankedOccurrence {
 	occurrences := make([]rankedOccurrence, 0)
 	for s := 0; s < query.slotCount(); s++ {
-		for _, found := range query.slotFindAll(s, text) {
-			occurrences = append(occurrences, rankedOccurrence{found.start, found.end, s, hasWholeIdentifierEdges(text, found.start, found.end)})
+		for _, found := range query.slotFindAllDetailed(s, text) {
+			occurrences = append(occurrences, rankedOccurrence{found.start, found.end, s, hasWholeIdentifierEdges(text, found.start, found.end), found.altTerm})
 		}
 	}
 	sort.Slice(occurrences, func(i, j int) bool {
@@ -510,7 +766,7 @@ func rankedOccurrences(text string, query compiledQuery) []rankedOccurrence {
 		if occurrences[i].end != occurrences[j].end {
 			return occurrences[i].end < occurrences[j].end
 		}
-		return query.slotLabel(occurrences[i].termIndex) < query.slotLabel(occurrences[j].termIndex)
+		return query.slotKey(occurrences[i].termIndex) < query.slotKey(occurrences[j].termIndex)
 	})
 	return occurrences
 }
