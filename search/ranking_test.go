@@ -50,6 +50,59 @@ func TestMultiAltProximityEvidence(t *testing.T) {
 	}
 }
 
+func TestMultiAltMinimalWitnessWindows(t *testing.T) {
+	for _, tc := range []struct {
+		text                            string
+		terms, winners                  []string
+		distance, span, quality, chunks int
+		mode                            PartialMode
+	}{
+		{"alpha beta gamma", []string{"alpha|alpha beta gamma", "beta"}, []string{"alpha", "beta"}, 100, 10, 2, 1, PartialModeOff},
+		{"alpha beta gamma", []string{"alpha|alpha beta gamma", "gamma"}, []string{"alpha beta gamma", "gamma"}, 100, 16, 2, 1, PartialModeOff},
+		{"alpha beta gamma", []string{"alpha|alpha beta gamma"}, []string{"alpha"}, 100, 5, 1, 1, PartialModeOff},
+		{"beta xx alpha yy zz", []string{"beta", "alpha|xx alpha yy zz"}, []string{"beta", "alpha"}, 100, 13, 2, 1, PartialModeOff},
+		{"beta alpha gamma delta xxxx", []string{"beta", "alpha|alpha gamma delta xxxx", "gamma"}, []string{"beta", "alpha", "gamma"}, 100, 16, 3, 1, PartialModeOff},
+		{"alpha xx beta yy zz ww", []string{"alpha|xx beta yy zz ww", "beta"}, []string{"alpha", "beta"}, 100, 13, 2, 1, PartialModeOff},
+		{"alpha xx beta yy zz ww", []string{"alpha|xx beta yy zz ww", "beta"}, []string{"xx beta yy zz ww", "beta"}, 3, 16, 2, 1, PartialModeOff},
+		{"beta xalpha gamma delta beta xalpha gamma delta", []string{"beta", "alpha|xalpha gamma delta beta", "gamma"}, []string{"beta", "xalpha gamma delta beta", "gamma"}, 100, 23, 3, 2, PartialModeContains},
+		{"alpha beta", []string{"alpha", "beta"}, []string{"alpha", "beta"}, 100, 10, 2, 1, PartialModeOff},
+		{"alpha beta filler omega beta", []string{"alpha|omega", "beta"}, []string{"alpha", "beta"}, 100, 10, 2, 2, PartialModeOff},
+	} {
+		t.Run(tc.text+fmt.Sprint(tc.distance), func(t *testing.T) {
+			var permute func([]string, []string, int)
+			permute = func(terms, winners []string, at int) {
+				if at < len(terms) {
+					for i := at; i < len(terms); i++ {
+						terms[at], terms[i] = terms[i], terms[at]
+						winners[at], winners[i] = winners[i], winners[at]
+						alts := strings.Split(terms[at], "|")
+						for n := 0; n < len(alts); n++ {
+							terms[at] = strings.Join(alts, "|")
+							permute(terms, winners, at+1)
+							slices.Reverse(alts)
+						}
+						terms[at] = strings.Join(alts, "|")
+						terms[at], terms[i] = terms[i], terms[at]
+						winners[at], winners[i] = winners[i], winners[at]
+					}
+					return
+				}
+				q := compileQuery(terms, tc.mode)
+				an, ok := analyzeRankedText(tc.text, q, tc.distance, true)
+				if !ok || an.SpanLength != tc.span || an.BoundaryQuality != tc.quality || an.TopQualityChunks != tc.chunks || !slices.Equal(an.MatchedTerms, winners) {
+					t.Fatalf("terms=%q: admitted=%v analysis=%+v; want span=%d quality=%d chunks=%d winners=%q", terms, ok, an, tc.span, tc.quality, tc.chunks, winners)
+				}
+				cat := analyzeRankedCatalog(tc.text, q, tc.distance, true, false)
+				resolved, ok := resolveRankedCatalog(cat, q, tc.distance, true, false, nil, nil, nil)
+				if !ok || resolved.SpanLength != an.SpanLength || resolved.TopQualityChunks != an.TopQualityChunks || !slices.Equal(resolved.MatchedTerms, an.MatchedTerms) {
+					t.Fatalf("catalog disagrees: %+v vs %+v", resolved, an)
+				}
+			}
+			permute(slices.Clone(tc.terms), slices.Clone(tc.winners), 0)
+		})
+	}
+}
+
 func TestMultiAltDisjointTFAndScoring(t *testing.T) {
 	for _, alts := range [][]string{
 		{"alpha beta", "beta gamma", "gamma delta"},

@@ -46,6 +46,46 @@ func TestMultiAltMultipartAndFallback(t *testing.T) {
 	})
 }
 
+func TestMultiAltMinimalExcerptWitnesses(t *testing.T) {
+	prior := ExcerptCharBudget
+	ExcerptCharBudget = func() int { return 200 }
+	t.Cleanup(func() { ExcerptCharBudget = prior })
+	longTail := strings.Repeat(" filler", 60)
+	for _, tc := range []struct {
+		text      string
+		terms     []string
+		wantTerms []string
+	}{
+		{"alpha beta gamma" + longTail + " alpha beta", []string{"alpha|alpha beta gamma", "beta"}, []string{"alpha", "alpha beta gamma", "beta"}},
+		{"alpha beta" + longTail, []string{"alpha|alpha beta" + longTail, "beta"}, []string{"alpha", "beta"}},
+		{"beta xx alpha" + longTail, []string{"beta", "alpha|xx alpha" + longTail}, []string{"beta", "alpha"}},
+		{"alpha beta" + longTail + " alpha beta", []string{"alpha", "beta"}, []string{"alpha", "beta"}},
+		{"alpha beta" + longTail + " omega beta", []string{"alpha|omega", "beta"}, []string{"alpha", "beta"}},
+	} {
+		q := compileQuery(tc.terms, PartialModeOff)
+		spans := extractRankedExcerptSpansQuery(tc.text, q, 1, 2, 2, true, 100)
+		if len(spans) != 1 || spans[0].rawStart != 0 || spans[0].termCount != 2 || strings.Contains(spans[0].text, " ... ") {
+			t.Fatalf("terms=%q: not an earliest contiguous excerpt: %+v", tc.terms, spans)
+		}
+		var got []string
+		for _, match := range excerptSpanMatchRanges(spans[0], q) {
+			got = append(got, match.Term)
+		}
+		slices.Sort(got)
+		slices.Sort(tc.wantTerms)
+		if !slices.Equal(got, tc.wantTerms) {
+			t.Fatalf("highlight identities=%q want=%q", got, tc.wantTerms)
+		}
+	}
+	q := compileQuery([]string{"alpha|alpha beta gamma", "missing"}, PartialModeOff)
+	for _, rare := range []bool{false, true} {
+		spans := extractRankedMappedExcerptSpansWeighted(cleanStage3Content("alpha beta gamma", true), q, 1, 1, 1, 100, true, nil, []bool{rare, false})
+		if (len(spans) == 1) != rare {
+			t.Fatalf("single-slot rarity=%v spans=%+v", rare, spans)
+		}
+	}
+}
+
 func TestMultipartExcerptDocumentOrderAndMergedWindows(t *testing.T) {
 	priorBudget := ExcerptCharBudget
 	ExcerptCharBudget = func() int { return 400 }

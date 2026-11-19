@@ -1077,7 +1077,54 @@ func extractRankedMappedExcerptSpansWeighted(mapped mappedContent, query compile
 		}
 		candidates := make([]candidate, 0, maxExcerpts)
 		counts := make([]int, query.slotCount())
+		multiAlt := query.hasMultiAltSlot()
+		var minEnd []int
+		var present []bool
+		if multiAlt {
+			minEnd = make([]int, query.slotCount())
+			present = make([]bool, query.slotCount())
+		}
 		for level := levelMax; level >= levelMin; level-- {
+			if multiAlt {
+				for l, anchor := range all {
+					if level == 1 && len(rareSlots) > 0 && !rareSlots[anchor.idx] {
+						continue
+					}
+					clear(present)
+					present[anchor.idx] = true
+					covered, maxOtherEnd := 1, 0
+					// Fix the anchor, but use only the shortest witness for each
+					// other slot. Highlighting still uses allExactMatches above.
+					for k := l + 1; level > 1 && k < len(all); k++ {
+						m := all[k]
+						if (distance > unconstrainedDistance && m.start-anchor.start > distance) || (covered == level && m.start >= maxOtherEnd) {
+							break
+						}
+						if m.idx == anchor.idx || (covered == level && !present[m.idx]) {
+							continue
+						}
+						if !present[m.idx] {
+							present[m.idx] = true
+							minEnd[m.idx] = m.end
+							covered++
+						} else if m.end < minEnd[m.idx] {
+							minEnd[m.idx] = m.end
+						} else {
+							continue
+						}
+						maxOtherEnd = 0
+						for s, ok := range present {
+							if ok && s != anchor.idx {
+								maxOtherEnd = max(maxOtherEnd, minEnd[s])
+							}
+						}
+					}
+					if covered == level {
+						candidates = append(candidates, candidate{rawStart: mapped.offsets[anchor.start], left: anchor.start, right: max(anchor.end, maxOtherEnd), score: RoundScore(canonicalSlotMaskWeight(query, present, slotWeights)), termCount: covered})
+					}
+				}
+				continue
+			}
 			clear(counts)
 			covered := 0
 			r := 0
