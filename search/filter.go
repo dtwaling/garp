@@ -517,6 +517,10 @@ func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, w
 	if err := ValidateExcludeTerms(options.ExcludeWords); err != nil {
 		return nil, err
 	}
+	// An empty normalized query has no candidates, as in progress discovery.
+	if query.slotCount() == 0 {
+		return nil, nil
+	}
 	admission, provable := prefilterAdmissionQuery(query)
 	gate := prefilterRawGate(admission)
 	matches := make([]string, 0, 128)

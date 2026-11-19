@@ -1788,6 +1788,31 @@ func TestGetDocumentFileCount_PathScope_WindowsCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestFindFilesWithFirstWordNormalizedEmptyParity(t *testing.T) {
+	root := t.TempDir()
+	path := writeWalkFixture(t, root, "alpha.txt", "alpha anchor")
+	for _, word := range []string{"", "   ", "\t\n", "alpha", "ALPHA"} {
+		var want []string
+		if strings.TrimSpace(word) != "" {
+			want = []string{path}
+		}
+		check := func(files []string, err error) {
+			t.Helper()
+			if err != nil || !reflect.DeepEqual(files, want) {
+				t.Errorf("word %q: files=%v err=%v, want %v", word, files, err, want)
+			}
+		}
+		check(FindFilesWithFirstWord(word, nil, root, nil))
+		check(FindFilesWithFirstWordProgress([]string{word}, nil, 1, nil, root, nil))
+		for _, mode := range []PartialMode{PartialModeOff, PartialModePrefix, PartialModeContains} {
+			check(FindFilesWithFirstWordPartial(word, nil, root, nil, mode))
+			check(FindFilesWithFirstWordPartialWithOptions(word, nil, root, nil, mode, WalkOptions{}))
+			check(FindFilesWithFirstWordProgressPartial([]string{word}, nil, 1, nil, root, nil, mode))
+			check(FindFilesWithFirstWordProgressPartialWithOptions([]string{word}, nil, 1, nil, root, nil, mode, WalkOptions{}))
+		}
+	}
+}
+
 func TestFindFilesWithFirstWord_PathScope_Assembly(t *testing.T) {
 	root := buildTestTree(t)
 	scope := []string{"*/Assembly/*"}
