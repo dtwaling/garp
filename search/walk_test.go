@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,11 +25,77 @@ func writeWalkFixture(t *testing.T, root, relative, content string) string {
 	return filename
 }
 
-func TestExtensionExcludedORGroup(t *testing.T) {
-	for _, path := range []string{"report.PDF", "spec.docx", "notes.md"} {
-		if got := extensionExcluded(path, []string{".pdf|.docx"}); got != (path != "notes.md") {
-			t.Fatalf("%s excluded=%v", path, got)
+func TestExtensionExclusionWalkParity(t *testing.T) {
+	root := t.TempDir()
+	all := []string{"keep.md", "mock.md", "nested/skip.docx", "skip.PDF", "skip.txt"}
+	for _, path := range all {
+		writeWalkFixture(t, root, path, "mock stub forbidden")
+	}
+	for _, tc := range []struct {
+		name     string
+		excludes []string
+		want     []string
+	}{
+		{"empty", nil, all},
+		{"word only", []string{"forbidden"}, all},
+		{"extension", []string{".pdf"}, []string{"keep.md", "mock.md", "nested/skip.docx", "skip.txt"}},
+		{"OR extensions and words", []string{".pdf|.docx", "mock|stub", "forbidden"}, []string{"keep.md", "mock.md", "skip.txt"}},
+		{"mixed group", []string{".pdf|mock"}, []string{"keep.md", "mock.md", "nested/skip.docx", "skip.txt"}},
+		{"case insensitive", []string{".TXT"}, []string{"keep.md", "mock.md", "nested/skip.docx", "skip.PDF"}},
+		{"escaped extension pipe", []string{`.pdf\|docx`}, all},
+		{"escaped word pipe", []string{`mock\|stub`}, all},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := collectCandidates(t, root, nil, nil, WalkOptions{ExcludeWords: tc.excludes})
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("walk = %q, want %q", got, tc.want)
+			}
+			var direct []string
+			for _, path := range all {
+				if !extensionExcluded(path, tc.excludes) {
+					direct = append(direct, path)
+				}
+			}
+			if !reflect.DeepEqual(direct, tc.want) {
+				t.Fatalf("helper = %q, want %q", direct, tc.want)
+			}
+		})
+	}
+	// Literal pipes in filenames are not portable, but the helper must consume
+	// the unescaped extension without interpreting it as another OR-group.
+	if !extensionExcluded("literal.pdf|docx", []string{`.pdf\|docx`}) {
+		t.Fatal("escaped literal extension was not excluded")
+	}
+}
+
+func TestWalkExclusionAllocationScaling(t *testing.T) {
+	options := WalkOptions{ExcludeWords: []string{".pdf|.docx", "mock|stub", "forbidden"}}
+	var deltas []float64
+	for _, count := range []int{1, 100} {
+		root := t.TempDir()
+		for i := 0; i < count; i++ {
+			writeWalkFixture(t, root, strconv.Itoa(i)+".md", "anchor")
 		}
+		measure := func(options WalkOptions) float64 {
+			return testing.AllocsPerRun(10, func() {
+				visited := 0
+				err := walkCandidates(nil, root, nil, options, func(string, os.FileInfo) error {
+					visited++
+					return nil
+				})
+				if err != nil || visited != count {
+					t.Fatalf("walk = %d files, %v; want %d", visited, err, count)
+				}
+			})
+		}
+		delta := measure(options) - measure(WalkOptions{})
+		deltas = append(deltas, delta)
+		t.Logf("%d files: exclusion allocation delta = %.0f", count, delta)
+	}
+	// Subtract ordinary traversal costs, allowing small runtime/race noise
+	// without permitting even one extra exclusion allocation per added file.
+	if deltas[1] > deltas[0]+16 {
+		t.Fatalf("exclusion allocations grew with file count: %v", deltas)
 	}
 }
 
