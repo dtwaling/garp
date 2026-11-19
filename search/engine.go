@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -103,7 +104,8 @@ type candidateMatch struct {
 
 type discoveredCandidate struct {
 	stage1 stage1FileScan
-	// Set only by discoverCandidates, not by the public path-only filtering API.
+	// Set by discoverCandidates and preserved by matched public discovery batches,
+	// never by unmatched path-only FilterCandidates calls.
 	primaryPrefiltered bool
 	filePath           string
 	canonicalKey       string
@@ -245,6 +247,7 @@ var heavySem = make(chan struct{}, 1)
 
 // SearchEngine handles the multi-word search logic
 type SearchEngine struct {
+	lastDiscovery        *discoveryBatch
 	lastDiscoverySummary *discoveryCorpusSummary
 	heavyOnce            sync.Once
 	heavyManager         *ConcurrencyManager
@@ -348,7 +351,10 @@ func NewSearchEngineWithWorkers(searchWords, excludeWords []string, fileTypes []
 }
 
 // DiscoverCandidates returns paths admitted by the order-neutral corpus scan.
+// The next FilterCandidates call can reuse its zero-text corpus snapshot only
+// with unchanged paths and Stage 1 query/scope settings.
 func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error) {
+	se.lastDiscovery, se.lastDiscoverySummary = nil, nil
 	roots, err := se.effectiveStartRoots()
 	if err != nil {
 		return nil, 0, err
@@ -357,6 +363,22 @@ func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error)
 	paths := make([]string, len(candidates))
 	for index := range candidates {
 		paths[index] = candidates[index].filePath
+	}
+	summary := se.lastDiscoverySummary
+	se.lastDiscoverySummary = nil
+	if err == nil && summary != nil {
+		se.lastDiscovery = &discoveryBatch{
+			summary: discoveryCorpusSummary{
+				baseN: summary.baseN, sumDL: summary.sumDL, baseDF: slices.Clone(summary.baseDF),
+			},
+			candidates: candidates,
+			paths:      slices.Clone(paths), roots: slices.Clone(roots),
+			searchWords: slices.Clone(se.SearchWords), partial: se.Partial, queryOpts: se.queryOptions(),
+			strict: se.Strict, noIgnore: se.NoIgnore, maxFileSize: se.MaxFileSize,
+			includeCode: se.IncludeCode, positiveGlobCodeEligibility: se.PositiveGlobCodeEligibility,
+			fileTypes: slices.Clone(se.FileTypes), pathScope: slices.Clone(se.PathScope),
+			userGlobs: slices.Clone(se.UserGlobs), extensionExcludes: se.discoveryExtensionExcludes(),
+		}
 	}
 	return paths, total, err
 }
@@ -384,6 +406,49 @@ type discoveryCorpusSummary struct {
 	baseDF []int
 }
 
+// discoveryBatch binds zero-text Stage 1 metadata to one public split-pipeline
+// handoff. Slices exposed through engine fields or returned paths are copied so
+// in-place caller edits invalidate the batch. Word exclusions are Stage 2 only.
+type discoveryBatch struct {
+	summary                     discoveryCorpusSummary
+	candidates                  []discoveredCandidate
+	paths                       []string
+	roots                       []StartRoot
+	searchWords                 []string
+	partial                     PartialMode
+	queryOpts                   QueryOptions
+	strict                      bool
+	noIgnore                    bool
+	maxFileSize                 int64
+	includeCode                 bool
+	positiveGlobCodeEligibility bool
+	fileTypes                   []string
+	pathScope                   []string
+	userGlobs                   []UserGlob
+	extensionExcludes           []string
+}
+
+func (se *SearchEngine) discoveryExtensionExcludes() []string {
+	var extensions []string
+	for _, exclude := range se.ExcludeWords {
+		if strings.HasPrefix(exclude, ".") {
+			extensions = append(extensions, strings.ToLower(exclude))
+		}
+	}
+	slices.Sort(extensions)
+	return slices.Compact(extensions)
+}
+
+func (batch *discoveryBatch) matches(se *SearchEngine, roots []StartRoot, paths []string) bool {
+	return slices.Equal(paths, batch.paths) && slices.Equal(roots, batch.roots) &&
+		slices.Equal(se.SearchWords, batch.searchWords) && se.Partial == batch.partial &&
+		se.queryOptions() == batch.queryOpts && se.Strict == batch.strict &&
+		se.NoIgnore == batch.noIgnore && se.MaxFileSize == batch.maxFileSize &&
+		se.IncludeCode == batch.includeCode && se.PositiveGlobCodeEligibility == batch.positiveGlobCodeEligibility &&
+		slices.Equal(se.FileTypes, batch.fileTypes) && slices.Equal(se.PathScope, batch.pathScope) &&
+		slices.Equal(se.UserGlobs, batch.userGlobs) && slices.Equal(se.discoveryExtensionExcludes(), batch.extensionExcludes)
+}
+
 func (summary *discoveryCorpusSummary) add(wordCount int, present []bool) {
 	summary.baseN++
 	summary.sumDL += float64(wordCount)
@@ -395,6 +460,7 @@ func (summary *discoveryCorpusSummary) add(wordCount int, present []bool) {
 }
 
 func (se *SearchEngine) discoverCandidates(query compiledQuery, fileCount int, roots []StartRoot) ([]discoveredCandidate, int, error) {
+	se.lastDiscovery = nil
 	se.lastDiscoverySummary = nil
 	if query.slotCount() == 0 {
 		return nil, 0, nil
@@ -537,12 +603,19 @@ func (se *SearchEngine) loadBinaryCleanedQuiet(cm *ConcurrencyManager, path, ext
 	return cleanSearchContent(mappedContent{text: text}, config.IsLiteralTextFile(path)).text, true
 }
 
-// FilterCandidates filters candidates for all words and excludes
+// FilterCandidates consumes matching discovery metadata once; otherwise corpus
+// statistics and provenance are rebuilt solely from candidateFiles.
 func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, startTime time.Time) ([]candidateMatch, error) {
+	batch := se.lastDiscovery
+	se.lastDiscovery = nil
 	se.lastDiscoverySummary = nil
 	roots, err := se.effectiveStartRoots()
 	if err != nil {
 		return nil, err
+	}
+	if batch != nil && batch.matches(se, roots, candidateFiles) {
+		se.lastDiscoverySummary = &batch.summary
+		return se.filterCandidates(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), batch.candidates, total, startTime)
 	}
 	traversals := make([]preparedRootTraversal, len(roots))
 	for index, root := range roots {

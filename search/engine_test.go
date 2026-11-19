@@ -170,6 +170,147 @@ func TestScarceMatchRarityFallbackPolicy(t *testing.T) {
 	}
 }
 
+func TestDiscoverFilterCorpusParity(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, noiseExt string
+		n, hits              int
+		wordExclude          bool
+	}{
+		{"scarce singleton", "alpha", ".txt", 2, 1, false},
+		{"rarity ratio boundary", "alpha", ".txt", 40, 2, false},
+		{"primary literal", "alpha beta", ".txt", 2, 1, false},
+		{"primary markup", "alpha beta", ".html", 2, 1, false},
+		{"primary mail", "alpha beta", ".eml", 2, 1, false},
+		{"primary document", "alpha beta", ".docx", 2, 1, false},
+		{"word exclusion preserves denominator", "alpha", ".txt", 2, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for i := range tc.n {
+				name, text := fmt.Sprintf("noise-%d%s", i, tc.noiseExt), "unrelated"
+				if i < tc.hits {
+					name, text = fmt.Sprintf("hit-%d.txt", i), tc.text
+				}
+				writeRankedFormatFixture(t, filepath.Join(root, name), text, false)
+				if tc.noiseExt == ".eml" && i >= tc.hits {
+					// No charset marker: exercise a decisive streaming miss, not
+					// the conservative MIME-decoding path into Stage 2.
+					writeEngineFixtureFiles(t, root, map[string]string{name: "Content-Type: text/plain\r\n\r\nunrelated"})
+				}
+			}
+			newEngine := func() (*SearchEngine, *rankingCountingExtractor) {
+				engine := NewSearchEngine([]string{"alpha", "beta"}, []string{".PDF"}, nil, false, 1, 1000)
+				engine.StartDir, engine.Silent = root, true
+				extractor := &rankingCountingExtractor{text: "unrelated"}
+				if IsBinaryFormat("noise" + tc.noiseExt) {
+					engine.Registry.extractors[strings.TrimPrefix(tc.noiseExt, ".")] = extractor
+				}
+				return engine, extractor
+			}
+			whole, wholeExtractor := newEngine()
+			if tc.wordExclude {
+				whole.ExcludeWords = []string{".pdf", "unrelated"}
+			}
+			want, err := whole.Execute()
+			if err != nil || len(want) != tc.hits {
+				t.Fatalf("Execute: results=%+v err=%v", want, err)
+			}
+			split, splitExtractor := newEngine()
+			paths, total, err := split.DiscoverCandidates(0)
+			if err != nil || len(paths) != tc.hits {
+				t.Fatalf("DiscoverCandidates: paths=%v err=%v", paths, err)
+			}
+			if tc.wordExclude {
+				split.ExcludeWords = []string{"unrelated", ".pdf", ".PDF"}
+			}
+			matches, err := split.FilterCandidates(paths, total, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := split.ExtractAndBuildResults(matches)
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("split results=%+v err=%v; Execute=%+v", got, err, want)
+			}
+			for _, result := range got {
+				if result.Score <= 0 || result.IsFallback != (tc.text == "alpha") || result.TermCount != len(strings.Fields(tc.text)) {
+					t.Fatalf("unexpected ranking: %+v", result)
+				}
+			}
+			wantCalls := int64(0)
+			if IsBinaryFormat("noise" + tc.noiseExt) {
+				wantCalls = int64(tc.n - tc.hits)
+			}
+			if splitExtractor.calls.Load() != wantCalls || wholeExtractor.calls.Load() != wantCalls {
+				t.Fatalf("binary extractions split=%d whole=%d, want %d", splitExtractor.calls.Load(), wholeExtractor.calls.Load(), wantCalls)
+			}
+		})
+	}
+}
+
+func TestDiscoverFilterInvalidation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*SearchEngine, []string)
+	}{
+		{"direct", nil},
+		{"consumed", nil},
+		{"query", func(se *SearchEngine, _ []string) { se.SearchWords[1] = "absent" }},
+		{"strict", func(se *SearchEngine, _ []string) { se.Strict = true }},
+		{"partial", func(se *SearchEngine, _ []string) { se.Partial = PartialModeContains }},
+		{"case", func(se *SearchEngine, _ []string) { se.CaseSensitive = true }},
+		{"smart forms", func(se *SearchEngine, _ []string) { se.SmartForms = true }},
+		{"path scope", func(se *SearchEngine, _ []string) { se.PathScope[0] = "hit.txt" }},
+		{"extension", func(se *SearchEngine, _ []string) { se.ExcludeWords[0] = ".html" }},
+		{"file types", func(se *SearchEngine, _ []string) { se.FileTypes[1] = "*.txt" }},
+		{"user globs", func(se *SearchEngine, _ []string) { se.UserGlobs[0].Pattern = "*.txt" }},
+		{"no ignore", func(se *SearchEngine, _ []string) { se.NoIgnore = true }},
+		{"size", func(se *SearchEngine, _ []string) { se.MaxFileSize = 1024 }},
+		{"code", func(se *SearchEngine, _ []string) { se.IncludeCode = true }},
+		{"glob code", func(se *SearchEngine, _ []string) { se.PositiveGlobCodeEligibility = true }},
+		{"roots", func(se *SearchEngine, _ []string) { se.StartRoots[0].SuppliedPath = "changed" }},
+		{"paths", func(_ *SearchEngine, paths []string) { paths[0] = filepath.Join(filepath.Dir(paths[0]), "noise.txt") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeEngineFixtureFiles(t, root, map[string]string{"hit.txt": "alpha", "noise.txt": "unrelated"})
+			engine := NewSearchEngine([]string{"alpha", "missing"}, []string{".pdf"}, []string{"-g", "*"}, false, 1, 1000)
+			engine.StartDir, engine.Silent = root, true
+			engine.PathScope, engine.UserGlobs = []string{"*"}, []UserGlob{{Pattern: "*"}}
+			var err error
+			engine.StartRoots, err = engine.effectiveStartRoots()
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths, total := []string{filepath.Join(root, "hit.txt")}, 1
+			if tc.name != "direct" {
+				paths, total, err = engine.DiscoverCandidates(0)
+				if err != nil || len(paths) != 1 {
+					t.Fatalf("discovery=%v err=%v", paths, err)
+				}
+			}
+			if tc.name == "consumed" {
+				matches, err := engine.FilterCandidates(paths, total, time.Now())
+				if err != nil || len(matches) != 1 || !matches[0].isFallback {
+					t.Fatalf("first filter=%v err=%v", matches, err)
+				}
+			}
+			if tc.mutate != nil {
+				tc.mutate(engine, paths)
+				if engine.lastDiscovery.matches(engine, engine.StartRoots, paths) {
+					t.Fatal("mutated Stage 1 inputs still match discovery snapshot")
+				}
+			}
+			matches, err := engine.FilterCandidates(paths, total, time.Now())
+			if err != nil || len(matches) != 0 {
+				t.Fatalf("standalone single-file corpus: matches=%v err=%v", matches, err)
+			}
+			if engine.lastDiscovery != nil || engine.lastDiscoverySummary != nil {
+				t.Fatal("filter did not consume discovery state")
+			}
+		})
+	}
+}
+
 func TestCorpusDenominatorInvarianceAcrossFormats(t *testing.T) {
 	for _, ext := range []string{".html", ".docx", ".eml", ".rtf"} {
 		t.Run(ext, func(t *testing.T) {
@@ -2259,6 +2400,18 @@ func TestStage2BinaryPrefilterProvenance(t *testing.T) {
 					matches, err = engine.FilterCandidates([]string{path}, 1, time.Now())
 					if err != nil || len(matches) != 0 || extractor.calls.Load() != before+1 {
 						t.Fatalf("direct: matches=%d calls=%d err=%v", len(matches), extractor.calls.Load(), err)
+					}
+					// The public split pipeline preserves the same provenance.
+					writeEngineFixtureFiles(t, dir, map[string]string{filepath.Base(path): "alpha"})
+					before = extractor.calls.Load()
+					paths, total, err := engine.DiscoverCandidates(1)
+					if err != nil || len(paths) != want {
+						t.Fatalf("public discovery=%v err=%v", paths, err)
+					}
+					writeEngineFixtureFiles(t, dir, map[string]string{filepath.Base(path): "unrelated"})
+					matches, err = engine.FilterCandidates(paths, total, time.Now())
+					if err != nil || len(matches) != want || extractor.calls.Load() != before+1 {
+						t.Fatalf("split: matches=%d calls=%d err=%v; want %d", len(matches), extractor.calls.Load()-before, err, want)
 					}
 				})
 			}
