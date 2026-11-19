@@ -490,7 +490,9 @@ func getDocumentFileCountForRoots(fileTypes []string, roots []StartRoot, pathSco
 	return len(seen), nil
 }
 
-// FindFilesWithFirstWord finds all files containing the first search word (pure Go).
+// FindFilesWithFirstWord is the legacy single-word candidate-discovery helper.
+// Literal candidates must match word; binary candidates await full extraction.
+// Its name does not confer first-term privilege on multi-slot engine searches.
 // walkRoot specifies the directory to search from; use "" or "." for the current directory.
 // pathScope, if non-empty, restricts results to files whose relative path matches at least
 // one simple glob pattern.

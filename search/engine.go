@@ -48,12 +48,12 @@ type SearchResult struct {
 	canonicalPath   string
 	FileSize        int64
 	IsFallback      bool           `json:"-"`
-	Score           float64        // Rounded ranking score; stateless helpers use matched term lengths.
+	Score           float64        // Rounded corpus-aware BM25F times proximity and slot coverage.
 	TermCount       int            // Number of distinct query terms in the best window.
 	PathMatchCount  int            `json:"-"`
 	BoundaryQuality int            `json:"-"`
 	MatchedTerms    []string       // Distinct query terms from the best window.
-	SpanLength      int            // UTF-8 byte span of the best window (first term start to furthest term end).
+	SpanLength      int            // UTF-8 byte span of the best window (earliest start to furthest end).
 	Excerpts        []string       // ANSI-highlighted, for TUI display
 	RawExcerpts     []string       // plain text before highlighting -- for machine-readable output (--json, --plain)
 	ExcerptMatches  [][]MatchRange `json:"-"` // source-validated byte ranges per RawExcerpts entry

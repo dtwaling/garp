@@ -132,7 +132,8 @@ in both files.
    has one term, present in every gold file that has extracted tokens; zero-token
    gold is exempt so extraction failures remain honest misses. `proximity` has
    at least two terms, all present in every gold file; `synonym` has at least two,
-   at least one absent from every gold file. Queries using `--partial`,
+   at least one common query term absent from every gold file's whole-file
+   token set, not merely absent from its cited line range. Queries using `--partial`,
    `--partial=prefix`, `--partial=contains`, or `--smart-forms` skip presence
    checks for all three kinds because exact-token presence cannot establish
    broadened matches; term-count requirements still apply. These checks are
@@ -188,6 +189,28 @@ After the #85 key was frozen, `docs-026` dropped `mail/sa-00008.eml`, a
 follow-up reply that neither contains `carbonara` nor gives the explanation
 the need asks for -- `mail/sa-00006.eml` remains sole gold, and the baseline
 was re-recorded.
+
+### Corpus-aware ranking pool completion and frozen-key limitation
+
+For #86, `eval-harness -pool` produced a path-sorted, system-blind pool for
+ten affected queries. Independent readers and a second judge reconciled the
+117 query/file pairs. The approved update added **13 `judged_nonrelevant`
+entries (4 docs, 9 code)** with **zero gold changes**; needs, args, kinds,
+roots, budgets, manifests, and existing judgments remained frozen. The
+v0.10.0 baseline was regenerated to refresh query hashes, with unchanged
+release retrieval metrics. The selected candidate has zero unjudged top-10
+files on both corpora; that is key coverage, not proof of semantic unanimity.
+
+**ASSUMED -- human PR-gate confirmation remains open:** `code-r-015`
+(`alias include type`) retains `crates/core/flags/defs.rs` as nonrelevant in
+the frozen key even though its include-directive documentation answers the
+need. That whole file contains every query term, whereas synonym-kind gold
+must share a missing term. This is a pre-existing semantic/key exception,
+explicitly retained under the approved frozen-key constraint, not a newly
+established content judgment or a parser/ranking fix. The mechanical schema
+does not justify calling relevant content nonrelevant. Comparisons below
+measure the retained key; query/schema correction requires separate approval.
+Keep this assumption visible at the human PR gate rather than silently closing it.
 
 ## Metric definitions
 
@@ -249,6 +272,33 @@ path tie-breaking for its positive-score top 50. rg is an AND pipeline of
 case-insensitive whole-word literal terms with default binary handling,
 `--no-config --no-ignore --hidden --sort path`; trailing `*` uses prefix
 matching. BM25 and rg ignore query flags.
+
+### Readable-corpus denominator and BM25 returned counts
+
+Live corpus-aware garp counts only successfully read/extracted eligible files,
+including readable files with zero cleaned words, after physical deduplication.
+For the pinned docs corpus, **`N_garp = 409`**, excluding 21 open-error PDFs
+tracked in #90. `internal/systems/bm25.go` retains failed extractions as empty
+manifest documents, so **`N_bm25 = 430`**. Both use the same 409 successfully
+extracted texts, but the IDF and average-length denominators differ. Live garp
+must not let unreadable files dilute average length or inflate rarity thresholds.
+The code corpus has no extraction errors (67 garp files, 139 ripgrep files).
+
+The current [v0.10.0 baseline](results/v0.10.0.json) per-query
+`per_system.bm25.returned` means (**Mean Ret**, not output tokens) are
+**15.9 files/query on docs (`666 / 42`)** and
+**27.8 files/query on code (`1166 / 42`)**. Values **36.1 / 41.2** in earlier
+#85/#86 design notes were historical pre-freeze #85 draft counts, not the
+current frozen-key baseline. BM25 returns at most 50 positive-score paths and
+does not render excerpt payloads; its hit@N and token costs remain n/a.
+
+The selected corpus-aware candidate's MRR@10 is 0.785714 on docs and 0.663520
+on code, versus previous-release 0.591270 / 0.504195 and BM25
+0.754195 / 0.635185. These small-corpus results retain the frozen-key
+exception above, the lexical/precision boundaries, and the deferred v0.11.1
+extractor/cleaner misses (#90, #91, #92, #94); see the repository
+[known limitations](../README.md#known-limitations). They do not measure
+semantic retrieval or eliminate extraction limitations.
 
 ## How to re-baseline at a release
 
