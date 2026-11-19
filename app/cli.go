@@ -705,10 +705,10 @@ func showVersion() {
 // source lines. score/term_count are omitted when the chunk did not frame
 // a ranked window (fallback paths).
 type jsonExcerpt struct {
-	Text      string  `json:"text"`
-	StartLine int     `json:"start_line,omitempty"`
-	Score     float64 `json:"score,omitempty"`
-	TermCount int     `json:"term_count,omitempty"`
+	Text      string   `json:"text"`
+	StartLine int      `json:"start_line,omitempty"`
+	Score     *float64 `json:"score,omitempty"`
+	TermCount int      `json:"term_count,omitempty"`
 }
 
 // jsonResult is a single file match in --json output.
@@ -959,8 +959,11 @@ func buildJSONOutput(args *Arguments, outcome search.ExecutionResult) jsonOutput
 			excerpts[i] = jsonExcerpt{
 				Text:      ex,
 				StartLine: excerptStartLineAt(r.StartLines, i),
-				Score:     excerptChunkScoreAt(r.ChunkScores, i),
-				TermCount: excerptChunkTermCountAt(r.ChunkTermCounts, i),
+			}
+			if terms := excerptChunkTermCountAt(r.ChunkTermCounts, i); terms > 0 {
+				s := search.RoundScore(excerptChunkScoreAt(r.ChunkScores, i))
+				excerpts[i].Score = &s
+				excerpts[i].TermCount = terms
 			}
 		}
 		out.Results = append(out.Results, jsonResult{
@@ -1041,9 +1044,9 @@ func writePlainOutput(w io.Writer, args *Arguments, outcome search.ExecutionResu
 			score := excerptChunkScoreAt(r.ChunkScores, j)
 			terms := excerptChunkTermCountAt(r.ChunkTermCounts, j)
 			switch {
-			case score > 0 && terms > 0 && formatLine(excerptStartLineAt(r.StartLines, j)) != "":
+			case terms > 0 && formatLine(excerptStartLineAt(r.StartLines, j)) != "":
 				fmt.Fprintf(w, "EXCERPT %d [%s, Score: %s (%d terms)]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), search.FormatScore(score), terms, ex)
-			case score > 0 && terms > 0:
+			case terms > 0:
 				fmt.Fprintf(w, "EXCERPT %d [Score: %s (%d terms)]: %s\n", j+1, search.FormatScore(score), terms, ex)
 			case formatLine(excerptStartLineAt(r.StartLines, j)) != "":
 				fmt.Fprintf(w, "EXCERPT %d [%s]: %s\n", j+1, formatLine(excerptStartLineAt(r.StartLines, j)), ex)

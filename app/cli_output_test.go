@@ -896,7 +896,7 @@ func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {
 		if err := json.Unmarshal(encoded, &decoded); err != nil {
 			t.Fatal(err)
 		}
-		if decoded.Results[0].Score != 4.0328 || decoded.Results[0].Excerpts[0].Score != 1.2345 {
+		if decoded.Results[0].Score != 4.0328 || decoded.Results[0].Excerpts[0].Score == nil || *decoded.Results[0].Excerpts[0].Score != 1.2345 {
 			t.Fatalf("fractional JSON: %s", encoded)
 		}
 		var plain bytes.Buffer
@@ -907,6 +907,50 @@ func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {
 			}
 		}
 	})
+	for _, tc := range []struct {
+		name  string
+		terms []int
+		want  []string
+	}{
+		{"zero-score ranked chunks", []int{1, 2}, []string{"EXCERPT 1 [L3, Score: 0 (1 terms)]: alpha", "EXCERPT 2 [Score: 0 (2 terms)]: alpha beta"}},
+		{"unranked fallback chunks", []int{0, 0}, []string{"EXCERPT 1 [L3]: alpha", "EXCERPT 2: alpha beta"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := parseArguments([]string{"alpha", "beta"})
+			outcome := search.ExecutionResult{Matches: 1, Returned: 1, Results: []search.SearchResult{{
+				FilePath: "common.txt", RawExcerpts: []string{"alpha", "alpha beta"},
+				StartLines: []int{3, 0}, ChunkScores: []float64{0, 0}, ChunkTermCounts: tc.terms,
+			}}}
+			out := buildJSONOutput(args, outcome)
+			encoded, err := json.Marshal(out.Results[0].Excerpts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var excerpts []map[string]any
+			if err := json.Unmarshal(encoded, &excerpts); err != nil {
+				t.Fatal(err)
+			}
+			for i, excerpt := range excerpts {
+				score, hasScore := excerpt["score"]
+				terms, hasTerms := excerpt["term_count"]
+				ranked := tc.terms[i] > 0
+				got := out.Results[0].Excerpts[i]
+				if (got.Score != nil) != ranked || (ranked && *got.Score != 0) {
+					t.Errorf("excerpt %d score presence/value: %+v", i, got)
+				}
+				if hasScore != ranked || hasTerms != ranked || (ranked && (score != float64(0) || terms != float64(tc.terms[i]))) {
+					t.Errorf("excerpt %d quality fields: %s", i, encoded)
+				}
+			}
+			var plain bytes.Buffer
+			writePlainOutput(&plain, args, outcome)
+			for _, want := range tc.want {
+				if !strings.Contains(plain.String(), want+"\n") {
+					t.Errorf("missing %q in %s", want, plain.String())
+				}
+			}
+		})
+	}
 	root := buildRankedSubsetFixture(t)
 	args := parseArguments([]string{
 		"alpha", "beta", "gamma",
@@ -929,11 +973,14 @@ func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {
 		if len(excerpts) != 2 {
 			t.Fatalf("JSON excerpt count = %d, want 2 (both quality levels)", len(excerpts))
 		}
-		if excerpts[0].Score <= excerpts[1].Score || excerpts[0].TermCount != 3 {
-			t.Fatalf("first excerpt quality = (score %v, terms %d), want (higher, 3)", excerpts[0].Score, excerpts[0].TermCount)
+		if excerpts[0].Score == nil || excerpts[1].Score == nil {
+			t.Fatalf("ranked excerpt scores missing: %s", out)
 		}
-		if excerpts[1].Score <= 0 || excerpts[1].TermCount != 2 {
-			t.Fatalf("second excerpt quality = (score %v, terms %d), want (positive, 2)", excerpts[1].Score, excerpts[1].TermCount)
+		if *excerpts[0].Score <= *excerpts[1].Score || excerpts[0].TermCount != 3 {
+			t.Fatalf("first excerpt quality = (score %v, terms %d), want (higher, 3)", *excerpts[0].Score, excerpts[0].TermCount)
+		}
+		if *excerpts[1].Score <= 0 || excerpts[1].TermCount != 2 {
+			t.Fatalf("second excerpt quality = (score %v, terms %d), want (positive, 2)", *excerpts[1].Score, excerpts[1].TermCount)
 		}
 		if !strings.Contains(excerpts[0].Text, "gamma") {
 			t.Fatalf("first excerpt should be the best cluster: %q", excerpts[0].Text)
@@ -949,13 +996,16 @@ func TestRankedSubsetJSONAndPlainOutput(t *testing.T) {
 	t.Run("plain excerpt headers carry per-chunk quality", func(t *testing.T) {
 		out := string(captureCLIStdout(t, func() int { return runPlain(args) }))
 		excerpts := outputJSONFromCLI(t, args).Results[0].Excerpts
+		if len(excerpts) != 2 || excerpts[0].Score == nil || excerpts[1].Score == nil {
+			t.Fatalf("expected two ranked JSON excerpts: %+v", excerpts)
+		}
 		if got := strings.Count(out, "EXCERPT "); got != 2 {
 			t.Fatalf("plain excerpt count = %d, want 2:\n%s", got, out)
 		}
-		if !strings.Contains(out, fmt.Sprintf("EXCERPT 1 [L1, Score: %s (3 terms)]", search.FormatScore(excerpts[0].Score))) {
+		if !strings.Contains(out, fmt.Sprintf("EXCERPT 1 [L1, Score: %s (3 terms)]", search.FormatScore(*excerpts[0].Score))) {
 			t.Errorf("plain output missing per-chunk quality header for the best chunk:\n%s", out)
 		}
-		if !strings.Contains(out, fmt.Sprintf("EXCERPT 2 [L1, Score: %s (2 terms)]", search.FormatScore(excerpts[1].Score))) {
+		if !strings.Contains(out, fmt.Sprintf("EXCERPT 2 [L1, Score: %s (2 terms)]", search.FormatScore(*excerpts[1].Score))) {
 			t.Errorf("plain output missing per-chunk quality header for the lower chunk:\n%s", out)
 		}
 	})
