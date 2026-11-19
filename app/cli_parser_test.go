@@ -10,6 +10,57 @@ import (
 	"garp/search"
 )
 
+func TestParseArgumentsORGroups(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{" Prune | Ignore | PRUNE ", "prune|ignore"},
+		{`alpha\|beta`, `alpha\|beta`},
+	} {
+		got := parseArguments([]string{tc.raw})
+		if got.ParseErr != nil || !slicesEqual(got.SearchWords, []string{tc.want}) {
+			t.Errorf("%q: terms = %q, error = %v", tc.raw, got.SearchWords, got.ParseErr)
+		}
+	}
+
+	// Repeated alternatives still exercise the raw per-group cap.
+	invalid := [][]string{
+		{"|"}, {"foo|"}, {"|bar"}, {"foo||bar"},
+		{strings.Repeat("a|", 16) + "a"},
+		{"needle", "--not", "a||b"},
+		{"needle", "--not", strings.Repeat("a|", 16) + "a"},
+		{"needle", "--startdir", "a|b"},
+		{"needle", "--pathscope", "a|b"},
+	}
+	var slots, groups []string
+	for i := 0; i < 33; i++ {
+		slots = append(slots, strings.Repeat("x", i+1))
+	}
+	slots[0] += "|other"
+	invalid = append(invalid, slots)
+	for i := 0; i < 5; i++ {
+		var alternatives []string
+		for j := 0; j < 13; j++ {
+			alternatives = append(alternatives, strings.Repeat("x", i*13+j+1))
+		}
+		groups = append(groups, strings.Join(alternatives, "|"))
+	}
+	invalid = append(invalid, groups, append([]string{"needle", "--not"}, groups...))
+	for _, argv := range invalid {
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			got := parseArguments(argv)
+			if got.ParseErr == nil {
+				t.Error("ParseErr = nil, want validation error")
+			}
+			code, stderr := runWithArgsAndStderr(t, append([]string{"garp", "--json"}, argv...))
+			if code != 1 || !strings.Contains(stderr, "Error:") {
+				t.Errorf("Run = %d, stderr = %q; want exit 1 and Error:", code, stderr)
+			}
+			if got.ParseErr != nil && !strings.Contains(stderr, got.ParseErr.Error()) {
+				t.Errorf("stderr = %q, want parser diagnostic %q", stderr, got.ParseErr)
+			}
+		})
+	}
+}
+
 func TestParseArgumentsMaxFileSize(t *testing.T) {
 	t.Run("valid value", func(t *testing.T) {
 		args := parseArguments([]string{"needle", "--max-filesize", "12MiB"})

@@ -17,6 +17,57 @@ import (
 	"garp/search"
 )
 
+func TestCLIOutputORGroups(t *testing.T) {
+	ordinary := make([]string, 33)
+	for i := range ordinary {
+		ordinary[i] = fmt.Sprintf("t%d", i+1)
+	}
+	for _, tc := range []struct {
+		name, content  string
+		terms, matched []string
+	}{
+		{"alternatives", "ignore walk", []string{"prune|ignore", "walk"}, []string{"ignore", "walk"}},
+		{"literal pipe", "alpha|beta", []string{`alpha\|beta`}, []string{"alpha|beta"}},
+		{"ordinary slots uncapped", strings.Join(ordinary, " "), ordinary, ordinary},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeCLISearchFixture(t, root, "match.txt", tc.content)
+			argv := append([]string{"garp", "--startdir", root, "--strict", "--distance", "5000"}, tc.terms...)
+			if args := parseArguments(argv[1:]); args.ParseErr != nil {
+				t.Fatal(args.ParseErr)
+			}
+			result := captureCLIRunJSON(t, append(argv, "--json"))
+			if !slicesEqual(result.Query.Terms, tc.terms) || len(result.Results) != 1 {
+				t.Fatalf("query/results = %+v", result)
+			}
+			if got := result.Results[0]; got.TermCount != len(tc.terms) || !slicesEqual(got.MatchedTerms, tc.matched) {
+				t.Fatalf("slot count / matched alternatives = %+v", got)
+			}
+			originalArgs := os.Args
+			defer func() { os.Args = originalArgs }()
+			os.Args = append(argv, "--plain")
+			plain := string(captureCLIStdout(t, Run))
+			for _, want := range []string{
+				fmt.Sprintf("MATCH 1/1 [Score: %s (%d/%d terms)]", search.FormatScore(result.Results[0].Score), len(tc.terms), len(tc.terms)),
+				"EXCERPT 1 [L1, Score: ", fmt.Sprintf("(%d terms)]:", len(tc.terms)),
+			} {
+				if !strings.Contains(plain, want) {
+					t.Errorf("plain missing %q: %s", want, plain)
+				}
+			}
+			if strings.ContainsRune(plain, '\x1b') {
+				t.Errorf("plain contains ANSI: %q", plain)
+			}
+			os.Args = append(argv, "-l")
+			paths := strings.TrimSpace(string(captureCLIStdout(t, Run)))
+			if paths != escapeOutputLine(result.Results[0].File) || !slicesEqual(outputPathsFromPlainOutput(t, plain), jsonResultPaths(result.Results)) {
+				t.Errorf("output path parity failed: -l %q, JSON %+v", paths, result.Results)
+			}
+		})
+	}
+}
+
 func TestCLIOutputFormats(t *testing.T) {
 	root := t.TempDir()
 	fixtures := map[string]string{

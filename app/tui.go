@@ -351,18 +351,13 @@ func (m model) View() string {
 	headerLines = append(headerLines, logo)
 	headerLines = append(headerLines, "")
 
+	extEx, exWords := search.SplitExcludeDisplay(m.excludeWords)
 	// Search terms (full list, wrapped)
 	{
 		// Build full comma-separated list and wrap
 		searchLine := wrapTextWithIndent("🔍 Searching: ", terminaltext.Sanitize(strings.Join(m.searchWords, ", ")), width-4)
 
 		// Append excluded non-extension words (full list)
-		var exWords []string
-		for _, w := range m.excludeWords {
-			if !strings.HasPrefix(w, ".") {
-				exWords = append(exWords, w)
-			}
-		}
 		if len(exWords) > 0 {
 			searchLine += "  🚫 " + terminaltext.Sanitize(strings.Join(exWords, ", "))
 		}
@@ -374,12 +369,6 @@ func (m model) View() string {
 	targetPrefix := "📁 Target:    "
 	targetStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
 	// Append extension excludes (e.g., .pdf) to keep header truthful, condensed with emoji
-	var extEx []string
-	for _, w := range m.excludeWords {
-		if strings.HasPrefix(w, ".") {
-			extEx = append(extEx, w)
-		}
-	}
 	suffix := ""
 	if len(m.onlyTypes) == 0 && m.onlyType == "" && len(extEx) > 0 {
 		var shown []string
@@ -534,7 +523,7 @@ func (m model) View() string {
 							}
 							loc, ok := firstTermMatchRange(cleanRanges, term, options)
 							if !ok {
-								rawTermRanges := search.FindMatchRangesWithOptions(result.CleanContent, []string{term}, m.partial, options)
+								rawTermRanges := search.FindMatchRangesWithOptions(result.CleanContent, []string{search.EscapeLiteralTerm(term)}, m.partial, options)
 								termRanges := translateMatchRanges(rawTermRanges, cleanOffsets, len(result.CleanContent))
 								cleanRanges = append(cleanRanges, termRanges...)
 								loc, ok = firstTermMatchRange(termRanges, term, options)
@@ -851,11 +840,8 @@ func matchRangeMatchesTerm(rangeTerm, queryTerm string, options search.QueryOpti
 	if rangeTerm == queryTerm || (!options.CaseSensitive && strings.EqualFold(rangeTerm, queryTerm)) {
 		return true
 	}
-	norm := search.NormalizeQueryTermsWithOptions([]string{queryTerm}, options)
-	if len(norm) == 1 {
-		return rangeTerm == norm[0] || (!options.CaseSensitive && strings.EqualFold(rangeTerm, norm[0]))
-	}
-	return false
+	norm := search.NormalizeLiteralTermWithOptions(queryTerm, options)
+	return rangeTerm == norm || (!options.CaseSensitive && strings.EqualFold(rangeTerm, norm))
 }
 
 func firstTermMatchRange(ranges []search.MatchRange, term string, options search.QueryOptions) (search.MatchRange, bool) {
@@ -895,7 +881,7 @@ func alignUTF8SliceBounds(s string, start, end int) (int, int) {
 
 func excerptContainsTerm(rawExcerpt string, matches []search.MatchRange, hasValidatedMatches bool, result search.SearchResult, term string, partial search.PartialMode, options search.QueryOptions) bool {
 	if !hasValidatedMatches {
-		matches = search.FindMatchRangesWithOptions(rawExcerpt, []string{term}, partial, options)
+		matches = search.FindMatchRangesWithOptions(rawExcerpt, []string{search.EscapeLiteralTerm(term)}, partial, options)
 	}
 	_, offsets := terminaltext.SanitizeWithOffsets(rawExcerpt)
 	for _, m := range matches {
@@ -911,11 +897,12 @@ func excerptContainsTerm(rawExcerpt string, matches []search.MatchRange, hasVali
 			continue
 		}
 		sub := rawExcerpt[start:end]
+		// FindTermIndex accepts a literal term, not encoded OR-slot syntax.
 		if search.FindTermIndex(sub, term, partial, options) != nil {
 			return true
 		}
 		if strings.ContainsAny(term, "*?") && result.CleanContent != "" {
-			for _, full := range search.FindMatchRangesWithOptions(result.CleanContent, []string{term}, partial, options) {
+			for _, full := range search.FindMatchRangesWithOptions(result.CleanContent, []string{search.EscapeLiteralTerm(term)}, partial, options) {
 				if full.Start >= 0 && full.End <= len(result.CleanContent) && strings.HasPrefix(result.CleanContent[full.Start:full.End], sub) {
 					return true
 				}
