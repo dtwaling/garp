@@ -19,7 +19,8 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 | Use garp | Use grep/ripgrep |
 |---|---|
 | Order-invariant 2+ term proximity (`--distance`); scarce rare-anchor fallback | exact symbol / regex lookup |
-| 3+ terms admit any 2+ slots; `--strict` requires all terms and disables fallback | list every literal hit of one token |
+| 3+ slots admit any 2+; `--strict` requires all slots and disables fallback | list every literal hit of one token |
+| Single-call concept expansion (`a\|b\|c` satisfies one slot) | full boolean/regex expressions |
 | prefix/partial identifier matching (`deploy*`, `--partial`) | full regex syntax needed |
 | PDF / DOC / DOCX / ODT / RTF / eml / mbox / msg content | quick one-shot in a terminal |
 | monster files: ranked excerpt + `start_line` -> one targeted read, no paging | |
@@ -38,9 +39,18 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 - `--max-results N`: maximum ranked matching files returned (default `50` in `--json` and `--plain`; `-l`/`--pathonly` defaults to `0`; `0` = unlimited).
 - `--partial[=prefix|contains]`: boundary-aware prefix (default) or raw substring. Per-term inline wildcards `*` and `?` work at any position: leading, mid-token, or trailing (`deploy*`, `ms-*-api`, `*OptionApi*`, `mark?systems`; quote terms in shells). `--smart-forms`: match word forms (plurals, -ing, -ed, -tion).
 - `-i` and `-s`: select case-insensitive or case-sensitive matching; the last case flag wins.
-- `--strict`: full conjunction in the window; disable both partial multi-term admission and single-slot fallback. Otherwise two-term primary matches require both slots and 3+ terms require any 2+, with no first-term privilege. If fewer than five primary files match, append at most `min(3, 5 - len(primary))` single-slot files whose matched slot has `1 <= df <= max(1, floor(0.05*N))` across `N >= 2` readable files. Common-word-only matches are intentionally withheld; no lexical overlap means no match. A pipe in a query term is literal, not OR syntax.
+- `a|b|c`: one concept slot satisfied by any alternative. Quote pipes in shells; escape a literal pipe as `\|` (`garp 'a\|b' --json`). `\\|` means one literal backslash plus an OR separator; tokens without `|` preserve backslashes verbatim. Wildcards (`deploy*|rollout`), partial matching, and smart forms apply per positive alternative. garp does not infer synonyms.
+- `--strict`: require every slot, not every alternative, in the window; disable both partial multi-term admission and single-slot fallback. Otherwise two-slot primary matches require both slots and 3+ slots require any 2+, with no first-term privilege. If fewer than five primary files match, append at most `min(3, 5 - len(primary))` single-slot files whose matched slot has `1 <= df <= max(1, floor(0.05*N))` across `N >= 2` readable files. Common-word-only matches are intentionally withheld; no lexical overlap means no match.
 - `-l`: skip excerpt extraction and emit one distinct matching file path per line in ranked order. Zero matches produce empty stdout.
-- `--not <tokens...>`: exclusions after the flag; `.ext` excludes a file type, bare words exclude whole words.
+- `--not <tokens...>`: exclusions after the flag; `.ext` excludes a file type, bare words exclude whole words. OR-groups work here too: `--not 'mock|stub'` or `--not '.pdf|.docx'`. Any alternative excludes; wildcards/partial expansion do not apply to exclusions.
+
+OR-specific bounds: 16 raw alternatives per group, 32 normalized positive
+slots, 64 normalized positive alternatives total; 64 expanded exclusions
+(without deduplication). Positive and exclusion bounds activate independently
+when their list uses an unescaped OR separator, even if duplicates collapse.
+Malformed groups (`|`, `a||b`, `a|`) or over-limit input exits **1** before
+searching, never truncates. Non-OR inputs retain their uncapped behavior.
+`--startdir` and `--pathscope` still reject `|`.
 
 Value flags accept both `--flag value` and `--flag=value`. Use `--` to stop
 flag parsing. These short flags follow rg conventions, but garp is not a
@@ -50,7 +60,8 @@ supported; use `--distance` and `-m`.
 Both `--partial` modes (`prefix` and `contains`) require terms of at least
 3 characters for partial matching. The short-term guardrail (`len(term) <= 2`)
 keeps shorter terms whole-word to prevent noisy substring explosion; the
-implementation measures length in bytes. Explicit inline wildcards such as
+implementation measures length in bytes, per alternative (`id|identifier`
+keeps `id` whole-word with `--partial`). Explicit inline wildcards such as
 `al*` still work for short terms (quote them in shells).
 
 On all platforms, an absolute `--pathscope`, `-g`, or `--iglob` pattern must overlap an
@@ -67,6 +78,7 @@ One-shot find -> pinpoint -> targeted read: each result carries the file, a rank
 - Top-level `matches` counts all matching files; `returned` counts files in `results`. `truncated: true` means only the top `N` ranked files were returned under `--max-results N`; use `--max-results 0` for all matches. `timed_out` counts binary files skipped because extraction exceeded `--file-timeout-binary`; they are absent from `matches`, and a one-line `Warning:` goes to stderr.
 - Sort order: primary matches before single-slot fallbacks, then score, matched-term count, path-term count, boundary quality, tighter span, top-quality chunk count, ranking-root-relative path, supplied root order, then canonical path. File `score` is walk-derived BM25F times proximity and slot coverage, rounded to `1e-4` (also in plain output and the TUI), not an integer term-length sum. Inspect `term_count` and `matched_terms` to distinguish full, partial, and single-slot match tiers.
 - Each excerpt: `text` (context-padded, newlines collapsed), per-chunk IDF-sum `score` and `term_count`, plus 1-based `start_line` = line of the earliest matched term. Only `start_line` is omitted for extracted formats (PDF, DOCX, email) without stable source lines.
+- `query.terms` echoes normalized canonical slots (including OR labels and literal-pipe escapes). `term_count` counts covered slots; `matched_terms` names the selected matched alternative per covered slot, in slot order. `--plain` stays ANSI-free and reports matched/total slots, not alternatives.
 - When matched terms are further apart than the excerpt display budget (`span > budget`), multipart excerpts join per-term context windows with `" ... "` (space, three ASCII dots, space). Windows are in source order and overlapping windows are merged; the joiner marks omitted text, not a contiguous source passage.
 - Chunks within a file are a ranked subset, best-first: with `-m N` where `N > 1`, every quality tier can seed a chunk, so a strong cluster no longer hides the file's other clusters. Every chunk is >=90% new content (bounded overlap).
 - Act on results by reading the file at `start_line` (with margin) instead of re-searching or paging through reads.
@@ -79,3 +91,15 @@ One-shot find -> pinpoint -> targeted read: each result carries the file, a rank
 ```
 
 Example: locate deployment base-image notes -> `garp AMI parent base --startdir <repo> -t md --distance 200 --json`. Note: extracted PDF text can normalize tokens (e.g. `RHC03-2516` -> `RHC 03-2516`); if an expected hit misses, retry with looser or split terms.
+
+Single-call expansion in the garp repository:
+
+```sh
+garp 'ignore|skip|exclude|prune' walk gitignore --code --distance 400 --json
+```
+
+This replaces four separate synonym probes. `query.terms` is
+`["ignore|skip|exclude|prune", "walk", "gitignore"]`; `search/ignore.go`
+returns as a 2-of-3 slot hit with `matched_terms: ["ignore", "gitignore"]`
+(it lacks whole-word `walk`). Reordering slots or alternatives does not change
+ranked file order; matched alternatives are still reported in query-slot order.
