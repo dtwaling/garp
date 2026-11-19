@@ -3,6 +3,7 @@ package search
 import (
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -39,8 +40,29 @@ type matchRange struct {
 // querySlot is one concept with alternative matchers. Compilation currently
 // creates one literal term per slot; a pipe is not alternation syntax.
 type querySlot struct {
-	label string
-	alts  []termMatcher
+	label         string
+	alts          []termMatcher
+	key           string
+	defaultWeight float64
+}
+
+type slotMatch struct {
+	start, end int
+	altTerm    string
+}
+
+// canonicalSlotKey is collision-free and independent of alternative order.
+func canonicalSlotKey(foldKeys []string) string {
+	keys := slices.Clone(foldKeys)
+	slices.Sort(keys)
+	var key strings.Builder
+	for _, part := range keys {
+		key.WriteString(strconv.Itoa(len(part)))
+		key.WriteByte(':')
+		key.WriteString(part)
+		key.WriteByte(';')
+	}
+	return key.String()
 }
 
 func (s querySlot) matches(text string) bool {
@@ -53,22 +75,47 @@ func (s querySlot) matches(text string) bool {
 }
 
 func (s querySlot) findAll(text string) []matchRange {
-	var ranges []matchRange
-	for _, matcher := range s.alts {
-		ranges = append(ranges, matcher.findAll(text)...)
+	if len(s.alts) == 1 {
+		return s.alts[0].findAll(text)
 	}
-	slices.SortFunc(ranges, func(a, b matchRange) int {
+	var ranges []matchRange
+	for _, match := range s.findAllDetailed(text) {
+		ranges = append(ranges, matchRange{match.start, match.end})
+	}
+	return ranges
+}
+
+// findAllDetailed keeps nested and overlapping evidence for proximity windows.
+// Only identical spans collapse, preferring the most specific alternative.
+func (s querySlot) findAllDetailed(text string) []slotMatch {
+	var ranges []slotMatch
+	for _, matcher := range s.alts {
+		for _, r := range matcher.findAll(text) {
+			ranges = append(ranges, slotMatch{r.start, r.end, matcher.term})
+		}
+	}
+	if len(s.alts) <= 1 {
+		return ranges
+	}
+	slices.SortFunc(ranges, func(a, b slotMatch) int {
 		if a.start != b.start {
 			return a.start - b.start
 		}
-		return a.end - b.end
+		if a.end != b.end {
+			return a.end - b.end
+		}
+		if len(a.altTerm) != len(b.altTerm) {
+			return len(b.altTerm) - len(a.altTerm)
+		}
+		return strings.Compare(a.altTerm, b.altTerm)
 	})
-	return slices.Compact(ranges)
+	return slices.CompactFunc(ranges, func(a, b slotMatch) bool { return a.start == b.start && a.end == b.end })
 }
 
 // compiledQuery is the immutable matching form of one normalized query.
-// Terms, matchers, and slots remain aligned by normalized input index; candidate
-// eligibility and ranking must not give that input order semantic significance.
+// Terms and slots align by normalized input index. Flat matchers carry DNF
+// ownership: all matchers of an alternative must hit; any alternative fills a
+// slot. Prefilter phrase pieces must never be passed to ranking/excerpt code.
 type compiledQuery struct {
 	terms             []string
 	matchers          []termMatcher
@@ -76,10 +123,10 @@ type compiledQuery struct {
 	minSlots          int
 	maxMatchBytes     int
 	maxDetectionBytes int
-	// owners is nil except in prefilter admission queries, where matchers[i]
-	// must hit together with all matchers sharing its owner to admit
-	// terms[owners[i]]. Never pass these queries to ranking or excerpt code.
-	owners []int
+	altSlots          []int
+	matcherAlts       []int
+	// An unprefilterable alternative makes its whole slot impossible to refute.
+	preSatisfiedSlots []bool
 }
 
 // Slot accessors also support internal prefilter queries built without slots.
@@ -109,6 +156,47 @@ func (q compiledQuery) slotFindAll(i int, text string) []matchRange {
 		return q.slots[i].findAll(text)
 	}
 	return q.matchers[i].findAll(text)
+}
+
+// slotKey preserves legacy label ordering for single-alternative queries.
+// Multi-alternative keys are canonical; type tags keep the two forms distinct.
+func (q compiledQuery) slotKey(i int) string {
+	if len(q.slots) > 0 && len(q.slots[i].alts) > 1 {
+		return "1" + q.slots[i].key
+	}
+	return "0" + q.slotLabel(i)
+}
+
+func (q compiledQuery) slotDefaultWeight(i int) float64 {
+	if len(q.slots) > 0 {
+		return q.slots[i].defaultWeight
+	}
+	return float64(len(q.matchers[i].term))
+}
+
+func (q compiledQuery) slotAlts(i int) []termMatcher {
+	if len(q.slots) > 0 {
+		return q.slots[i].alts
+	}
+	return q.matchers[i : i+1]
+}
+
+func (q compiledQuery) slotAltTerm(i, alt int) string { return q.slotAlts(i)[alt].term }
+
+func (q compiledQuery) slotFindAllDetailed(i int, text string) []slotMatch {
+	if len(q.slots) > 0 {
+		return q.slots[i].findAllDetailed(text)
+	}
+	return (querySlot{alts: q.slotAlts(i)}).findAllDetailed(text)
+}
+
+func (q compiledQuery) hasMultiAltSlot() bool {
+	for _, slot := range q.slots {
+		if len(slot.alts) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // QueryOptions defines immutable matching behavior for a compiled query.
@@ -250,10 +338,16 @@ func compileQueryWithOptions(terms []string, mode PartialMode, options QueryOpti
 		matchers: make([]termMatcher, 0, len(normalized)),
 		slots:    make([]querySlot, 0, len(normalized)),
 	}
-	for _, term := range normalized {
+	for s, term := range normalized {
 		matcher := compileTermMatcherWithOptions(term, mode, options)
 		query.matchers = append(query.matchers, matcher)
-		query.slots = append(query.slots, querySlot{label: term, alts: []termMatcher{matcher}})
+		key := term
+		if !options.CaseSensitive {
+			key = unicodeFoldKey(term)
+		}
+		query.slots = append(query.slots, querySlot{label: term, alts: []termMatcher{matcher}, key: canonicalSlotKey([]string{key}), defaultWeight: float64(len(term))})
+		query.altSlots = append(query.altSlots, s)
+		query.matcherAlts = append(query.matcherAlts, s)
 		if matcher.maxMatchBytes < 0 {
 			query.maxMatchBytes = -1
 		} else if query.maxMatchBytes >= 0 && matcher.maxMatchBytes > query.maxMatchBytes {

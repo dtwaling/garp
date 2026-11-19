@@ -17,6 +17,35 @@ import (
 	"unicode/utf8"
 )
 
+func TestMultiAltMultipartAndFallback(t *testing.T) {
+	prior := ExcerptCharBudget
+	ExcerptCharBudget = func() int { return 400 }
+	t.Cleanup(func() { ExcerptCharBudget = prior })
+	q := multiAltQuery([][]string{{"alpha", "beta"}, {"gamma", "delta"}}, PartialModeOff)
+	t.Run("multipart", func(t *testing.T) {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Fatalf("multipart panicked: %v", p)
+			}
+		}()
+		text := "beta " + strings.Repeat("filler ", 100) + "delta"
+		spans := extractRankedExcerptSpansQuery(text, q, 1, 2, 2, false, 5000)
+		if len(spans) != 1 || spans[0].termCount != 2 || !strings.Contains(spans[0].text, " ... ") {
+			t.Fatalf("multipart=%+v", spans)
+		}
+		ranges := excerptSpanMatchRanges(spans[0], q)
+		if len(ranges) != 2 || ranges[0].Term != "beta" || ranges[1].Term != "delta" {
+			t.Fatalf("alternative identities=%+v", ranges)
+		}
+	})
+	t.Run("legacy fallback", func(t *testing.T) {
+		spans := extractRankedExcerptSpansQuery("beta only.", q, 1, 2, 0, false, unconstrainedDistance)
+		if len(spans) != 1 || spans[0].score != 0 || spans[0].termCount != 0 {
+			t.Fatalf("fallback=%+v", spans)
+		}
+	})
+}
+
 func TestMultipartExcerptDocumentOrderAndMergedWindows(t *testing.T) {
 	priorBudget := ExcerptCharBudget
 	ExcerptCharBudget = func() int { return 400 }

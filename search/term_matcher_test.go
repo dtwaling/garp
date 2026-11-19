@@ -5,6 +5,64 @@ import (
 	"testing"
 )
 
+// multiAltQuery exercises slot consumers independently of the public parser.
+func multiAltQuery(groups [][]string, mode PartialMode) compiledQuery {
+	var q compiledQuery
+	for s, group := range groups {
+		part := compileQuery(group, mode)
+		q.terms = append(q.terms, strings.Join(group, "|"))
+		var keys []string
+		var weight float64
+		for _, alt := range part.matchers {
+			keys = append(keys, unicodeFoldKey(alt.term))
+			weight = max(weight, float64(len(alt.term)))
+			q.matcherAlts = append(q.matcherAlts, len(q.altSlots))
+			q.altSlots = append(q.altSlots, s)
+		}
+		q.slots = append(q.slots, querySlot{label: strings.Join(group, "|"), alts: part.matchers, key: canonicalSlotKey(keys), defaultWeight: weight})
+		q.matchers = append(q.matchers, part.matchers...)
+		q.maxDetectionBytes = max(q.maxDetectionBytes, part.maxDetectionBytes)
+		if part.maxMatchBytes < 0 || q.maxMatchBytes < 0 {
+			q.maxMatchBytes = -1
+		} else {
+			q.maxMatchBytes = max(q.maxMatchBytes, part.maxMatchBytes)
+		}
+	}
+	return q
+}
+
+func TestMultiAltSlotKeyOrdering(t *testing.T) {
+	literal := compileQuery([]string{"alpha", "beta", "alpha|beta"}, PartialModeOff)
+	fallback := compiledQuery{terms: literal.terms, matchers: literal.matchers}
+	for _, q := range []compiledQuery{literal, fallback} {
+		for i, term := range q.terms {
+			if got := q.slotKey(i); got != "0"+term {
+				t.Fatalf("literal key = %q, want %q", got, "0"+term)
+			}
+		}
+	}
+	want := "1" + canonicalSlotKey([]string{unicodeFoldKey("alpha"), unicodeFoldKey("beta")})
+	for _, alts := range [][]string{{"alpha", "beta"}, {"beta", "alpha"}} {
+		q := multiAltQuery([][]string{alts}, PartialModeOff)
+		if got := q.slotKey(0); got != want || got == literal.slotKey(2) {
+			t.Fatalf("multi-alt key = %q, want %q distinct from literal", got, want)
+		}
+	}
+}
+
+func TestMultiAltSameSpanSpecificity(t *testing.T) {
+	for _, alts := range [][]string{{"deploy", "deployment"}, {"deployment", "deploy"}} {
+		q := multiAltQuery([][]string{alts}, PartialModePrefix)
+		if ranges := q.slotFindAll(0, "deployment"); len(ranges) != 1 || ranges[0] != (matchRange{0, 10}) {
+			t.Fatalf("ranges=%v", ranges)
+		}
+		an, ok := analyzeRankedText("deployment", q, 20, true)
+		if !ok || len(an.MatchedTerms) != 1 || an.MatchedTerms[0] != "deployment" || an.SlotTF[0] != 1 {
+			t.Fatalf("specificity: %+v, admitted=%v", an, ok)
+		}
+	}
+}
+
 func TestTermMatchScratchAgreesWithMatcher(t *testing.T) {
 	var scratch termMatchScratch
 	for _, text := range []string{

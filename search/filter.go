@@ -804,7 +804,7 @@ func (s *discoveryScanner) admits(r io.Reader, q compiledQuery) bool {
 				state.found[i] = true
 			}
 		}
-		return state.satisfied(q.minSlots == 0 && len(q.terms) <= 1)
+		return state.satisfied(q.minSlots == 0 && q.slotCount() <= 1)
 	}
 	overlap := streamQueryOverlap(q)
 	if len(s.window) < overlap+s.chunk {
@@ -1266,21 +1266,19 @@ func readerValidatedEOF(r io.Reader) bool {
 }
 
 type streamQueryMatches struct {
-	found    []bool
-	owners   []int
-	terms    int
-	minSlots int
+	found                 []bool
+	altSlots, matcherAlts []int
+	preSatisfiedSlots     []bool
+	slots                 int
+	minSlots              int
 }
 
 func newStreamQueryMatches(q compiledQuery) streamQueryMatches {
-	return streamQueryMatches{found: make([]bool, len(q.matchers)), owners: q.owners, terms: len(q.terms), minSlots: q.minSlots}
+	return streamQueryMatches{found: make([]bool, len(q.matchers)), altSlots: q.altSlots, matcherAlts: q.matcherAlts, preSatisfiedSlots: q.preSatisfiedSlots, slots: q.slotCount(), minSlots: q.minSlots}
 }
 
 func (m *streamQueryMatches) slotTotal() int {
-	if m.owners != nil {
-		return m.terms
-	}
-	return len(m.found)
+	return m.slots
 }
 
 func (m *streamQueryMatches) observe(text string, query compiledQuery, from int) {
@@ -1304,18 +1302,25 @@ func (m *streamQueryMatches) satisfied(strict bool) bool {
 }
 
 func (m *streamQueryMatches) satisfiedMin(minSlots int) bool {
-	if m.owners != nil {
-		grouped := streamQueryMatches{found: make([]bool, m.terms)}
-		for i := range grouped.found {
-			grouped.found[i] = true
+	present := m.found
+	if m.matcherAlts != nil {
+		alts := make([]bool, len(m.altSlots))
+		for a := range alts {
+			alts[a] = true
 		}
-		for i, owner := range m.owners {
-			grouped.found[owner] = grouped.found[owner] && m.found[i]
+		for i, alt := range m.matcherAlts {
+			alts[alt] = alts[alt] && m.found[i]
 		}
-		return grouped.satisfiedMin(minSlots)
+		present = make([]bool, m.slots)
+		copy(present, m.preSatisfiedSlots)
+		for a, satisfied := range alts {
+			if satisfied {
+				present[m.altSlots[a]] = true
+			}
+		}
 	}
 	count := 0
-	for _, found := range m.found {
+	for _, found := range present {
 		if found {
 			count++
 		}
@@ -1375,37 +1380,55 @@ func streamMatchesQuery(r io.Reader, query compiledQuery, strict bool, maxBytes 
 // requiring adjacency in raw markup. Unusable pieces cannot prove absence.
 func prefilterAdmissionQuery(q compiledQuery) (compiledQuery, bool) {
 	hasPhrase := false
-	for _, term := range q.terms {
-		hasPhrase = hasPhrase || strings.Contains(term, " ")
+	for _, matcher := range q.matchers {
+		hasPhrase = hasPhrase || strings.Contains(matcher.term, " ")
 	}
 	if !hasPhrase {
 		return q, true
 	}
-	aq := compiledQuery{terms: q.terms, owners: make([]int, 0, len(q.matchers)), minSlots: q.minSlots}
-	for i, p := range q.matchers {
-		start := len(aq.matchers)
-		if !strings.Contains(p.term, " ") {
-			aq.matchers = append(aq.matchers, p)
-		} else {
-			for _, piece := range strings.Split(p.term, " ") {
-				// An invalid wildcard parent matches literal '*' and '?'.
-				// Recompiling such pieces as wildcards can lose real matches.
-				if piece == "" || !p.validWildcard && strings.ContainsAny(piece, "*?") {
-					continue
-				}
-				m := compileTermMatcherWithOptions(piece, PartialModeContains, QueryOptions{CaseSensitive: !p.caseInsensitive})
-				if m.mode == PartialModeContains {
-					aq.matchers = append(aq.matchers, m)
+	aq := compiledQuery{terms: q.terms, slots: make([]querySlot, q.slotCount()), minSlots: q.minSlots, preSatisfiedSlots: make([]bool, q.slotCount())}
+	for s := 0; s < q.slotCount(); s++ {
+		for _, p := range q.slotAlts(s) {
+			start := len(aq.matchers)
+			if !strings.Contains(p.term, " ") {
+				aq.matchers = append(aq.matchers, p)
+			} else {
+				for _, piece := range strings.Split(p.term, " ") {
+					// Invalid wildcard parents match literal '*' and '?'.
+					// Recompiling those pieces could lose real matches.
+					if piece == "" || !p.validWildcard && strings.ContainsAny(piece, "*?") {
+						continue
+					}
+					m := compileTermMatcherWithOptions(piece, PartialModeContains, QueryOptions{CaseSensitive: !p.caseInsensitive})
+					if m.mode == PartialModeContains {
+						aq.matchers = append(aq.matchers, m)
+					}
 				}
 			}
+			if len(aq.matchers) == start {
+				aq.preSatisfiedSlots[s] = true
+				continue
+			}
+			a := len(aq.altSlots)
+			aq.altSlots = append(aq.altSlots, s)
+			for _, m := range aq.matchers[start:] {
+				aq.matcherAlts = append(aq.matcherAlts, a)
+				aq.maxDetectionBytes = max(aq.maxDetectionBytes, m.detectionBytes)
+			}
 		}
-		if len(aq.matchers) == start {
-			return compiledQuery{}, false
+	}
+	minimum := min(2, q.slotCount())
+	if q.minSlots > 0 {
+		minimum = min(q.minSlots, q.slotCount())
+	}
+	preSatisfied := 0
+	for _, present := range aq.preSatisfiedSlots {
+		if present {
+			preSatisfied++
 		}
-		for _, m := range aq.matchers[start:] {
-			aq.owners = append(aq.owners, i)
-			aq.maxDetectionBytes = max(aq.maxDetectionBytes, m.detectionBytes)
-		}
+	}
+	if preSatisfied >= minimum {
+		return compiledQuery{}, false
 	}
 	return aq, true
 }
@@ -1415,7 +1438,7 @@ func prefilterAdmissionQuery(q compiledQuery) (compiledQuery, bool) {
 // a gate match, so a raw gate miss proves a cleaned miss. Its matchers are nil
 // when a term cannot be relaxed (2 bytes or fewer, or an invalid wildcard).
 func prefilterRawGate(q compiledQuery) compiledQuery {
-	gate := compiledQuery{terms: q.terms, owners: q.owners, matchers: make([]termMatcher, len(q.matchers)), minSlots: q.minSlots}
+	gate := compiledQuery{terms: q.terms, slots: q.slots, altSlots: q.altSlots, matcherAlts: q.matcherAlts, preSatisfiedSlots: q.preSatisfiedSlots, matchers: make([]termMatcher, len(q.matchers)), minSlots: q.minSlots}
 	for i, m := range q.matchers {
 		if m.mode != PartialModeContains {
 			m = compileTermMatcherWithOptions(m.term, PartialModeContains, QueryOptions{CaseSensitive: !m.caseInsensitive})
@@ -1601,8 +1624,8 @@ func encodingAwarePrefilter(filePath string, query compiledQuery, strict bool, c
 	}
 	// Extraction joins the subject and body without intervening mail headers.
 	// A phrase can span that join even when every raw-text variant misses it.
-	for _, term := range query.terms {
-		if strings.ContainsFunc(term, unicode.IsSpace) {
+	for _, matcher := range query.matchers {
+		if strings.ContainsFunc(matcher.term, unicode.IsSpace) {
 			return false, false
 		}
 	}
