@@ -1,30 +1,46 @@
 ---
 name: garp-search
-description: Use when searching a codebase or docs for terms that must appear near each other (concept co-occurrence, symbol proximity), for prefix or partial identifier matching, or to search PDF/DOCX/RTF/eml content. Ranked multi-term matching with JSON output and line numbers.
+description: Use when searching unindexed mixed-format docs (PDF, DOC/DOCX/ODT/RTF, eml/mbox/msg, text) via ranked lexical proximity, a|b|c OR-groups, and --json excerpts; --code search is secondary.
 ---
 
-# garp -- proximity content search
+# garp -- document-first lexical proximity search
 
-`garp` finds files where search terms co-occur within a proximity window (UTF-8 bytes) -- text, code, and binary documents (PDF, DOC, DOCX, ODT, RTF, eml/mbox/msg). Single pure-Go binary, identical behavior on Windows and Linux/macOS: run `garp` from PATH, else the repo binary (`bin/garp`; `garp.exe` on Windows). Forward slashes work in paths on every OS. Quote paths containing spaces; `--startdir` paths reject wildcards.
+`garp` runs ranked lexical proximity search over unindexed, mixed-format document trees, built for agent callers. One static pure-Go binary extracts and searches PDF, DOC, DOCX, ODT, RTF, eml, mbox, and msg alongside Markdown, plain text, HTML/XML, and config files on a live filesystem -- no external tools and no index (`--code` adds source files as a secondary mode). Identical behavior on Windows and Linux/macOS: run `garp` from PATH, else the repo binary (`bin/garp`; `garp.exe` on Windows). Forward slashes work in paths on every OS. Quote paths containing spaces; `--startdir` paths reject wildcards.
 
 Invariants:
 - **Always pass `--json`** (preferred), **`-l`** (when only matching file paths are needed), **or `--plain`** in agent sessions. Without one of these, garp launches the interactive TUI, which blocks a PTY and errors out without one.
 - Errors go to stderr: check the exit code before parsing stdout, and zero-check the top-level `matches` integer before iterating `results`.
 - Tuning flags (`--workers`, `--heavy-concurrency`, `--file-timeout-binary`) have safe defaults; leave them. Exception: if top-level `timed_out` is above 0, rerun with a higher `--file-timeout-binary` (max 60000) to search the skipped binary files.
 
-## When to use garp vs grep/ripgrep
+## When to use garp vs rg (and what garp is not)
 
-Default rule: single exact symbol or regex -> grep; anything about WHERE terms or concepts co-occur -> garp.
+Default rule: unindexed PDF/Office/email/mixed-document trees or multi-term lexical proximity -> `garp`; exact symbol, literal string, regex, or exhaustive line scan in plain text/code -> `rg`.
 
-| Use garp | Use grep/ripgrep |
-|---|---|
-| Order-invariant 2+ term proximity (`--distance`); scarce rare-anchor fallback | exact symbol / regex lookup |
-| 3+ slots admit any 2+; `--strict` requires all slots and disables fallback | list every literal hit of one token |
-| Single-call concept expansion (`a\|b\|c` satisfies one slot) | full boolean/regex expressions |
-| prefix/partial identifier matching (`deploy*`, `--partial`) | full regex syntax needed |
-| PDF / DOC / DOCX / ODT / RTF / eml / mbox / msg content | quick one-shot in a terminal |
-| monster files: ranked excerpt + `start_line` -> one targeted read, no paging | |
-| prune the walk to chosen subdirs (`-g` / `--iglob`) | |
+- **Not semantic search:** `garp` is purely lexical and index-free. Natural-language questions (`"how are ignored directories skipped"`) return 0 matches unless those literal words co-occur; the caller supplies vocabulary.
+- **Not a `ripgrep` (`rg`) replacement:** `rg` scans raw plain-text and source bytes directly without document extraction, supports full regexes and `-C`/`-A`/`-B` line context, and lists every matching line.
+- **Not a code-structure tool:** `garp` has no AST, symbol table, call graph, or type/import resolution; use LSP, `ast-grep`, `ctags`, or `rg` for definitions, callers, and structural queries.
+
+| Scenario | Use | Avoid |
+|---|---|---|
+| Unindexed PDF, DOC, DOCX, ODT, RTF, eml, mbox, or msg trees | `garp` (pure-Go extraction + ranked `--json` excerpts) | `rg` alone (no Office/PDF/MSG text extraction) |
+| Mixed document + Markdown/HTML/text folders where 2+ domain terms co-occur within `--distance` (`1000..5000`) | `garp` (walk-derived BM25F + proximity ranking; primary hits need both slots on 2-slot or any `2+` on `3+`-slot queries, `--strict` requires all slots) | Ad-hoc multi-pass `rg` intersection loops |
+| Uncertain document/domain wording where the caller can enumerate synonyms (`'amendment\|addendum\|rider' lease`) | `garp` (`a\|b\|c` satisfies one query slot in one walk) | Passing natural-language questions (no synonym or embedding inference) |
+| Large prose, Markdown, or log files needing one ranked excerpt + `start_line` instead of result paging | `garp` (bounded-overlap `-m` excerpts + targeted read at `start_line`) | `rg` when every matching line or `-C`/`-A`/`-B` context is needed (use `rg` there) |
+| Single exact symbol, identifier, string literal, or full regex in plain text or code | `rg` | `garp` |
+| Symbol definitions, callers, references, imports, or AST patterns | LSP, `ast-grep`, `ctags`, or `rg` | `garp` |
+| Secondary code search (`--code`): finding where 2+ domain terms or `a\|b\|c` synonyms co-occur near each other (`--distance 100..400`, `deploy*`, `--partial`) when exact identifiers are unknown | `garp --code` | Keeping `garp` once you know the exact symbol or regex (switch to `rg`) |
+
+## Query formulation & zero-match recovery
+
+- **Caller owns vocabulary & query expansion:**
+  - Strip question words and filler (`how`, `where`, `is`, `handled`, `what`) -- every positional argument is a lexical query slot: `--strict` requires every slot, non-strict `2`-slot primary matches require both slots (admitting single-slot hits only via scarce rare-anchor fallback when `N >= 2` and primary matches `< 5`), and on `3+` slots filler dilutes slot coverage or surfaces noisy rare-word fallbacks on small trees.
+  - Expand uncertain terms **in one call** with `a|b|c` OR-group slots (quote pipes in shells) rather than running sequential single-word retries; combine per alternative with `--partial` (`>= 3`-byte prefix stems), inline `*`/`?` wildcards, or `--smart-forms` (appends `s`, `es`, `ed`, `ing`, `al`, `tion`, `ation` directly to the literal stem without silent-`e` stripping, e.g. `renew` -> `renewal`/`renewed`; to bridge silent-`e` stems such as `approve` -> `approval`, use `'approve|approved|approval'`, inline wildcard `approv*`, or the shortened stem `approv` with `--partial` -- bare `approve --partial` still requires the trailing `e` and misses `approval`).
+- **How to react when `matches == 0` (check in order instead of repeating the query):**
+  1. **`timed_out > 0`:** heavy binary extraction hit `--file-timeout-binary` (default `1000` ms) -- rerun with `--file-timeout-binary 10000` (max `60000`).
+  2. **File-type or ignore scope:** source files require `--code` (or `-t <ext>`); `.xls`/`.xlsx`/`.ppt`/`.pptx`/`.ods`/`.odp` are not extracted; `.gitignore`/`.ignore` rules skip ignored trees unless targeted via direct-child `--pathscope child/` or `--no-ignore`.
+  3. **Document/markup cleaning splits:** in `.pdf`, `.doc`, `.docx`, `.odt`, `.rtf`, `.eml`, `.mbox`, `.msg`, `.html`, and `.xml`, uppercase/digit run-ons split (`RHC03-2516` -> `RHC 03-2516`, `SHA256` -> `SHA 256`) and `>`-quoted lines are removed -- retry with split tokens or `--partial`.
+  4. **Strictness, rarity boundary, or window size:** `--strict` requires every slot in `--distance` bytes and disables fallback. Without `--strict`, primary matches require both slots on `2`-slot queries (any `2+` slots on `3+` slots), while single-slot fallback applies to `2+`-slot queries only when `N >= 2` readable files exist, fewer than `5` primary files match, and the matched slot has `1 <= df <= max(1, floor(0.05*N))` (so single-file scopes `N < 2` or common words above `max(1, floor(0.05*N))` return `0` matches when no `2`-slot window hits). Inspect `term_count`/`matched_terms` on non-strict hits to spot `1`-slot fallbacks; to recover missed co-occurrence, widen uncertain slots with `a|b|c` synonyms, drop `--strict`, shorten stems with `--partial` or `*`, add `--smart-forms`, or raise `--distance`.
+  5. **Wrong tool for the query:** if searching plain text or code for a literal substring, punctuation-heavy token, or regex, switch to `rg`.
 
 ## Flags that matter
 
@@ -39,7 +55,7 @@ Default rule: single exact symbol or regex -> grep; anything about WHERE terms o
 - `--max-results N`: maximum ranked matching files returned (default `50` in `--json` and `--plain`; `-l`/`--pathonly` defaults to `0`; `0` = unlimited).
 - `--partial[=prefix|contains]`: boundary-aware prefix (default) or raw substring. Per-term inline wildcards `*` and `?` work at any position: leading, mid-token, or trailing (`deploy*`, `ms-*-api`, `*OptionApi*`, `mark?systems`; quote terms in shells). `--smart-forms`: match word forms (plurals, -ing, -ed, -tion).
 - `-i` and `-s`: select case-insensitive or case-sensitive matching; the last case flag wins.
-- `a|b|c`: one concept slot satisfied by any alternative. Quote pipes in shells; escape a literal pipe as `\|` (`garp 'a\|b' --json`). `\\|` means one literal backslash plus an OR separator; tokens without `|` preserve backslashes verbatim. Wildcards (`deploy*|rollout`), partial matching, and smart forms apply per positive alternative. garp does not infer synonyms.
+- `a|b|c`: one query slot satisfied by any alternative. Quote pipes in shells; escape a literal pipe as `\|` (`garp 'a\|b' --json`). `\\|` means one literal backslash plus an OR separator; tokens without `|` preserve backslashes verbatim. Wildcards (`deploy*|rollout`), partial matching, and smart forms apply per positive alternative. garp does not infer synonyms.
 - `--strict`: require every slot, not every alternative, in the window; disable both partial multi-term admission and single-slot fallback. Otherwise two-slot primary matches require both slots and 3+ slots require any 2+, with no first-term privilege. If fewer than five primary files match, append at most `min(3, 5 - len(primary))` single-slot files whose matched slot has `1 <= df <= max(1, floor(0.05*N))` across `N >= 2` readable files. Common-word-only matches are intentionally withheld; no lexical overlap means no match.
 - `-l`: skip excerpt extraction and emit one distinct matching file path per line in ranked order. Zero matches produce empty stdout.
 - `--not <tokens...>`: exclusions after the flag; `.ext` excludes a file type, bare words exclude whole words. OR-groups work here too: `--not 'mock|stub'` or `--not '.pdf|.docx'`. Any alternative excludes; wildcards/partial expansion do not apply to exclusions.
@@ -90,9 +106,15 @@ One-shot find -> pinpoint -> targeted read: each result carries the file, a rank
   "excerpts": [ { "text": "...", "start_line": 42, "score": 4.0328, "term_count": 2 } ] } ]
 ```
 
-Example: locate deployment base-image notes -> `garp AMI parent base --startdir <repo> -t md --distance 200 --json`. Note: extracted PDF text can normalize tokens (e.g. `RHC03-2516` -> `RHC 03-2516`); if an expected hit misses, retry with looser or split terms.
+Example (mixed-format document & email tree):
 
-Single-call expansion in the garp repository:
+```sh
+garp 'amendment|addendum|rider' lease termination --startdir <docs-dir> --distance 1500 --json
+```
+
+Locate Markdown/PDF deployment notes (`garp AMI parent base --startdir <repo> -t md --distance 200 --json`; extracted PDF text splits uppercase/digit run-ons such as `RHC03-2516` -> `RHC 03-2516`, so retry with split terms if an expected PDF hit misses).
+
+Secondary `--code` single-call expansion in the `garp` repository:
 
 ```sh
 garp 'ignore|skip|exclude|prune' walk gitignore --code --distance 400 --json
