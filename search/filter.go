@@ -231,9 +231,12 @@ func CheckTextContainsExcludeWords(text string, excludeWords []string) bool {
 
 // CheckTextContainsExcludeWordsWithOptions applies the active query case mode.
 func CheckTextContainsExcludeWordsWithOptions(text string, excludeWords []string, options QueryOptions) bool {
-	if len(excludeWords) == 0 {
-		return false
-	}
+	_, words := SplitExcludeWords(excludeWords)
+	return checkTextContainsLiteralExcludeWords(text, words, options)
+}
+
+// checkTextContainsLiteralExcludeWords consumes already expanded literal words.
+func checkTextContainsLiteralExcludeWords(text string, excludeWords []string, options QueryOptions) bool {
 	for _, word := range excludeWords {
 		if containsLiteralExcludeWord(text, word, options.CaseSensitive) {
 			return true
@@ -507,22 +510,17 @@ func FindFilesWithFirstWordPartial(word string, fileTypes []string, walkRoot str
 
 // FindFilesWithFirstWordPartialWithOptions finds candidates using the shared walk policy.
 func FindFilesWithFirstWordPartialWithOptions(word string, fileTypes []string, walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
-	return findFilesWithFirstWordMatcherWithOptions(
-		compileTermMatcher(word, partial, true),
-		fileTypes,
-		walkRoot,
-		pathScope,
-		options,
-	)
-}
-
-func findFilesWithFirstWordMatcherWithOptions(matcher termMatcher, fileTypes []string, walkRoot string, pathScope []string, options WalkOptions) ([]string, error) {
-	admission, provable := prefilterAdmissionQuery(compiledQuery{
-		terms: []string{matcher.term}, matchers: []termMatcher{matcher}, maxDetectionBytes: matcher.detectionBytes,
-	})
+	query, err := compileQueryChecked([]string{word}, partial, QueryOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateExcludeTerms(options.ExcludeWords); err != nil {
+		return nil, err
+	}
+	admission, provable := prefilterAdmissionQuery(query)
 	gate := prefilterRawGate(admission)
 	matches := make([]string, 0, 128)
-	err := walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
+	err = walkCandidates(fileTypes, walkRoot, pathScope, options, func(path string, _ os.FileInfo) error {
 		if IsBinaryFormat(path) {
 			// include heavy binary types as candidates; full check later
 			matches = append(matches, path)
@@ -1010,8 +1008,15 @@ func FindFilesWithFirstWordProgressPartial(words []string, fileTypes []string, w
 // FindFilesWithFirstWordProgressPartialWithOptions emits discovery progress
 // using the shared walk policy.
 func FindFilesWithFirstWordProgressPartialWithOptions(words []string, fileTypes []string, workers int, onProgress func(processed, total int, path string), walkRoot string, pathScope []string, partial PartialMode, options WalkOptions) ([]string, error) {
+	query, err := compileQueryChecked(words, partial, QueryOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateExcludeTerms(options.ExcludeWords); err != nil {
+		return nil, err
+	}
 	return findFilesWithFirstWordProgressQueryWithOptions(
-		compileQuery(words, partial),
+		query,
 		fileTypes,
 		workers,
 		onProgress,
@@ -1800,7 +1805,11 @@ func CheckFileContainsAllWordsPartial(filePath string, words []string, distance 
 }
 
 func checkFileContainsAllWordsPartial(filePath string, words []string, distance int, silent bool, partial PartialMode, maxBytes int64) (bool, error) {
-	return checkFileContainsAllWordsQuery(filePath, compileQuery(words, partial), distance, silent, partial, maxBytes)
+	query, err := compileQueryChecked(words, partial, QueryOptions{})
+	if err != nil {
+		return false, err
+	}
+	return checkFileContainsAllWordsQuery(filePath, query, distance, silent, partial, maxBytes)
 }
 
 func checkFileContainsAllWordsQuery(filePath string, query compiledQuery, distance int, silent bool, partial PartialMode, maxBytes int64) (bool, error) {
@@ -1830,7 +1839,11 @@ func CheckFileContainsRankedWordsPartial(filePath string, words []string, distan
 }
 
 func checkFileContainsRankedWordsPartial(filePath string, words []string, distance int, strict bool, silent bool, partial PartialMode, maxBytes int64) (score float64, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {
-	return checkFileContainsRankedWordsQuery(filePath, compileQuery(words, partial), distance, strict, silent, maxBytes)
+	query, err := compileQueryChecked(words, partial, QueryOptions{})
+	if err != nil {
+		return 0, 0, nil, 0, false, err
+	}
+	return checkFileContainsRankedWordsQuery(filePath, query, distance, strict, silent, maxBytes)
 }
 
 func checkFileContainsRankedWordsQuery(filePath string, query compiledQuery, distance int, strict bool, silent bool, maxBytes int64) (score float64, termCount int, matchedTerms []string, spanLen int, ok bool, err error) {

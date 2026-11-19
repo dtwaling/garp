@@ -1,6 +1,8 @@
 package search
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -32,7 +34,7 @@ func multiAltQuery(groups [][]string, mode PartialMode) compiledQuery {
 }
 
 func TestMultiAltSlotKeyOrdering(t *testing.T) {
-	literal := compileQuery([]string{"alpha", "beta", "alpha|beta"}, PartialModeOff)
+	literal := compileQuery([]string{"alpha", "beta", `alpha\|beta`}, PartialModeOff)
 	fallback := compiledQuery{terms: literal.terms, matchers: literal.matchers}
 	for _, q := range []compiledQuery{literal, fallback} {
 		for i, term := range q.terms {
@@ -90,30 +92,131 @@ func TestTermMatchScratchAgreesWithMatcher(t *testing.T) {
 	}
 }
 
-func TestCompiledQuerySlotSeamPreservesLiteralPipe(t *testing.T) {
-	q := compileQuery([]string{" Alpha|Beta ", "gamma", "ALPHA|BETA"}, PartialModeOff)
-	if len(q.slots) != 2 || q.slotCount() != 2 {
-		t.Fatalf("slots=%v, count=%d", q.slots, q.slotCount())
-	}
-	for i, term := range q.terms {
-		if q.slotLabel(i) != term || len(q.slots[i].alts) != 1 || q.slots[i].alts[0].term != q.matchers[i].term {
-			t.Fatalf("slot %d is not aligned with %q", i, term)
-		}
-	}
-	fallback := compiledQuery{terms: q.terms, matchers: q.matchers}
-	for _, query := range []compiledQuery{q, fallback} {
-		if query.slotCount() != 2 || query.slotLabel(0) != "alpha|beta" {
-			t.Fatal("slot accessors lost the literal label")
-		}
-		for _, text := range []string{"alpha", "beta", "alpha beta"} {
-			if query.slotMatches(0, text) || len(query.slotFindAll(0, text)) != 0 {
-				t.Errorf("pipe interpreted as alternation in %q", text)
+func TestCompiledQueryORGroupAndEscapedPipe(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		alts []string
+	}{
+		{`alpha|beta`, []string{"alpha", "beta"}},
+		{`alpha\|beta`, []string{"alpha|beta"}},
+		{`\|`, []string{"|"}}, {`\||b`, []string{"|", "b"}},
+		{`a\\|b`, []string{`a\`, "b"}},
+		{`foo\bar`, []string{`foo\bar`}}, {`C:\path\file`, []string{`c:\path\file`}},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			q := compileQuery([]string{tc.raw}, PartialModeOff)
+			if q.slotCount() != 1 || len(q.slotAlts(0)) != len(tc.alts) {
+				t.Fatalf("query=%+v", q)
 			}
+			for i, alt := range tc.alts {
+				if q.slotAltTerm(0, i) != alt || !q.slotMatches(0, alt) {
+					t.Errorf("alternative %q: %+v", alt, q)
+				}
+			}
+			if strings.HasPrefix(tc.raw, "alpha") && q.slotLabel(0) != tc.raw {
+				t.Fatal("lost canonical label")
+			}
+			if tc.raw == `alpha\|beta` && (q.slotMatches(0, "alpha only") || q.slotMatches(0, "beta only")) {
+				t.Fatal("escaped pipe split")
+			}
+		})
+	}
+}
+
+func TestORGroupNormalizationAndBounds(t *testing.T) {
+	for _, tc := range []struct {
+		in, want []string
+		options  QueryOptions
+	}{
+		{[]string{" Prune | Ignore | PRUNE "}, []string{"prune|ignore"}, QueryOptions{}},
+		{[]string{"a|b", "b|a", "HTTP|http", "http"}, []string{"a|b", "http"}, QueryOptions{}},
+		{[]string{"Foo|foo"}, []string{"Foo|foo"}, QueryOptions{CaseSensitive: true}},
+		{[]string{`a|b`, `a\|b`, `a\\|b`, `\||b`}, []string{`a|b`, `a\|b`, `a\\|b`, `\||b`}, QueryOptions{}},
+	} {
+		got, err := NormalizeAndValidateQueryTermsWithOptions(tc.in, tc.options)
+		if err != nil || !slices.Equal(got, tc.want) || !slices.Equal(NormalizeQueryTermsWithOptions(got, tc.options), got) {
+			t.Fatalf("normalize %q: %q %v", tc.in, got, err)
 		}
-		text := "ALPHA|BETA gamma alpha|beta"
-		ranges := query.slotFindAll(0, text)
-		if !query.slotMatches(0, text) || len(ranges) != 2 || ranges[0] != (matchRange{0, 10}) || ranges[1] != (matchRange{17, 27}) {
-			t.Errorf("literal pipe matches=%v", ranges)
+	}
+	for _, lit := range []string{`|`, `a|b`, `a\|b`, `a\\|b`, `a\\\|b`, `x\path`, `a|b\`} {
+		got, grouped, err := splitORGroup(EscapeLiteralTerm(lit))
+		if err != nil || grouped || !slices.Equal(got, []string{lit}) {
+			t.Fatalf("round trip %q: %q %v %v", lit, got, grouped, err)
+		}
+	}
+	if got := NormalizeLiteralTermWithOptions(" Alpha**|Beta ", QueryOptions{}); got != "alpha*|beta" {
+		t.Fatalf("literal normalize=%q", got)
+	}
+	ordinary := make([]string, 65)
+	for i := range ordinary {
+		ordinary[i] = fmt.Sprintf("t%d", i)
+	}
+	groups := make([]string, 5)
+	for i := range groups {
+		groups[i] = strings.Join(ordinary[i*13:(i+1)*13], "|")
+	}
+	for _, tc := range []struct {
+		terms []string
+		want  string
+	}{
+		{[]string{"|"}, "empty alternative"}, {[]string{"a|"}, "empty alternative"}, {[]string{"|b"}, "empty alternative"},
+		{[]string{"a||b"}, "empty alternative"}, {[]string{"a | | b"}, "empty alternative"}, {[]string{`\||`}, "empty alternative"},
+		{[]string{strings.Join(ordinary[:17], "|")}, "maximum of 16 alternatives"},
+		{[]string{strings.Repeat("a|", 16) + "a"}, "maximum of 16 alternatives"},
+		{append([]string{"x|y"}, ordinary[:32]...), "maximum of 32 search slots"},
+		{groups, "maximum of 64 total search terms"},
+		{ordinary[:33], ""}, {append([]string{`x\|y`}, ordinary...), ""},
+		{append([]string{"x|X"}, ordinary[:32]...), "maximum of 32 search slots"},
+		{groups[:4], ""},
+	} {
+		q, err := compileQueryChecked(tc.terms, PartialModeOff, QueryOptions{})
+		if tc.want == "" {
+			if err != nil || q.slotCount() != len(tc.terms) {
+				t.Fatalf("uncapped/valid query slots=%d err=%v", q.slotCount(), err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("want %q, got %v", tc.want, err)
+		}
+	}
+	for _, tc := range []struct {
+		terms     []string
+		wantError bool
+	}{
+		{ordinary, false}, {groups, true}, {groups[:4], false}, {[]string{strings.Join(ordinary[:17], "|")}, true}, {[]string{"a||b"}, true},
+	} {
+		if err := ValidateExcludeTerms(tc.terms); (err != nil) != tc.wantError {
+			t.Fatalf("excludes %q: %v", tc.terms, err)
+		}
+	}
+	exts, words := SplitExcludeWords([]string{".pdf|mock", ".docx", `stub\|fake`, "one|two"})
+	if !slices.Equal(exts, []string{".pdf", ".docx"}) || !slices.Equal(words, []string{"mock", "stub|fake", "one", "two"}) {
+		t.Fatalf("split=%q %q", exts, words)
+	}
+	exts, words = SplitExcludeDisplay([]string{".pdf|mock", ".docx", `stub\|fake`, "one|two"})
+	if !slices.Equal(exts, []string{"pdf", "docx"}) || !slices.Equal(words, []string{"mock", `stub\|fake`, "one|two"}) {
+		t.Fatalf("display=%q %q", exts, words)
+	}
+}
+
+func TestORGroupAlternativeFeatures(t *testing.T) {
+	for _, tc := range []struct {
+		term, hit, miss string
+		mode            PartialMode
+		options         QueryOptions
+	}{
+		{"deploy*|rollout", "deployment", "redeploy", PartialModeOff, QueryOptions{}},
+		{"id|identifier", "identifiers_map", "id_map", PartialModePrefix, QueryOptions{}},
+		{"id|identifier", "xidentifiers_map", "xid_map", PartialModeContains, QueryOptions{}},
+		{"al*|id", "alphabet", "xalphabet", PartialModeOff, QueryOptions{}},
+		{"cache|memoize", "memoizes", "xmemoizes", PartialModeOff, QueryOptions{SmartForms: true}},
+		{"cache|deploy", "deployed", "xdeployed", PartialModeOff, QueryOptions{SmartForms: true}},
+		{"oom|out of memory", "out of memory", "out of disk", PartialModeOff, QueryOptions{}},
+		{"Error|WARN", "WARN", "warn", PartialModeOff, QueryOptions{CaseSensitive: true}},
+		{"Error|WARN", "warn", "warning", PartialModeOff, QueryOptions{}},
+	} {
+		q := compileQueryWithOptions([]string{tc.term}, tc.mode, tc.options)
+		if q.slotCount() != 1 || !q.slotMatches(0, tc.hit) || q.slotMatches(0, tc.miss) {
+			t.Fatalf("%+v failed", tc)
 		}
 	}
 }

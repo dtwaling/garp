@@ -104,6 +104,12 @@ func decideTraversalDirectory(
 }
 
 func extensionExcluded(path string, excludes []string) bool {
+	extensions, _ := SplitExcludeWords(excludes)
+	return literalExtensionExcluded(path, extensions)
+}
+
+// literalExtensionExcluded consumes already expanded literal extensions.
+func literalExtensionExcluded(path string, excludes []string) bool {
 	ext := filepath.Ext(path)
 	for _, exclude := range excludes {
 		if strings.HasPrefix(exclude, ".") && strings.EqualFold(ext, exclude) {

@@ -18,6 +18,54 @@ import (
 	"garp/config"
 )
 
+func TestORGroupFileHelpersAndLiteralBoundary(t *testing.T) {
+	root := t.TempDir()
+	path := writeWalkFixture(t, root, "match.txt", "beta anchor")
+	for _, word := range []string{"alpha|beta", "a||b"} {
+		valid := word == "alpha|beta"
+		ok, err := CheckFileContainsAllWords(path, []string{word, "anchor"}, 100, true)
+		if (err == nil) != valid || ok != valid {
+			t.Fatalf("all words %q: %v %v", word, ok, err)
+		}
+		_, count, _, _, ok, err := CheckFileContainsRankedWords(path, []string{word, "anchor"}, 100, true, true)
+		if (err == nil) != valid || ok != valid || (valid && count != 2) {
+			t.Fatalf("ranked %q: %d %v %v", word, count, ok, err)
+		}
+		files, err := FindFilesWithFirstWordPartialWithOptions(word, nil, root, nil, PartialModeOff, WalkOptions{})
+		if (err == nil) != valid || (valid && !reflect.DeepEqual(files, []string{path})) {
+			t.Fatalf("discovery %q: %q %v", word, files, err)
+		}
+		files, err = FindFilesWithFirstWordProgressPartialWithOptions([]string{word}, nil, 1, nil, root, nil, PartialModeOff, WalkOptions{})
+		if (err == nil) != valid || (valid && !reflect.DeepEqual(files, []string{path})) {
+			t.Fatalf("progress %q: %q %v", word, files, err)
+		}
+	}
+	for _, term := range []string{"alpha|beta", `alpha\|beta`} {
+		want := []int(nil)
+		if term == "alpha|beta" {
+			want = []int{0, 10}
+		}
+		if got := FindTermIndex("alpha|beta", term, PartialModeOff, QueryOptions{}); !reflect.DeepEqual(got, want) {
+			t.Fatalf("literal index=%v", got)
+		}
+		if got := FindTermIndexCI("alpha|beta", term, PartialModeOff); !reflect.DeepEqual(got, want) {
+			t.Fatalf("literal CI index=%v", got)
+		}
+	}
+	for _, tc := range []struct {
+		term, text      string
+		sensitive, want bool
+	}{
+		{"mock|stub", "stub", false, true}, {"mock|stub", "MOCK", false, true},
+		{"mock|stub", "MOCK", true, false}, {`mock\|stub`, "mock|stub", false, true},
+		{`mock\|stub`, "mock", false, false}, {"mock*|stub", "mocking", false, false},
+	} {
+		if got := CheckTextContainsExcludeWordsWithOptions(tc.text, []string{tc.term}, QueryOptions{CaseSensitive: tc.sensitive}); got != tc.want {
+			t.Fatalf("exclude %+v: %v", tc, got)
+		}
+	}
+}
+
 func TestLiteralSlotScannerMatchesCleanContentCode(t *testing.T) {
 	var scratch literalScanScratch // Reuse across files, including empty files.
 	path := filepath.Join(t.TempDir(), "candidate.txt")

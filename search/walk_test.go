@@ -24,6 +24,14 @@ func writeWalkFixture(t *testing.T, root, relative, content string) string {
 	return filename
 }
 
+func TestExtensionExcludedORGroup(t *testing.T) {
+	for _, path := range []string{"report.PDF", "spec.docx", "notes.md"} {
+		if got := extensionExcluded(path, []string{".pdf|.docx"}); got != (path != "notes.md") {
+			t.Fatalf("%s excluded=%v", path, got)
+		}
+	}
+}
+
 func TestWalkCandidatesRejectsMultiRootCompatibilityInput(t *testing.T) {
 	first := t.TempDir()
 	second := t.TempDir()

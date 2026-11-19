@@ -355,11 +355,18 @@ func NewSearchEngineWithWorkers(searchWords, excludeWords []string, fileTypes []
 // with unchanged paths and Stage 1 query/scope settings.
 func (se *SearchEngine) DiscoverCandidates(fileCount int) ([]string, int, error) {
 	se.lastDiscovery, se.lastDiscoverySummary = nil, nil
+	query, err := compileQueryChecked(se.SearchWords, se.Partial, se.queryOptions())
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := ValidateExcludeTerms(se.ExcludeWords); err != nil {
+		return nil, 0, err
+	}
 	roots, err := se.effectiveStartRoots()
 	if err != nil {
 		return nil, 0, err
 	}
-	candidates, total, err := se.discoverCandidates(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), fileCount, roots)
+	candidates, total, err := se.discoverCandidates(query, fileCount, roots)
 	paths := make([]string, len(candidates))
 	for index := range candidates {
 		paths[index] = candidates[index].filePath
@@ -429,11 +436,9 @@ type discoveryBatch struct {
 }
 
 func (se *SearchEngine) discoveryExtensionExcludes() []string {
-	var extensions []string
-	for _, exclude := range se.ExcludeWords {
-		if strings.HasPrefix(exclude, ".") {
-			extensions = append(extensions, strings.ToLower(exclude))
-		}
+	extensions, _ := SplitExcludeWords(se.ExcludeWords)
+	for i := range extensions {
+		extensions[i] = strings.ToLower(extensions[i])
 	}
 	slices.Sort(extensions)
 	return slices.Compact(extensions)
@@ -609,13 +614,20 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 	batch := se.lastDiscovery
 	se.lastDiscovery = nil
 	se.lastDiscoverySummary = nil
+	query, err := compileQueryChecked(se.SearchWords, se.Partial, se.queryOptions())
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateExcludeTerms(se.ExcludeWords); err != nil {
+		return nil, err
+	}
 	roots, err := se.effectiveStartRoots()
 	if err != nil {
 		return nil, err
 	}
 	if batch != nil && batch.matches(se, roots, candidateFiles) {
 		se.lastDiscoverySummary = &batch.summary
-		return se.filterCandidates(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), batch.candidates, total, startTime)
+		return se.filterCandidates(query, batch.candidates, total, startTime)
 	}
 	traversals := make([]preparedRootTraversal, len(roots))
 	for index, root := range roots {
@@ -633,7 +645,7 @@ func (se *SearchEngine) FilterCandidates(candidateFiles []string, total int, sta
 		}
 		candidates[index] = candidate
 	}
-	return se.filterCandidates(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), candidates, total, startTime)
+	return se.filterCandidates(query, candidates, total, startTime)
 }
 
 func candidateProvenance(path string, traversals []preparedRootTraversal) (discoveredCandidate, error) {
@@ -853,7 +865,7 @@ func (se *SearchEngine) extractBinaryFileWorker(ctx context.Context, filePath, e
 func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []discoveredCandidate, total int, startTime time.Time) ([]candidateMatch, error) {
 	summary := se.lastDiscoverySummary
 	se.lastDiscoverySummary = nil
-	if len(query.terms) == 0 {
+	if query.slotCount() == 0 {
 		return nil, nil
 	}
 	if summary == nil {
@@ -880,15 +892,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 	maxBytes := se.walkOptions().TextMaxBytes()
 
 	// Separate excludes into extensions and words
-	var extExcludes []string
-	var wordExcludes []string
-	for _, exclude := range se.ExcludeWords {
-		if strings.HasPrefix(exclude, ".") {
-			extExcludes = append(extExcludes, exclude)
-		} else {
-			wordExcludes = append(wordExcludes, exclude)
-		}
-	}
+	extExcludes, wordExcludes := SplitExcludeWords(se.ExcludeWords)
 
 	// Print exclusion info
 	if !se.Silent {
@@ -908,7 +912,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 		return allowFallback && !s1.needsStage2 && s1.exactSlots && s1.slotCount == 1
 	}
 	for _, candidate := range candidateFiles {
-		if extensionExcluded(candidate.filePath, extExcludes) {
+		if literalExtensionExcluded(candidate.filePath, extExcludes) {
 			continue
 		}
 		if candidate.primaryPrefiltered && deferSingle(candidate.stage1) {
@@ -1014,7 +1018,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 			rootOrder:    candidate.rootOrder,
 		}
 		// Check for excluded extensions
-		if extensionExcluded(filePath, extExcludes) {
+		if literalExtensionExcluded(filePath, extExcludes) {
 			return false
 		}
 
@@ -1023,7 +1027,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 			return false
 		}
 		cat := analyzeRankedCatalog(cleaned, query, se.Distance, se.Strict, allowFallback)
-		excluded := len(wordExcludes) > 0 && CheckTextContainsExcludeWordsWithOptions(cleaned, wordExcludes, se.queryOptions())
+		excluded := len(wordExcludes) > 0 && checkTextContainsLiteralExcludeWords(cleaned, wordExcludes, se.queryOptions())
 		cleaned = ""
 		match.pathSlotMatches, match.pathMatchCount = pathMatchStats(displayPath, candidate.rankingRoot.LogicalPath, query)
 		mu.Lock()
@@ -1108,7 +1112,7 @@ func (se *SearchEngine) filterCandidates(query compiledQuery, candidateFiles []d
 			continue
 		}
 		cleaned, ok := reloadCleanedQuiet(candidate.filePath)
-		if !ok || (len(wordExcludes) > 0 && CheckTextContainsExcludeWordsWithOptions(cleaned, wordExcludes, se.queryOptions())) {
+		if !ok || (len(wordExcludes) > 0 && checkTextContainsLiteralExcludeWords(cleaned, wordExcludes, se.queryOptions())) {
 			continue
 		}
 		an, ok := analyzeRankedTextWithOptions(cleaned, query, se.Distance, false, true, stats.RareSlot, stats.IDF)
@@ -1311,7 +1315,14 @@ func (se *SearchEngine) buildPathOnlyResults(matchingFiles []candidateMatch) []S
 
 // ExtractAndBuildResults extracts content and builds search results
 func (se *SearchEngine) ExtractAndBuildResults(matchingFiles []candidateMatch) ([]SearchResult, error) {
-	outcome, err := se.extractAndBuildResultsDetailed(compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions()), matchingFiles)
+	query, err := compileQueryChecked(se.SearchWords, se.Partial, se.queryOptions())
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateExcludeTerms(se.ExcludeWords); err != nil {
+		return nil, err
+	}
+	outcome, err := se.extractAndBuildResultsDetailed(query, matchingFiles)
 	return outcome.Results, err
 }
 
@@ -1527,8 +1538,14 @@ func (se *SearchEngine) Execute() ([]SearchResult, error) {
 func (se *SearchEngine) ExecuteDetailed() (ExecutionResult, error) {
 	startTime := time.Now()
 	atomic.StoreInt64(&se.timedOutFiles, 0)
-	query := compileQueryWithOptions(se.SearchWords, se.Partial, se.queryOptions())
-	if len(query.terms) == 0 {
+	query, err := compileQueryChecked(se.SearchWords, se.Partial, se.queryOptions())
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if err := ValidateExcludeTerms(se.ExcludeWords); err != nil {
+		return ExecutionResult{}, err
+	}
+	if query.slotCount() == 0 {
 		return ExecutionResult{}, nil
 	}
 	roots, err := se.effectiveStartRoots()
