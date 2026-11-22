@@ -22,7 +22,8 @@ vendor/
 go.work
 
 # IDE files
-.agents/
+.agents/*
+!.agents/skills/
 .cursor/
 .vscode/
 .idea/

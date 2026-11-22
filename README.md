@@ -141,6 +141,13 @@ versus `rg` (exact code or plain-text symbol/regex lookup), caller-owned
 (find -> pinpoint -> targeted read, no result paging). One skill covers
 Windows and Linux/macOS.
 
+Repo-local agent skills live in `.agents/skills/` and load automatically for
+sessions started inside this checkout (trust it once with
+`hermes skills trust`). The validation playbook at
+`.agents/skills/garp-perf-benchmarking/SKILL.md` holds the gauntlet / SQA /
+performance-benchmark process used to validate changes to this project. It is
+repo-owned, so keep it in sync with the code it validates.
+
 ## Flags
 
 ```
