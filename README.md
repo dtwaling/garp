@@ -38,7 +38,7 @@ core search engine, TUI, and document extraction are the work of
 - **Not semantic search:** `garp` is purely lexical and index-free -- no embeddings, vector index, or synonym inference. A natural-language query such as `garp "how are ignored directories skipped"` returns zero matches unless those literal words co-occur; the caller supplies vocabulary via domain terms, `a|b|c` OR-groups, `--partial`, `*`/`?`, or `--smart-forms`.
 - **Not a ripgrep (`rg`) replacement:** Use `rg` instead for single-token or exact symbol/string lookup, full regular expressions, `-C`/`-A`/`-B` line context, or exhaustive line-by-line matches in plain text and source code. `rg` scans raw bytes directly without document extraction or corpus-counting passes (for example, informational single-pass wall time across the pinned 42-query, 206-file `code` corpus in [eval/results/v0.10.0.md](eval/results/v0.10.0.md) is `0.662515 s` total for `rg` versus `1.481326 s` for `garp v0.10.0`; see [eval/README.md#known-limitations](eval/README.md#known-limitations) -- one timed pass is not a statistical performance benchmark).
 - **Not a code-structure tool:** `garp` has no AST, symbol table, call graph, or type/import resolution. Use LSP, `ast-grep`, `ctags`, or `rg` for definitions, callers, references, and structural code queries; use `garp --code` only when locating where 2+ domain words or `a|b|c` alternatives co-occur within a function or module.
-- **Measured retrieval scope (no unverified claims):** On the [retrieval-quality eval harness](eval/README.md) (`make eval` after `make eval-fetch`; pinned 42-query, 430-file mixed `docs` corpus and 42-query, 206-file `code` corpus; see [eval/README.md#readable-corpus-denominator-and-bm25-returned-counts](eval/README.md#readable-corpus-denominator-and-bm25-returned-counts) and [eval/results/v0.10.0.md](eval/results/v0.10.0.md)), corpus-aware `garp` reaches `MRR@10` `0.785714` on `docs` (`409` readable files, excluding `21` `#90` PDFs) and `0.663520` on `code`, versus `garp v0.10.0` (`0.591270` / `0.504195`), whole-document `BM25` sharing `garp`'s extractors (`0.754195` / `0.635185`), and a raw-byte `rg` slot-conjunction pipeline (`0.269841` / `0.341138`, where `rg` uses default binary handling without Office/PDF/MSG extraction). In paired synonym evaluation (`make eval-or`, [eval/README.md#paired-synonym-or-evaluation-and-known-key-gaps](eval/README.md#paired-synonym-or-evaluation-and-known-key-gaps)), caller-authored `a|b|c` expansions lift `R@10` from `0.750000` to `0.916667` on eligible `docs` synonym queries (`12` queries) and from `0.642857` to `0.892857` on eligible `code` synonym queries (`14` queries, excluding registered key gap `code-g-011`; see [Known limitations](#known-limitations) and [eval/README.md](eval/README.md) for frozen-key, top-rank precision, and extractor caveats).
+- **Measured retrieval scope (no unverified claims):** On the [retrieval-quality eval harness](eval/README.md) (`make eval` after `make eval-fetch`; pinned 42-query, 430-file mixed `docs` corpus and 42-query, 206-file `code` corpus; see [eval/README.md#readable-corpus-denominator-and-bm25-returned-counts](eval/README.md#readable-corpus-denominator-and-bm25-returned-counts) and [eval/results/v0.10.0.md](eval/results/v0.10.0.md)), corpus-aware `garp v0.11.0` reaches `MRR@10` `0.785714` on `docs` (`409` readable files, excluding `21` `#90` PDFs) and `0.663520` on `code`, versus `garp v0.10.0` (`0.591270` / `0.504195`), whole-document `BM25` sharing `garp`'s extractors (`0.754195` / `0.635185`), and a raw-byte `rg` slot-conjunction pipeline (`0.269841` / `0.341138`, where `rg` uses default binary handling without Office/PDF/MSG extraction). In paired synonym evaluation (`make eval-or`, [eval/README.md#paired-synonym-or-evaluation-and-known-key-gaps](eval/README.md#paired-synonym-or-evaluation-and-known-key-gaps)), caller-authored `a|b|c` expansions lift `R@10` from `0.750000` to `0.916667` on eligible `docs` synonym queries (`12` queries) and from `0.642857` to `0.892857` on eligible `code` synonym queries (`14` queries, excluding registered key gap `code-g-011`; see [Known limitations](#known-limitations) and [eval/README.md](eval/README.md) for frozen-key, top-rank precision, and extractor caveats).
 
 ## Quick start
 
@@ -497,9 +497,14 @@ restricts to just this family.
 > a file that exceeds it is skipped and counted in `timed_out`.
 > Extracted text is capped at 8 MiB per PDF, cumulative across pages. A PDF over
 > the cap is skipped, not partially searched; its unextracted pages are reported
-> as `Truncated`. Parser panics on malformed PDFs are recovered -- unreadable
-> pages yield no text, and unopenable files are skipped. There is no page-count
-> or per-search PDF limit.
+> as `Truncated`. Standard-encrypted PDFs with an empty user password (40- to
+> 128-bit RC4 `V=1`/`2`, or 128-bit AES `V=4`) are decrypted automatically;
+> files that require a non-empty user password or use unsupported encryption
+> (such as AES-256 `V=5` or `V=4` RC4 crypt filters) are skipped. Parser panics
+> on malformed PDFs or unsupported page operators (such as raw inline-image
+> `BI`/`ID`/`EI` data) are recovered per page -- unreadable pages yield no text
+> while remaining pages still extract, and unopenable files are skipped. There
+> is no page-count or per-search PDF limit.
 >
 > PDF text comes from each page's own content stream. Text drawn inside a Form
 > XObject (a `/Do` sub-stream, common for embedded figures and their labels) is
@@ -646,7 +651,7 @@ separate from the root module.
   with `\|` (`garp 'a\|b'`). OR-expanded queries have the limits documented
   above and fail rather than truncate. `--startdir` and `--pathscope` reject `|`.
 - **Deferred v0.11.1 extraction/cleaning limits:** trailing whitespace in a
-  `%PDF-1.x ` header (#90), empty-password 40-bit RC4 PDFs (#91), `/LZWDecode`
+  `%PDF-1.x ` header (#90), `/LZWDecode`
   PDF streams (#92), and uppercase-digit splitting of markup/extracted mixed
   tokens such as `Olk10SideProps_0001` (#94) remain known limits. Evaluation
   retains the affected misses rather than attributing them to ranking.

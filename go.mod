@@ -7,7 +7,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/emersion/go-mbox v1.0.4
 	github.com/jhillyerd/enmime v1.3.0
-	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
+	github.com/ledongthuc/pdf v0.0.0-20261020125853-5e46805f718e
 	github.com/richardlehane/mscfb v1.0.4
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.44.0
