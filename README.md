@@ -2,7 +2,7 @@
 
 # :: garp ::
 
-![Version](https://img.shields.io/badge/version-0.10.0-blue?labelColor=0052cc)
+![Version](https://img.shields.io/badge/version-0.11.0-blue?labelColor=0052cc)
 ![License](https://img.shields.io/github/license/dtwaling/garp?color=4338ca&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-linux-4338ca?logo=linux&logoColor=white&labelColor=3730a3)
 ![Platform](https://img.shields.io/badge/platform-macos-4338ca?logo=apple&logoColor=white&labelColor=3730a3)
@@ -510,7 +510,7 @@ restricts to just this family.
 > words stay searchable.
 
 Spreadsheet and presentation formats (`.xls`, `.xlsx`, `.ppt`, `.pptx`, `.ods`,
-`.odp`) are not extracted in v0.10.0 and are not searched by default; extractor
+`.odp`) are not extracted in v0.11.0 and are not searched by default; extractor
 support is planned for v1.0. An explicit `-t xlsx` (or another of these types)
 searches the raw file bytes as literal text, which rarely matches compressed
 content.
@@ -594,7 +594,7 @@ produces `bin\garp-local.exe` (gitignored) using the same release flags as the M
 stripped symbol table + DWARF, embedded version):
 
 ```powershell
-go build -trimpath -ldflags "-s -w -X garp/app.version=0.10.0" -o bin\garp-local.exe .
+go build -trimpath -ldflags "-s -w -X garp/app.version=0.11.0" -o bin\garp-local.exe .
 go test ./...                                              # run tests
 go vet ./...                                               # vet
 ```

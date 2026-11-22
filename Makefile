@@ -5,7 +5,7 @@ BINARY_NAME=garp
 BINARY_PATH=bin/$(BINARY_NAME)-local
 
 # Version embedding
-VERSION=0.10.0
+VERSION=0.11.0
 # -s -w strip the symbol table and DWARF debug info (~29% smaller binary).
 LDFLAGS=-s -w -X garp/app.version=$(VERSION)
 # Pure Go (CGO_ENABLED=0): static Linux ELF, no glibc dependency.
