@@ -497,7 +497,15 @@ restricts to just this family.
 > a file that exceeds it is skipped and counted in `timed_out`.
 > Extracted text is capped at 8 MiB per PDF, cumulative across pages. A PDF over
 > the cap is skipped, not partially searched; its unextracted pages are reported
-> as `Truncated`. Standard-encrypted PDFs with an empty user password (40- to
+> as `Truncated`. `/FlateDecode`, `/LZWDecode` (`/EarlyChange` 0 and default 1),
+> and `/ASCII85Decode` filter chains (up to four stages) support TIFF predictor 2
+> and PNG predictors 10--15 on Flate/LZW stages. Decoded bytes are capped per
+> stage at `max(text limit, 32 KiB)` and cumulatively at four times that budget
+> (32 MiB at the default 8 MiB text limit), counting every intermediate filter
+> and non-identity predictor stage, including repeated reads. XRef storage has
+> proportional entry bounds and sparse object-ID handling. Stream/XRef cap
+> breaches skip the whole PDF; page-level breaches increment `Truncated`.
+> Standard-encrypted PDFs with an empty user password (40- to
 > 128-bit RC4 `V=1`/`2`, or 128-bit AES `V=4` with `/EncryptMetadata` true or
 > absent) are decrypted automatically; files that require a non-empty user
 > password or use unsupported encryption (such as AES-256 `V=5`, `V=4` RC4
@@ -516,7 +524,9 @@ restricts to just this family.
 > XObject (a `/Do` sub-stream, common for embedded figures and their labels) is
 > not extracted. Positioned glyphs are ordered by unrotated horizontal page
 > coordinates (`Y` then `X`), so 90/270-degree rotated text matrices can
-> interleave characters across adjacent rotated lines. A word break is emitted
+> interleave characters across adjacent rotated lines. Type1 Standard-14 fonts
+> without `/Widths` can also invert horizontal character/substring order when
+> positive `TJ` kerning or negative `Tc` spacing shifts `X` backward. A word break is emitted
 > after each `TJ` text run as a newline glyph decoded through the run's font.
 > When that font's encoding maps code 10 to a glyph (TeX OT1 fonts map it to
 > `/Omega`), an Ohm sign (U+2126) follows the run in excerpts, for example
@@ -619,20 +629,25 @@ built from a clean tree and committed on their own.
 ### Dependency pin: temporary `ledongthuc/pdf` fork
 
 Both `go.mod` files temporarily redirect `github.com/ledongthuc/pdf` to the
-maintained single-patch fork `github.com/dtwaling/pdf` with an exact
+maintained two-commit fork `github.com/dtwaling/pdf` with an exact
 pseudo-version `replace` directive
-(`v0.0.0-20261123044633-dc44d404eb72`, one commit above the previously pinned
-upstream revision; import paths unchanged). The patch constructs PDF page
+(`v0.0.0-20261123191230-3f7b1b63bd1c`, above upstream `5e46805f718e`;
+import paths unchanged). The first commit, `dc44d404eb72`, constructs PDF page
 content-stream readers lazily, so at most one member reader is retained per
 concatenated content stream instead of one per member for the whole
 interpretation. One observable contract change: construction errors of later
 content-stream members surface only when that member is reached, and an
 earlier interpreter exit never triggers them; encountered errors still
-propagate and per-page panic recovery is unchanged.
+propagate. The second commit, `3f7b1b63bd1c`, adds bounded `/LZWDecode`,
+TIFF/PNG predictors, per-stage and cumulative `ReaderOptions` stream budgets,
+and XRef resource bounds with incremental free-entry tombstones. Ordinary
+malformed-page recovery remains isolated per page; stream-limit errors instead
+propagate as extraction-limit errors so over-budget PDFs are not partially searched.
 
 - **Removal condition:** the pin is temporary. Both `replace` directives are
-  removed once upstream merges and releases the equivalent fix
-  ([ledongthuc/pdf#106](https://github.com/ledongthuc/pdf/pull/106));
+  removed once upstream merges and releases both equivalent fixes
+  ([ledongthuc/pdf#106](https://github.com/ledongthuc/pdf/pull/106) and
+  [ledongthuc/pdf#107](https://github.com/ledongthuc/pdf/pull/107));
   tracking, provenance, and release-by-release review live in
   [dtwaling/garp#102](https://github.com/dtwaling/garp/issues/102).
 - **`go install module@version` limitation:** Go rejects version-suffixed
@@ -683,9 +698,8 @@ separate from the root module.
   `--not` tokens parses as OR. Quote pipes in shells; search a literal pipe
   with `\|` (`garp 'a\|b'`). OR-expanded queries have the limits documented
   above and fail rather than truncate. `--startdir` and `--pathscope` reject `|`.
-- **Deferred v0.11.1 extraction/cleaning limits:** `/LZWDecode`
-  PDF streams (#92) and uppercase-digit splitting of markup/extracted mixed
-  tokens such as `Olk10SideProps_0001` (#94) remain known limits. Evaluation
+- **Deferred v0.11.1 extraction/cleaning limits:** uppercase-digit splitting of
+  markup/extracted mixed tokens such as `Olk10SideProps_0001` (#94) remains a known limit. Evaluation
   retains the affected misses rather than attributing them to ranking.
 - Markdown and other literal formats are not rendered: text inside inline HTML
   and HTML comments in `.md` (for example `<!-- note -->`) is part of the

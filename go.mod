@@ -41,7 +41,7 @@ require (
 )
 
 // Temporary immutable pin: redirects the canonical ledongthuc/pdf module to
-// the single-patch fork dtwaling/pdf (lazy content-stream readers, one commit
-// above the pinned base). Remove when upstream releases the fix; see
-// dtwaling/garp#102 and ledongthuc/pdf#106.
-replace github.com/ledongthuc/pdf => github.com/dtwaling/pdf v0.0.0-20261123044633-dc44d404eb72
+// two-commit fork dtwaling/pdf (lazy content readers and bounded LZW/predictor
+// streams with XRef bounds, above 5e46805f718e). Remove when upstream releases
+// both fixes; see dtwaling/garp#102 and ledongthuc/pdf#106 and #107.
+replace github.com/ledongthuc/pdf => github.com/dtwaling/pdf v0.0.0-20261123191230-3f7b1b63bd1c
