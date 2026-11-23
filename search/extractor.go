@@ -452,12 +452,134 @@ func wordPieceText(word, table0, table1 []byte, maxBytes int64) (string, bool) {
 	return text, text != ""
 }
 
+const (
+	pdfHeaderWindowBytes      = 1024
+	pdfHeaderMaxTrailingSpace = 256
+	pdfTrailerWindowBytes     = 1024
+)
+
+// pdfFramingReaderAt presents a bounded [baseOff, baseOff+size) view of r to
+// ledongthuc/pdf while rewriting horizontal whitespace in [8, wsEnd) (at most
+// pdfHeaderMaxTrailingSpace spaces or tabs before '\r' or '\n') on the
+// %PDF-1.x header line to '\r' so downstream byte offsets stay unchanged.
+type pdfFramingReaderAt struct {
+	r       io.ReaderAt
+	baseOff int64
+	size    int64
+	wsEnd   int64
+}
+
+func (f *pdfFramingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 || off >= f.size {
+		return 0, io.EOF
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	clipped := false
+	if maxLen := f.size - off; int64(len(p)) > maxLen {
+		p = p[:maxLen]
+		clipped = true
+	}
+	n, err := f.r.ReadAt(p, f.baseOff+off)
+	if f.wsEnd > 8 && n > 0 && off < f.wsEnd && off+int64(n) > 8 {
+		start := max(off, 8) - off
+		end := min(off+int64(n), f.wsEnd) - off
+		for i := start; i < end; i++ {
+			p[i] = '\r'
+		}
+	}
+	if clipped && err == nil {
+		err = io.EOF
+	}
+	return n, err
+}
+
+// normalizePDFReaderAt locates a %PDF-1.0..%PDF-1.7 header within the first
+// 1024 bytes (allowing at most 256 trailing spaces or tabs before '\r' or '\n')
+// and the final %%EOF within the last 1024 bytes without issuing zero-length
+// ReadAt probes (preserving page-boundary cancellation probe counts on r).
+func normalizePDFReaderAt(r io.ReaderAt, size int64) (io.ReaderAt, int64, error) {
+	if size < 9 {
+		if size > 0 {
+			var probe [1]byte
+			if _, err := r.ReadAt(probe[:], 0); err != nil && err != io.EOF {
+				return nil, 0, err
+			}
+		}
+		return nil, 0, fmt.Errorf("not a PDF file: invalid header")
+	}
+	// +1 reserves the terminating '\r' or '\n' when %PDF-1.x ends at byte 1024
+	// (baseOff == 1016) and is followed by all 256 allowed spaces or tabs.
+	var headBuf [pdfHeaderWindowBytes + pdfHeaderMaxTrailingSpace + 1]byte
+	head := headBuf[:min(size, int64(len(headBuf)))]
+	hn, err := r.ReadAt(head, 0)
+	if err != nil && err != io.EOF {
+		return nil, 0, err
+	}
+	head = head[:hn]
+
+	baseOff := int64(-1)
+	wsEnd := int64(8)
+	scanLimit := min(len(head), pdfHeaderWindowBytes)
+	for i := 0; i+8 <= scanLimit; i++ {
+		if !bytes.HasPrefix(head[i:], []byte("%PDF-1.")) || head[i+7] < '0' || head[i+7] > '7' {
+			continue
+		}
+		j := i + 8
+		maxWS := min(len(head), j+pdfHeaderMaxTrailingSpace)
+		for j < maxWS && (head[j] == ' ' || head[j] == '\t') {
+			j++
+		}
+		if j < len(head) && (head[j] == '\r' || head[j] == '\n') {
+			baseOff = int64(i)
+			wsEnd = int64(j - i)
+			break
+		}
+	}
+	if baseOff < 0 {
+		return nil, 0, fmt.Errorf("not a PDF file: invalid header")
+	}
+
+	slicedSize := size - baseOff
+	var tailBuf [pdfTrailerWindowBytes]byte
+	tailLen := min(slicedSize, int64(len(tailBuf)))
+	tailRelOff := slicedSize - tailLen
+	tail := tailBuf[:tailLen]
+	tn, err := r.ReadAt(tail, baseOff+tailRelOff)
+	if err != nil && err != io.EOF {
+		return nil, 0, err
+	}
+	tail = tail[:tn]
+
+	eofIdx := bytes.LastIndex(tail, []byte("%%EOF"))
+	if eofIdx < 0 {
+		return nil, 0, fmt.Errorf("not a PDF file: missing %%%%EOF")
+	}
+	endIdx := eofIdx + len("%%EOF")
+	if endIdx < len(tail) && tail[endIdx] == '\r' {
+		endIdx++
+	}
+	if endIdx < len(tail) && tail[endIdx] == '\n' {
+		endIdx++
+	}
+	effectiveSize := tailRelOff + int64(endIdx)
+	return &pdfFramingReaderAt{
+		r:       r,
+		baseOff: baseOff,
+		size:    effectiveSize,
+		wsEnd:   wsEnd,
+	}, effectiveSize, nil
+}
+
 // ExtractText implements the Extractor interface for PDF files
 func (e *PDFExtractor) ExtractText(data []byte) (string, error) {
 	return e.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
 }
 
 // ExtractReaderAt extracts PDF text page-by-page with a cumulative budget.
+// pdf.TextVertical orders glyphs by unrotated Y then X coordinates; 90/270-degree
+// rotated text can interleave characters across adjacent lines.
 func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBytes int64) (out string, err error) {
 	// Guard against any panics from the PDF library.
 	defer func() {
@@ -471,7 +593,11 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		return "", fmt.Errorf("invalid reader or size: %d", size)
 	}
 	limit := effectiveMaxExtractedBytes(maxExtractedBytes)
-	reader, rerr := pdf.NewReader(r, size)
+	framedR, framedSize, ferr := normalizePDFReaderAt(r, size)
+	if ferr != nil {
+		return "", ferr
+	}
+	reader, rerr := pdf.NewReader(framedR, framedSize)
 	if rerr != nil {
 		return "", rerr
 	}
