@@ -397,10 +397,10 @@ The current [v0.10.0 baseline](results/v0.10.0.json) per-query
 current frozen-key baseline. BM25 returns at most 50 positive-score paths and
 does not render excerpt payloads; its hit@N and token costs remain n/a.
 
-The selected corpus-aware candidate's MRR@10 is 0.785714 on docs and 0.663520
+The v0.11.0 corpus-aware candidate's MRR@10 is 0.785714 on docs and 0.663520
 on code, versus previous-release 0.591270 / 0.504195 and BM25
 0.754195 / 0.635185. These small-corpus results retain the frozen-key
-exception above, the lexical/precision boundaries, and the deferred v0.11.1
+exception above, the lexical/precision boundaries, and the pre-v0.11.1
 extractor/cleaner misses (#90, #91, #92, #94); see the repository
 [known limitations](../README.md#known-limitations). They do not measure
 semantic retrieval or eliminate extraction limitations.
@@ -475,7 +475,7 @@ build. Timing is informational and omitted from deterministic JSON.
 ## Known limitations
 
 - Mechanical kind checks use working-tree extraction; if an extraction change invalidates a gold file's kind label, `make eval` exits 2 until labels are re-judged -- intentional under the frozen-key rule, not a bug.
-  Gold files with zero extracted tokens (extraction failures, e.g. `docs-002`)
+  Gold files with zero extracted tokens (extraction failures)
   are exempt from the `single` presence check and remain honest misses, so the
   check cannot catch a wrong label on such a file.
 - Linux/macOS tooling is required; Windows `make eval` support is not provided.

@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/zlib"
 	"context"
+	"crypto/md5"
+	"crypto/rc4"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -1424,6 +1426,215 @@ func TestPDFTextItemsToString_ReconstructsGlyphSpacing(t *testing.T) {
 			}
 			if _, err := pdfPageText(r.Page(1), limit-1); !errors.Is(err, ErrExtractionLimit) {
 				t.Fatalf("short budget error = %v", err)
+			}
+		})
+	}
+}
+
+var pdfTestPasswordPad = [32]byte{
+	0x28, 0xBF, 0x4E, 0x5E, 0x4E, 0x75, 0x8A, 0x41, 0x64, 0x00, 0x4E, 0x56, 0xFF, 0xFA, 0x01, 0x08,
+	0x2E, 0x2E, 0x00, 0xB6, 0xD0, 0x68, 0x3E, 0x80, 0x2F, 0x0C, 0xA9, 0xFE, 0x64, 0x53, 0x69, 0x7A,
+}
+
+func pdfPadPassword(pw string) [32]byte {
+	var out [32]byte
+	n := copy(out[:], pw)
+	copy(out[n:], pdfTestPasswordPad[:32-n])
+	return out
+}
+
+// buildStandardRC4PDF synthesizes a single-page FlateDecode PDF encrypted with
+// the PDF 32000-1 Standard Security Handler (RC4, V=1 or V=2, R=2 or R=3).
+func buildStandardRC4PDF(t *testing.T, v, r, keyBits int, omitLength bool, userPW, ownerPW, line string) []byte {
+	t.Helper()
+	keyLen := keyBits / 8
+	const fileID = "0123456789abcdef"
+	perms := int32(-44)
+	if ownerPW == "" {
+		ownerPW = userPW
+	}
+	ownerPad := pdfPadPassword(ownerPW)
+	h := md5.Sum(ownerPad[:])
+	ownerKey := append([]byte(nil), h[:]...)
+	if r >= 3 {
+		for i := 0; i < 50; i++ {
+			// Algorithm 3 hashes the full digest; truncate only after the rounds.
+			sum := md5.Sum(ownerKey)
+			ownerKey = append(ownerKey[:0], sum[:]...)
+		}
+	}
+	ownerKey = ownerKey[:keyLen]
+	userPad := pdfPadPassword(userPW)
+	oEntry := append([]byte(nil), userPad[:]...)
+	ciph, err := rc4.NewCipher(ownerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciph.XORKeyStream(oEntry, oEntry)
+	if r >= 3 {
+		tmpKey := make([]byte, keyLen)
+		for i := 1; i <= 19; i++ {
+			for j := range ownerKey {
+				tmpKey[j] = ownerKey[j] ^ byte(i)
+			}
+			ciph, _ = rc4.NewCipher(tmpKey)
+			ciph.XORKeyStream(oEntry, oEntry)
+		}
+	}
+	var pBytes [4]byte
+	binary.LittleEndian.PutUint32(pBytes[:], uint32(perms))
+	md := md5.New()
+	md.Write(userPad[:])
+	md.Write(oEntry)
+	md.Write(pBytes[:])
+	md.Write([]byte(fileID))
+	fileKey := md.Sum(nil)
+	if r >= 3 {
+		for i := 0; i < 50; i++ {
+			sum := md5.Sum(fileKey[:keyLen])
+			fileKey = append(fileKey[:0], sum[:]...)
+		}
+	}
+	fileKey = fileKey[:keyLen]
+	uEntry := make([]byte, 32)
+	if r == 2 {
+		copy(uEntry, pdfTestPasswordPad[:])
+		ciph, _ = rc4.NewCipher(fileKey)
+		ciph.XORKeyStream(uEntry, uEntry)
+	} else {
+		md.Reset()
+		md.Write(pdfTestPasswordPad[:])
+		md.Write([]byte(fileID))
+		uHash := md.Sum(nil)
+		ciph, _ = rc4.NewCipher(fileKey)
+		ciph.XORKeyStream(uHash, uHash)
+		tmpKey := make([]byte, keyLen)
+		for i := 1; i <= 19; i++ {
+			for j := range fileKey {
+				tmpKey[j] = fileKey[j] ^ byte(i)
+			}
+			ciph, _ = rc4.NewCipher(tmpKey)
+			ciph.XORKeyStream(uHash, uHash)
+		}
+		copy(uEntry[:16], uHash)
+	}
+	md.Reset()
+	md.Write(fileKey)
+	md.Write([]byte{4, 0, 0, 0, 0}) // object 4 0 obj
+	objKey := md.Sum(nil)[:min(len(fileKey)+5, 16)]
+	var zbuf bytes.Buffer
+	zw := zlib.NewWriter(&zbuf)
+	if _, err := fmt.Fprintf(zw, "BT /F1 18 Tf 72 720 Td (%s) Tj ET\n", line); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	encStream := make([]byte, zbuf.Len())
+	ciph, err = rc4.NewCipher(objKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciph.XORKeyStream(encStream, zbuf.Bytes())
+	lengthEntry := fmt.Sprintf(" /Length %d", keyBits)
+	if omitLength {
+		lengthEntry = ""
+	}
+	objs := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		fmt.Sprintf("<< /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream", len(encStream), encStream),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+		fmt.Sprintf("<< /Filter /Standard /V %d /R %d%s /P %d /O <%x> /U <%x> >>", v, r, lengthEntry, perms, oEntry, uEntry),
+	}
+	var pdfBuf bytes.Buffer
+	pdfBuf.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objs)+1)
+	for i, body := range objs {
+		offsets[i+1] = pdfBuf.Len()
+		fmt.Fprintf(&pdfBuf, "%d 0 obj\n%s\nendobj\n", i+1, body)
+	}
+	xrefOff := pdfBuf.Len()
+	fmt.Fprintf(&pdfBuf, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
+	for i := 1; i <= len(objs); i++ {
+		fmt.Fprintf(&pdfBuf, "%010d 00000 n \n", offsets[i])
+	}
+	fmt.Fprintf(&pdfBuf, "trailer\n<< /Size %d /Root 1 0 R /Encrypt 6 0 R /ID [<%x> <%x>] >>\nstartxref\n%d\n%%%%EOF\n",
+		len(objs)+1, []byte(fileID), []byte(fileID), xrefOff)
+	return pdfBuf.Bytes()
+}
+
+func TestStandardRC4PDFOwnerEntry(t *testing.T) {
+	// PDF 32000-1:2008, 7.6.3.3, Algorithm 3 (c)-(d): hash the full
+	// digest 50 times, then truncate. These fixed /O vectors were generated
+	// independently with pypdf 6.1.1, not with this fixture or ledongthuc/pdf:
+	// https://github.com/py-pdf/pypdf/blob/6.1.1/pypdf/_encryption.py
+	// AlgV4.compute_O_value(AlgV4.compute_O_value_key(b"owner-secret", 3, bits), b"", 3).
+	for _, tc := range []struct {
+		bits      int
+		wantOwner string
+	}{
+		{40, "2bcab0b937bd9ebeb09b43543f481f3ac2bf43dc4bc0697f3297d2beadfe3a86"},
+		{128, "913b073f5b65954c8b6da22169971a177b7e6d94a106ff75c0c16296bc15412e"},
+	} {
+		t.Run(fmt.Sprintf("%d-bit", tc.bits), func(t *testing.T) {
+			data := buildStandardRC4PDF(t, 2, 3, tc.bits, false, "", "owner-secret", "Owner entry control")
+			if !bytes.Contains(data, []byte("/O <"+tc.wantOwner+">")) {
+				t.Fatalf("fixture /O entry does not match independent Algorithm 3 vector %s", tc.wantOwner)
+			}
+		})
+	}
+}
+
+func TestPDFExtractorStandardRC4Encryption(t *testing.T) {
+	const text = "Leatherwood trail guide"
+	for _, tc := range []struct {
+		name          string
+		v, r, keyBits int
+		omitLength    bool
+		userPW        string
+	}{
+		{"empty-user-password/40-bit V1 R2 explicit length", 1, 2, 40, false, ""},
+		{"empty-user-password/40-bit V1 R2 default length", 1, 2, 40, true, ""},
+		{"empty-user-password/40-bit V2 R3 explicit length", 2, 3, 40, false, ""},
+		{"empty-user-password/128-bit V2 R3 control", 2, 3, 128, false, ""},
+		{"non-empty-user-password/40-bit V1 R2", 1, 2, 40, false, "user-secret"},
+		{"non-empty-user-password/128-bit V2 R3", 2, 3, 128, false, "user-secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := buildStandardRC4PDF(t, tc.v, tc.r, tc.keyBits, tc.omitLength, tc.userPW, "owner-secret", text)
+			extractor := &PDFExtractor{}
+			for _, entry := range []struct {
+				name string
+				run  func() (string, error)
+			}{
+				{"ExtractText", func() (string, error) { return extractor.ExtractText(data) }},
+				{"ExtractReaderAt", func() (string, error) {
+					return extractor.ExtractReaderAt(bytes.NewReader(data), int64(len(data)), DefaultMaxExtractedBytes)
+				}},
+			} {
+				got, err := entry.run()
+				if tc.userPW == "" {
+					if got != text || err != nil {
+						t.Errorf("%s = (%q, %v), want (%q, nil)", entry.name, got, err, text)
+					}
+				} else if got != "" || !errors.Is(err, pdf.ErrInvalidPassword) {
+					t.Errorf("%s = (%q, %v), want empty text and ErrInvalidPassword", entry.name, got, err)
+				}
+			}
+			if tc.userPW != "" {
+				dir := t.TempDir()
+				if err := os.WriteFile(filepath.Join(dir, "locked.pdf"), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				engine := NewSearchEngine([]string{"Leatherwood"}, nil, nil, false, 1, 1000)
+				engine.StartDir = dir
+				engine.Silent = true
+				results, err := engine.Execute()
+				if err != nil || len(results) != 0 {
+					t.Fatalf("locked PDF search = (%v, %v), want no results and nil error", results, err)
+				}
 			}
 		})
 	}
