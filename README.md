@@ -498,9 +498,11 @@ restricts to just this family.
 > Extracted text is capped at 8 MiB per PDF, cumulative across pages. A PDF over
 > the cap is skipped, not partially searched; its unextracted pages are reported
 > as `Truncated`. Standard-encrypted PDFs with an empty user password (40- to
-> 128-bit RC4 `V=1`/`2`, or 128-bit AES `V=4`) are decrypted automatically;
-> files that require a non-empty user password or use unsupported encryption
-> (such as AES-256 `V=5` or `V=4` RC4 crypt filters) are skipped. Parser panics
+> 128-bit RC4 `V=1`/`2`, or 128-bit AES `V=4` with `/EncryptMetadata` true or
+> absent) are decrypted automatically; files that require a non-empty user
+> password or use unsupported encryption (such as AES-256 `V=5`, `V=4` RC4
+> crypt filters, or 128-bit AES `V=4` with `/EncryptMetadata false`) are skipped.
+> Parser panics
 > on malformed PDFs or unsupported page operators (such as raw inline-image
 > `BI`/`ID`/`EI` data) are recovered per page -- unreadable pages yield no text
 > while remaining pages still extract, and unopenable files are skipped. There
