@@ -44,3 +44,8 @@ require (
 )
 
 replace garp => ../
+
+// Temporary immutable pin: must mirror the root go.mod replacement of
+// ledongthuc/pdf to the single-patch fork dtwaling/pdf. Remove together with
+// the root directive when upstream releases the fix; see dtwaling/garp#102.
+replace github.com/ledongthuc/pdf => github.com/dtwaling/pdf v0.0.0-20261123044633-dc44d404eb72

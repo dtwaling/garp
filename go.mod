@@ -39,3 +39,9 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/net v0.62.0 // indirect
 )
+
+// Temporary immutable pin: redirects the canonical ledongthuc/pdf module to
+// the single-patch fork dtwaling/pdf (lazy content-stream readers, one commit
+// above the pinned base). Remove when upstream releases the fix; see
+// dtwaling/garp#102 and ledongthuc/pdf#106.
+replace github.com/ledongthuc/pdf => github.com/dtwaling/pdf v0.0.0-20261123044633-dc44d404eb72

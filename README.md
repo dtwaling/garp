@@ -608,6 +608,31 @@ The committed `bin/garp` and `bin/garp.exe` are produced only by `make release`
 (`CGO_ENABLED=0`, `-trimpath`, stripped symbol table + DWARF, embedded version),
 built from a clean tree and committed on their own.
 
+### Dependency pin: temporary `ledongthuc/pdf` fork
+
+Both `go.mod` files temporarily redirect `github.com/ledongthuc/pdf` to the
+maintained single-patch fork `github.com/dtwaling/pdf` with an exact
+pseudo-version `replace` directive
+(`v0.0.0-20261123044633-dc44d404eb72`, one commit above the previously pinned
+upstream revision; import paths unchanged). The patch constructs PDF page
+content-stream readers lazily, so at most one member reader is retained per
+concatenated content stream instead of one per member for the whole
+interpretation. One observable contract change: construction errors of later
+content-stream members surface only when that member is reached, and an
+earlier interpreter exit never triggers them; encountered errors still
+propagate and per-page panic recovery is unchanged.
+
+- **Removal condition:** the pin is temporary. Both `replace` directives are
+  removed once upstream merges and releases the equivalent fix
+  ([ledongthuc/pdf#106](https://github.com/ledongthuc/pdf/pull/106));
+  tracking, provenance, and release-by-release review live in
+  [dtwaling/garp#102](https://github.com/dtwaling/garp/issues/102).
+- **`go install module@version` limitation:** Go rejects version-suffixed
+  installs for modules whose `replace` directives change module
+  interpretation. This install mode was never documented for garp -- use a
+  source build (`make install`), the committed `bin/` binaries, or a GitHub
+  Release asset -- so the limitation affects no supported distribution path.
+
 ## Development
 
 The [retrieval-quality eval harness](eval/README.md) compares the working tree
