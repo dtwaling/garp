@@ -1458,7 +1458,8 @@ func buildStandardRC4PDF(t *testing.T, v, r, keyBits int, omitLength bool, userP
 	ownerKey := append([]byte(nil), h[:]...)
 	if r >= 3 {
 		for i := 0; i < 50; i++ {
-			sum := md5.Sum(ownerKey[:keyLen])
+			// Algorithm 3 hashes the full digest; truncate only after the rounds.
+			sum := md5.Sum(ownerKey)
 			ownerKey = append(ownerKey[:0], sum[:]...)
 		}
 	}
@@ -1562,6 +1563,28 @@ func buildStandardRC4PDF(t *testing.T, v, r, keyBits int, omitLength bool, userP
 	fmt.Fprintf(&pdfBuf, "trailer\n<< /Size %d /Root 1 0 R /Encrypt 6 0 R /ID [<%x> <%x>] >>\nstartxref\n%d\n%%%%EOF\n",
 		len(objs)+1, []byte(fileID), []byte(fileID), xrefOff)
 	return pdfBuf.Bytes()
+}
+
+func TestStandardRC4PDFOwnerEntry(t *testing.T) {
+	// PDF 32000-1:2008, 7.6.3.3, Algorithm 3 (c)-(d): hash the full
+	// digest 50 times, then truncate. These fixed /O vectors were generated
+	// independently with pypdf 6.1.1, not with this fixture or ledongthuc/pdf:
+	// https://github.com/py-pdf/pypdf/blob/6.1.1/pypdf/_encryption.py
+	// AlgV4.compute_O_value(AlgV4.compute_O_value_key(b"owner-secret", 3, bits), b"", 3).
+	for _, tc := range []struct {
+		bits      int
+		wantOwner string
+	}{
+		{40, "2bcab0b937bd9ebeb09b43543f481f3ac2bf43dc4bc0697f3297d2beadfe3a86"},
+		{128, "913b073f5b65954c8b6da22169971a177b7e6d94a106ff75c0c16296bc15412e"},
+	} {
+		t.Run(fmt.Sprintf("%d-bit", tc.bits), func(t *testing.T) {
+			data := buildStandardRC4PDF(t, 2, 3, tc.bits, false, "", "owner-secret", "Owner entry control")
+			if !bytes.Contains(data, []byte("/O <"+tc.wantOwner+">")) {
+				t.Fatalf("fixture /O entry does not match independent Algorithm 3 vector %s", tc.wantOwner)
+			}
+		})
+	}
 }
 
 func TestPDFExtractorStandardRC4Encryption(t *testing.T) {
