@@ -382,11 +382,12 @@ matching. BM25 and rg ignore query flags.
 
 Live corpus-aware garp counts only successfully read/extracted eligible files,
 including readable files with zero cleaned words, after physical deduplication.
-For the pinned docs corpus, **`N_garp = 409`**, excluding 21 open-error PDFs
-tracked in #90. `internal/systems/bm25.go` retains failed extractions as empty
-manifest documents, so **`N_bm25 = 430`**. Both use the same 409 successfully
-extracted texts, but the IDF and average-length denominators differ. Live garp
-must not let unreadable files dilute average length or inflate rarity thresholds.
+For the pinned docs corpus, **`N_garp = 430`** after `#90` framing recovery
+(up from `409` in `v0.11.0`, which excluded 21 pre-`#90` PDF open errors).
+`internal/systems/bm25.go` retains failed extractions as empty manifest
+documents, so **`N_bm25 = 430`** as well; when hard open/read errors occur on
+other trees, `N_garp` excludes them so unreadable files do not dilute average
+length or inflate rarity thresholds.
 The code corpus has no extraction errors (67 garp files, 139 ripgrep files).
 
 The current [v0.10.0 baseline](results/v0.10.0.json) per-query

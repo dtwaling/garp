@@ -1587,6 +1587,139 @@ func TestStandardRC4PDFOwnerEntry(t *testing.T) {
 	}
 }
 
+func TestPDFExtractorLegacyFramingTolerance(t *testing.T) {
+	const want = "provider access_token pdf hit"
+	buildWithHeader := func(hdr string) []byte {
+		var b bytes.Buffer
+		b.WriteString(hdr)
+		stream := fmt.Sprintf("BT /F1 18 Tf 72 720 Td (%s) Tj ET\n", want)
+		objs := []string{
+			"<< /Type /Catalog /Pages 2 0 R >>",
+			"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+			"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+			fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(stream), stream),
+			"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+		}
+		offs := make([]int, len(objs))
+		for i, o := range objs {
+			offs[i] = b.Len()
+			fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, o)
+		}
+		xref := b.Len()
+		fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
+		for _, off := range offs {
+			fmt.Fprintf(&b, "%010d 00000 n \n", off)
+		}
+		fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objs)+1, xref)
+		return b.Bytes()
+	}
+	incrementalTwoEOF := func() []byte {
+		base := buildWithHeader("%PDF-1.4\n")
+		rev2ObjOff := len(base)
+		stream := fmt.Sprintf("BT /F1 18 Tf 72 720 Td (%s updated) Tj ET\n", want)
+		var rev2 bytes.Buffer
+		fmt.Fprintf(&rev2, "4 0 obj\n<< /Length %d >>\nstream\n%sendstream\nendobj\n", len(stream), stream)
+		rev2Xref := len(base) + rev2.Len()
+		prevSXIdx := bytes.LastIndex(base, []byte("startxref\n"))
+		var prevXref int
+		_, _ = fmt.Sscanf(string(base[prevSXIdx:]), "startxref\n%d", &prevXref)
+		fmt.Fprintf(&rev2, "xref\n4 1\n%010d 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R /Prev %d >>\nstartxref\n%d\n%%%%EOF\n", rev2ObjOff, prevXref, rev2Xref)
+		return append(append(base, rev2.Bytes()...), []byte("trailing log noise after second EOF\n")...)
+	}
+	noFinalEOL := bytes.TrimRight(buildWithHeader("%PDF-1.0 \r\n"), "\r\n")
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"header space CRLF", buildWithHeader("%PDF-1.2 \r\n"), want},
+		{"header space LF", buildWithHeader("%PDF-1.0 \n"), want},
+		{"header space CR", buildWithHeader("%PDF-1.1 \r"), want},
+		{"header spaces and tab", buildWithHeader("%PDF-1.4   \t \r\n"), want},
+		{"header max 256 trailing spaces and tab", buildWithHeader("%PDF-1.4" + strings.Repeat(" ", 255) + "\t\r\n"), want},
+		{"header space without trailing EOF newline", noFinalEOL, want},
+		{"macbinary-like 128B preamble and 13B NUL tail", append(append(bytes.Repeat([]byte{0x00, 'M'}, 64), buildWithHeader("%PDF-1.2\r")...), make([]byte, 13)...), want},
+		{"decoy %PDF-1.2 text in preamble before real header", append([]byte("Wrapper for %PDF-1.2 document\n"), buildWithHeader("%PDF-1.4 \n")...), want},
+		{"preamble at exact 1016B header window boundary", append(bytes.Repeat([]byte("P"), 1016), buildWithHeader("%PDF-1.4 \n")...), want},
+		{"combined 1016B preamble and max 256 header spaces LF", append(bytes.Repeat([]byte("P"), 1016), buildWithHeader("%PDF-1.4"+strings.Repeat(" ", 255)+"\t\n")...), want},
+		{"combined 1016B preamble and max 256 header spaces CRLF", append(bytes.Repeat([]byte("P"), 1016), buildWithHeader("%PDF-1.4"+strings.Repeat(" ", 256)+"\r\n")...), want},
+		{"415B stderr junk after %%EOF", append(buildWithHeader("%PDF-1.4\r"), bytes.Repeat([]byte("./missing: No such file\n"), 18)[:415]...), want},
+		{"immediate non-whitespace after %%EOF", append(bytes.TrimRight(buildWithHeader("%PDF-1.4\n"), "\r\n"), []byte("JUNK")...), want},
+		{"trailer junk at exact 1018B after %%EOF LF boundary", append(buildWithHeader("%PDF-1.4\n"), bytes.Repeat([]byte("J"), 1018)...), want},
+		{"incremental update keeps final %%EOF", incrementalTwoEOF(), want + " updated"},
+	} {
+		t.Run("valid/"+tc.name, func(t *testing.T) {
+			ext := &PDFExtractor{}
+			if got, err := ext.ExtractText(tc.data); err != nil || got != tc.want {
+				t.Fatalf("ExtractText = (%q, %v), want (%q, nil)", got, err, tc.want)
+			}
+			gr := &guardedReaderAt{t: t, r: bytes.NewReader(tc.data), base: 0, end: int64(len(tc.data))}
+			if got, err := ext.ExtractReaderAt(gr, int64(len(tc.data)), DefaultMaxExtractedBytes); err != nil || got != tc.want {
+				t.Fatalf("ExtractReaderAt = (%q, %v), want (%q, nil)", got, err, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"empty", nil},
+		{"short non-PDF", []byte("%PDF-1.")},
+		{"absent header", []byte("plain text document without pdf magic\n%%EOF\n")},
+		{"unsupported version 1.8", buildWithHeader("%PDF-1.8\n")},
+		{"unsupported version 2.0", buildWithHeader("%PDF-2.0\n")},
+		{"preamble past window at 1017B", append(bytes.Repeat([]byte("P"), 1017), buildWithHeader("%PDF-1.4\n")...)},
+		{"preamble past window at 1017B with 256 spaces", append(bytes.Repeat([]byte("P"), 1017), buildWithHeader("%PDF-1.4"+strings.Repeat(" ", 256)+"\n")...)},
+		{"preamble past window at 1024B", append(bytes.Repeat([]byte("P"), 1024), buildWithHeader("%PDF-1.4\n")...)},
+		{"header 257 trailing spaces at offset 0", buildWithHeader("%PDF-1.4" + strings.Repeat(" ", 257) + "\n")},
+		{"combined 1016B preamble and 257 trailing spaces", append(bytes.Repeat([]byte("P"), 1016), buildWithHeader("%PDF-1.4"+strings.Repeat(" ", 257)+"\r\n")...)},
+		{"excessive header spaces without EOL", append([]byte("%PDF-1.4"+strings.Repeat(" ", 300)), buildWithHeader("%PDF-1.4\n")[9:]...)},
+		{"missing %%EOF", []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n")},
+		{"%%EOF pushed past 1024B tail window", append(buildWithHeader("%PDF-1.4\n"), bytes.Repeat([]byte("J"), 1019)...)},
+	} {
+		t.Run("reject/"+tc.name, func(t *testing.T) {
+			ext := &PDFExtractor{}
+			if got, err := ext.ExtractText(tc.data); got != "" || err == nil {
+				t.Fatalf("ExtractText = (%q, %v), want empty text and error", got, err)
+			}
+			gr := &guardedReaderAt{t: t, r: bytes.NewReader(tc.data), base: 0, end: int64(len(tc.data))}
+			if got, err := ext.ExtractReaderAt(gr, int64(len(tc.data)), DefaultMaxExtractedBytes); got != "" || err == nil {
+				t.Fatalf("ExtractReaderAt = (%q, %v), want empty text and error", got, err)
+			}
+		})
+	}
+	// Partial reads must rewrite only the header whitespace, preserving offsets.
+	t.Run("framing reader partial overlap", func(t *testing.T) {
+		raw := append([]byte("PREAMBLE"), buildWithHeader("%PDF-1.2  	\r\n")...)
+		fr, sz, err := normalizePDFReaderAt(bytes.NewReader(raw), int64(len(raw)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got bytes.Buffer
+		for off := int64(0); off < 16; off += 3 {
+			chunk := make([]byte, 3)
+			n, rerr := fr.ReadAt(chunk, off)
+			if rerr != nil && rerr != io.EOF {
+				t.Fatal(rerr)
+			}
+			got.Write(chunk[:n])
+		}
+		if !bytes.HasPrefix(got.Bytes(), []byte("%PDF-1.2\r\r\r\r\n1 0")) {
+			t.Fatalf("reconstructed prefix = %q, size = %d", got.Bytes(), sz)
+		}
+	})
+	t.Run("canceled context propagates during framing scan", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		for _, sz := range []int64{4, int64(len(minimalPDFWithText))} {
+			got, err := (&PDFExtractor{}).ExtractReaderAt(contextReaderAt{ctx, strings.NewReader(minimalPDFWithText)}, sz, 0)
+			if got != "" || !errors.Is(err, context.Canceled) {
+				t.Fatalf("size %d: got (%q, %v), want empty and context.Canceled", sz, got, err)
+			}
+		}
+	})
+}
+
 func TestPDFExtractorStandardRC4Encryption(t *testing.T) {
 	const text = "Leatherwood trail guide"
 	for _, tc := range []struct {
