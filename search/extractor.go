@@ -456,7 +456,24 @@ const (
 	pdfHeaderWindowBytes      = 1024
 	pdfHeaderMaxTrailingSpace = 256
 	pdfTrailerWindowBytes     = 1024
+	pdfMinStreamSyntaxBudget  = 32 * 1024
+	pdfTotalStreamMultiplier  = 4
 )
+
+// pdfStreamReadBudgets allows syntax overhead for small text limits and charges
+// every decoded filter/predictor stage, including repeated reads, cumulatively.
+func pdfStreamReadBudgets(textLimit int64) (int64, int64) {
+	stream := max(textLimit, pdfMinStreamSyntaxBudget)
+	if stream > math.MaxInt64/pdfTotalStreamMultiplier {
+		return stream, math.MaxInt64
+	}
+	return stream, stream * pdfTotalStreamMultiplier
+}
+
+func isPDFStreamLimit(recovered any) bool {
+	err, ok := recovered.(error)
+	return ok && errors.Is(err, pdf.ErrStreamLimit)
+}
 
 // pdfFramingReaderAt presents a bounded [baseOff, baseOff+size) view of r to
 // ledongthuc/pdf while rewriting horizontal whitespace in [8, wsEnd) (at most
@@ -597,8 +614,14 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 	if ferr != nil {
 		return "", ferr
 	}
-	reader, rerr := pdf.NewReader(framedR, framedSize)
+	maxStreamBytes, maxTotalReadBytes := pdfStreamReadBudgets(limit)
+	reader, rerr := pdf.NewReaderWithOptions(framedR, framedSize, pdf.ReaderOptions{
+		MaxStreamBytes: maxStreamBytes, MaxTotalReadBytes: maxTotalReadBytes,
+	})
 	if rerr != nil {
+		if errors.Is(rerr, pdf.ErrStreamLimit) {
+			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, limit)
+		}
 		return "", rerr
 	}
 
@@ -607,9 +630,16 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 	// Safely obtain number of pages (library may panic on malformed PDFs).
 	pages := 0
 	func() {
-		defer func() { _ = recover() }()
+		defer func() {
+			if isPDFStreamLimit(recover()) {
+				err = fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, limit)
+			}
+		}()
 		pages = reader.NumPage()
 	}()
+	if err != nil {
+		return "", err
+	}
 
 	if pages <= 0 {
 		return "", fmt.Errorf("invalid or empty PDF: %d pages", pages)
@@ -624,7 +654,11 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		}
 		var pageErr error
 		func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if isPDFStreamLimit(recover()) {
+					pageErr = ErrExtractionLimit
+				}
+			}()
 			page := reader.Page(i)
 			if page.V.IsNull() {
 				return
@@ -671,7 +705,11 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 		var pagePlain string
 		var pageErr error
 		func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if isPDFStreamLimit(recover()) {
+					pageErr = ErrExtractionLimit
+				}
+			}()
 			p := reader.Page(i)
 			if p.V.IsNull() {
 				return
@@ -685,6 +723,10 @@ func (e *PDFExtractor) ExtractReaderAt(r io.ReaderAt, size int64, maxExtractedBy
 			pagePlain, pageErr = p.GetPlainText(fonts)
 			pagePlain = pdfLigatureFolder.Replace(pagePlain)
 		}()
+		if errors.Is(pageErr, ErrExtractionLimit) || errors.Is(pageErr, pdf.ErrStreamLimit) {
+			atomic.AddInt64(&pdfPagesTruncated, int64(pages-i+1))
+			return "", fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, limit)
+		}
 		if pageErr != nil {
 			break
 		}
@@ -783,7 +825,7 @@ var errPDFPageBudget = errors.New("pdf page text budget")
 func pdfPageText(p pdf.Page, maxBytes int64) (text []pdf.Text, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			if r != errPDFPageBudget {
+			if r != errPDFPageBudget && !isPDFStreamLimit(r) {
 				panic(r)
 			}
 			text, err = nil, fmt.Errorf("%w (%d bytes)", ErrExtractionLimit, maxBytes)

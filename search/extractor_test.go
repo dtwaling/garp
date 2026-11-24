@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rc4"
+	"encoding/ascii85"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -1771,4 +1772,540 @@ func TestPDFExtractorStandardRC4Encryption(t *testing.T) {
 			}
 		})
 	}
+}
+
+func encodePDFLZWStream(data []byte, earlyChange int) []byte {
+	const (
+		clearCode = 256
+		eodCode   = 257
+		maxWidth  = 12
+		tableSize = 1 << maxWidth
+	)
+	var out bytes.Buffer
+	var bitBuf uint32
+	var nBits uint
+	width := uint(9)
+	emit := func(code uint16) {
+		bitBuf |= uint32(code) << (32 - width - nBits)
+		nBits += width
+		for nBits >= 8 {
+			out.WriteByte(byte(bitBuf >> 24))
+			bitBuf <<= 8
+			nBits -= 8
+		}
+	}
+	hi := uint16(eodCode)
+	table := make(map[uint32]uint16)
+	incHi := func() bool {
+		hi++
+		if hi == tableSize-1 && earlyChange == 1 {
+			emit(clearCode)
+			width = 9
+			hi = eodCode
+			clear(table)
+			return true
+		}
+		if width < maxWidth && hi == (uint16(1)<<width)-uint16(earlyChange) {
+			width++
+		}
+		if hi == tableSize-1 && earlyChange == 0 {
+			emit(clearCode)
+			width = 9
+			hi = eodCode
+			clear(table)
+			return true
+		}
+		return false
+	}
+	emit(clearCode)
+	if len(data) > 0 {
+		code := uint16(data[0])
+		for _, b := range data[1:] {
+			key := (uint32(code) << 8) | uint32(b)
+			if next, ok := table[key]; ok {
+				code = next
+				continue
+			}
+			emit(code)
+			code = uint16(b)
+			if !incHi() {
+				table[key] = hi
+			}
+		}
+		emit(code)
+		_ = incHi()
+	}
+	emit(eodCode)
+	if nBits > 0 {
+		out.WriteByte(byte(bitBuf >> 24))
+	}
+	return out.Bytes()
+}
+
+func encodeStreamByFilter(t *testing.T, raw []byte, filter string, earlyChange int) []byte {
+	t.Helper()
+	switch filter {
+	case "FlateDecode":
+		var buf bytes.Buffer
+		zw := zlib.NewWriter(&buf)
+		if _, err := zw.Write(raw); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	case "LZWDecode":
+		return encodePDFLZWStream(raw, earlyChange)
+	default:
+		t.Fatalf("unsupported test filter %s", filter)
+		return nil
+	}
+}
+
+func buildSingleStreamPDF(objs ...string) []byte {
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.5\n")
+	offs := make([]int, len(objs))
+	for i, o := range objs {
+		offs[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	}
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
+	for _, off := range offs {
+		fmt.Fprintf(&b, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objs)+1, xref)
+	return b.Bytes()
+}
+
+func TestPDFExtractorLZWStreamsAndDecompressionBudgets(t *testing.T) {
+	t.Run("syntax floor and saturating cumulative budget", func(t *testing.T) {
+		for _, tc := range []struct{ limit, stream, total int64 }{
+			{1, 32 * 1024, 128 * 1024},
+			{DefaultMaxExtractedBytes, DefaultMaxExtractedBytes, 4 * DefaultMaxExtractedBytes},
+			{math.MaxInt64 / 4, math.MaxInt64 / 4, (math.MaxInt64 / 4) * 4},
+			{math.MaxInt64/4 + 1, math.MaxInt64/4 + 1, math.MaxInt64},
+			{math.MaxInt64, math.MaxInt64, math.MaxInt64},
+		} {
+			if stream, total := pdfStreamReadBudgets(tc.limit); stream != tc.stream || total != tc.total {
+				t.Fatalf("limit %d: budgets (%d, %d), want (%d, %d)", tc.limit, stream, total, tc.stream, tc.total)
+			}
+		}
+	})
+	// Vary vocabulary across >600 tokens so LZW crosses 9->10->11-bit width transitions.
+	var words []string
+	for i := 0; i < 700; i++ {
+		words = append(words, fmt.Sprintf("salton%03d", i))
+	}
+	longSentence := strings.Join(words, " ")
+	contentOp := []byte(fmt.Sprintf("BT /F1 11 Tf 36 720 Td (%s) Tj ET\n", longSentence))
+
+	t.Run("content ToUnicode ObjStm XRef chains and predictors", func(t *testing.T) {
+		var a85EC1 bytes.Buffer
+		e85 := ascii85.NewEncoder(&a85EC1)
+		_, _ = e85.Write(encodePDFLZWStream(contentOp, 1))
+		_ = e85.Close()
+		a85EC1.WriteString("~>")
+
+		var a85EC0 bytes.Buffer
+		e850 := ascii85.NewEncoder(&a85EC0)
+		_, _ = e850.Write(encodePDFLZWStream(contentOp, 0))
+		_ = e850.Close()
+		a85EC0.WriteString("~>")
+
+		// PNG Up (Predictor 12, Columns 4) encoded contentOp (padded with spaces to multiple of 4).
+		padded := append([]byte(nil), contentOp...)
+		for len(padded)%4 != 0 {
+			padded = append(padded, ' ')
+		}
+		var pngUpRaw bytes.Buffer
+		var prevRow [4]byte
+		for off := 0; off < len(padded); off += 4 {
+			pngUpRaw.WriteByte(2)
+			for c := 0; c < 4; c++ {
+				pngUpRaw.WriteByte(padded[off+c] - prevRow[c])
+				prevRow[c] = padded[off+c]
+			}
+		}
+		lzwPNG12 := encodePDFLZWStream(pngUpRaw.Bytes(), 1)
+		tiffRaw := append([]byte(nil), padded...)
+		for i := len(tiffRaw) - 1; i >= 0; i-- {
+			if i%4 != 0 {
+				tiffRaw[i] -= padded[i-1]
+			}
+		}
+		lzwTIFF := encodePDFLZWStream(tiffRaw, 1)
+
+		for _, tc := range []struct {
+			name string
+			obj4 string
+		}{
+			{"LZW default EarlyChange=1", fmt.Sprintf("<< /Filter /LZWDecode /Length %d >>\nstream\n%s\nendstream", len(encodePDFLZWStream(contentOp, 1)), encodePDFLZWStream(contentOp, 1))},
+			{"LZW explicit EarlyChange=1", fmt.Sprintf("<< /Filter /LZWDecode /DecodeParms << /EarlyChange 1 /Predictor 1 >> /Length %d >>\nstream\n%s\nendstream", len(encodePDFLZWStream(contentOp, 1)), encodePDFLZWStream(contentOp, 1))},
+			{"LZW explicit EarlyChange=0", fmt.Sprintf("<< /Filter /LZWDecode /DecodeParms << /EarlyChange 0 >> /Length %d >>\nstream\n%s\nendstream", len(encodePDFLZWStream(contentOp, 0)), encodePDFLZWStream(contentOp, 0))},
+			{"LZW single-element array with dict DecodeParms", fmt.Sprintf("<< /Filter [/LZWDecode] /DecodeParms << /EarlyChange 0 >> /Length %d >>\nstream\n%s\nendstream", len(encodePDFLZWStream(contentOp, 0)), encodePDFLZWStream(contentOp, 0))},
+			{"ASCII85+LZW default EarlyChange=1", fmt.Sprintf("<< /Filter [/ASCII85Decode /LZWDecode] /Length %d >>\nstream\n%s\nendstream", a85EC1.Len(), a85EC1.Bytes())},
+			{"ASCII85+LZW empty-dict stage and EarlyChange=0", fmt.Sprintf("<< /Filter [/ASCII85Decode /LZWDecode] /DecodeParms [<< >> << /EarlyChange 0 >>] /Length %d >>\nstream\n%s\nendstream", a85EC0.Len(), a85EC0.Bytes())},
+			{"LZW with PNG Up Predictor 12", fmt.Sprintf("<< /Filter /LZWDecode /DecodeParms << /Predictor 12 /Columns 4 >> /Length %d >>\nstream\n%s\nendstream", len(lzwPNG12), lzwPNG12)},
+			{"LZW with TIFF Predictor 2", fmt.Sprintf("<< /Filter /LZWDecode /DecodeParms << /Predictor 2 /Columns 4 >> /Length %d >>\nstream\n%s\nendstream", len(lzwTIFF), lzwTIFF)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				pdfData := buildSingleStreamPDF(
+					"<< /Type /Catalog /Pages 2 0 R >>",
+					"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+					"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+					tc.obj4,
+					"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Widths ["+strings.Repeat("500 ", 256)+"] /FirstChar 0 /LastChar 255 >>",
+				)
+				ext := &PDFExtractor{}
+				gotText, err := ext.ExtractText(pdfData)
+				if err != nil || gotText != longSentence {
+					t.Fatalf("ExtractText = (%q, %v), want (%q, nil)", gotText, err, longSentence)
+				}
+				gotRA, err := ext.ExtractReaderAt(bytes.NewReader(pdfData), int64(len(pdfData)), DefaultMaxExtractedBytes)
+				if err != nil || gotRA != longSentence {
+					t.Fatalf("ExtractReaderAt = (%q, %v), want (%q, nil)", gotRA, err, longSentence)
+				}
+			})
+		}
+
+		// LZW ToUnicode CMap + LZW ObjStm (Font + Widths) + LZW XRef stream with Predictor 12.
+		for _, ec := range []int{1, 0} {
+			t.Run(fmt.Sprintf("LZW ToUnicode ObjStm and XRef EarlyChange=%d", ec), func(t *testing.T) {
+				// Pad CMap with harmless comments so LZW crosses the 9->10-bit boundary inside ToUnicode too.
+				cmapSrc := fmt.Sprintf("%% %s\nbegincmap\n1 begincodespacerange <00> <ff> endcodespacerange\n1 beginbfchar <0a> <000a> endbfchar\n1 beginbfrange <61> <7a> <0041> endbfrange\nendcmap\n", longSentence)
+				cmapLZW := encodePDFLZWStream([]byte(cmapSrc), ec)
+				dp := ""
+				if ec == 0 {
+					dp = " /DecodeParms << /EarlyChange 0 >>"
+				}
+				fontObj := "<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Times-Roman /FirstChar 32 /LastChar 126 /Widths 6 0 R /ToUnicode 7 0 R >>"
+				widthsObj := "[" + strings.Repeat("500 ", 95) + "]"
+				objStmHdr := fmt.Sprintf("5 0 6 %d ", len(fontObj)+1)
+				objStmLZW := encodePDFLZWStream([]byte(objStmHdr+fontObj+" "+widthsObj+" "+strings.Repeat(" ", 1024)), ec)
+				contentLZW := encodePDFLZWStream([]byte("BT /F1 12 Tf 72 720 Td (dataplot) Tj ET\n"), ec)
+
+				var b bytes.Buffer
+				b.WriteString("%PDF-1.5\n")
+				offsets := make([]int, 10)
+				writeRawObj := func(id int, body string) {
+					offsets[id] = b.Len()
+					fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", id, body)
+				}
+				writeRawObj(1, "<< /Type /Catalog /Pages 2 0 R >>")
+				writeRawObj(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+				writeRawObj(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>")
+				writeRawObj(4, fmt.Sprintf("<< /Filter /LZWDecode%s /Length %d >>\nstream\n%s\nendstream", dp, len(contentLZW), contentLZW))
+				writeRawObj(7, fmt.Sprintf("<< /Filter /LZWDecode%s /Length %d >>\nstream\n%s\nendstream", dp, len(cmapLZW), cmapLZW))
+				writeRawObj(8, fmt.Sprintf("<< /Type /ObjStm /N 2 /First %d /Filter /LZWDecode%s /Length %d >>\nstream\n%s\nendstream", len(objStmHdr), dp, len(objStmLZW), objStmLZW))
+
+				xrefOff := b.Len()
+				offsets[9] = xrefOff
+				var xrRaw bytes.Buffer
+				var prevX [7]byte
+				for id := 0; id <= 9; id++ {
+					var row [7]byte
+					row[0] = 1
+					binary.BigEndian.PutUint32(row[1:5], uint32(offsets[id]))
+					switch id {
+					case 0:
+						row[0] = 0
+						binary.BigEndian.PutUint16(row[5:7], 65535)
+					case 5, 6:
+						row[0] = 2
+						binary.BigEndian.PutUint32(row[1:5], 8)
+						binary.BigEndian.PutUint16(row[5:7], uint16(id-5))
+					}
+					xrRaw.WriteByte(2) // PNG Up
+					for c := 0; c < 7; c++ {
+						xrRaw.WriteByte(row[c] - prevX[c])
+						prevX[c] = row[c]
+					}
+				}
+				xrLZW := encodePDFLZWStream(xrRaw.Bytes(), ec)
+				xrDP := "<< /Predictor 12 /Columns 7 >>"
+				if ec == 0 {
+					xrDP = "<< /EarlyChange 0 /Predictor 12 /Columns 7 >>"
+				}
+				fmt.Fprintf(&b, "9 0 obj\n<< /Type /XRef /Size 10 /Root 1 0 R /W [1 4 2] /Filter /LZWDecode /DecodeParms %s /Length %d >>\nstream\n%s\nendstream\nendobj\nstartxref\n%d\n%%%%EOF\n",
+					xrDP, len(xrLZW), xrLZW, xrefOff)
+
+				ext := &PDFExtractor{}
+				got, err := ext.ExtractText(b.Bytes())
+				if err != nil || got != "DATAPLOT" {
+					t.Fatalf("ExtractText = (%q, %v), want (\"DATAPLOT\", nil)", got, err)
+				}
+				gotMax, err := ext.ExtractReaderAt(bytes.NewReader(b.Bytes()), int64(b.Len()), math.MaxInt64)
+				if err != nil || gotMax != "DATAPLOT" {
+					t.Fatalf("ExtractReaderAt(MaxInt64) = (%q, %v), want (\"DATAPLOT\", nil)", gotMax, err)
+				}
+			})
+		}
+	})
+
+	t.Run("malformed LZW page skips cleanly while preserving sibling pages", func(t *testing.T) {
+		goodLZW := encodePDFLZWStream([]byte("BT /F1 12 Tf 72 720 Td (valid page survives) Tj ET\n"), 1)
+		truncLZW := goodLZW[:len(goodLZW)/2]
+		pdfData := buildSingleStreamPDF(
+			"<< /Type /Catalog /Pages 2 0 R >>",
+			"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+			"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >>",
+			"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> >>",
+			fmt.Sprintf("<< /Filter /LZWDecode /Length %d >>\nstream\n%s\nendstream", len(truncLZW), truncLZW),
+			fmt.Sprintf("<< /Filter /LZWDecode /Length %d >>\nstream\n%s\nendstream", len(goodLZW), goodLZW),
+			"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Widths ["+strings.Repeat("500 ", 256)+"] /FirstChar 0 /LastChar 255 >>",
+		)
+		got, err := (&PDFExtractor{}).ExtractText(pdfData)
+		if err != nil || got != "valid page survives" {
+			t.Fatalf("got (%q, %v), want (\"valid page survives\", nil)", got, err)
+		}
+	})
+
+	t.Run("sparse high-index LZW XRef stream extracts text cleanly", func(t *testing.T) {
+		var b bytes.Buffer
+		b.WriteString("%PDF-1.5\n")
+		off1 := b.Len()
+		b.WriteString("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+		off2 := b.Len()
+		b.WriteString("2 0 obj\n<< /Type /Pages /Kids [1000000 0 R] /Count 1 >>\nendobj\n")
+		offFont := b.Len()
+		b.WriteString("3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Widths [" + strings.Repeat("500 ", 256) + "] /FirstChar 0 /LastChar 255 >>\nendobj\n")
+		offPage := b.Len()
+		b.WriteString("1000000 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 1000001 0 R /Resources << /Font << /F1 3 0 R >> >> >>\nendobj\n")
+		offCont := b.Len()
+		contLZW := encodePDFLZWStream([]byte("BT /F1 12 Tf 72 720 Td (sparse xref recovered) Tj ET\n"), 1)
+		fmt.Fprintf(&b, "1000001 0 obj\n<< /Filter /LZWDecode /Length %d >>\nstream\n%s\nendstream\nendobj\n", len(contLZW), contLZW)
+		xrefOff := b.Len()
+		var xrRaw bytes.Buffer
+		for _, off := range []int{off1, off2, offFont, offPage, offCont} {
+			xrRaw.WriteByte(1)
+			var ob [4]byte
+			binary.BigEndian.PutUint32(ob[:], uint32(off))
+			xrRaw.Write(ob[:])
+			xrRaw.Write([]byte{0, 0})
+		}
+		xrLZW := encodePDFLZWStream(xrRaw.Bytes(), 1)
+		fmt.Fprintf(&b, "1000002 0 obj\n<< /Type /XRef /Size 1000003 /Root 1 0 R /W [1 4 2] /Index [1 3 1000000 2] /Filter /LZWDecode /Length %d >>\nstream\n%s\nendstream\nendobj\nstartxref\n%d\n%%%%EOF\n",
+			len(xrLZW), xrLZW, xrefOff)
+		got, err := (&PDFExtractor{}).ExtractReaderAt(bytes.NewReader(b.Bytes()), int64(b.Len()), 64*1024)
+		if err != nil || got != "sparse xref recovered" {
+			t.Fatalf("got (%q, %v), want (\"sparse xref recovered\", nil)", got, err)
+		}
+	})
+
+	t.Run("identical decompression bomb limits across LZWDecode and FlateDecode", func(t *testing.T) {
+		const budget = 64 * 1024
+		buildIntermediateStagePayload := func(filter string, finalOp []byte) []byte {
+			if filter == "FlateDecode" {
+				inner := []byte{0x78, 0x01}
+				for i := 0; i < 10000; i++ {
+					inner = append(inner, 0, 0, 0, 0xff, 0xff)
+				}
+				n := uint16(len(finalOp))
+				inner = append(inner, 1, byte(n), byte(n>>8), byte(^n), byte(^n>>8))
+				inner = append(inner, finalOp...)
+				s1, s2 := uint32(1), uint32(0)
+				for _, b := range finalOp {
+					s1 = (s1 + uint32(b)) % 65521
+					s2 = (s2 + s1) % 65521
+				}
+				var adler [4]byte
+				binary.BigEndian.PutUint32(adler[:], (s2<<16)|s1)
+				inner = append(inner, adler[:]...)
+				return encodeStreamByFilter(t, inner, "FlateDecode", 1)
+			}
+			var lzwInner bytes.Buffer
+			var bitBuf uint32
+			var nBits uint
+			emit9 := func(code uint16) {
+				bitBuf |= uint32(code) << (32 - 9 - nBits)
+				nBits += 9
+				for nBits >= 8 {
+					lzwInner.WriteByte(byte(bitBuf >> 24))
+					bitBuf <<= 8
+					nBits -= 8
+				}
+			}
+			for i := 0; i < 40000; i++ {
+				emit9(256)
+			}
+			for _, b := range finalOp {
+				emit9(256)
+				emit9(uint16(b))
+			}
+			emit9(257)
+			if nBits > 0 {
+				lzwInner.WriteByte(byte(bitBuf >> 24))
+			}
+			return encodePDFLZWStream(lzwInner.Bytes(), 1)
+		}
+
+		for _, filter := range []string{"FlateDecode", "LZWDecode"} {
+			t.Run(filter, func(t *testing.T) {
+				// Exact cap-boundary control: exact 64 KiB stream succeeds, 64 KiB + 1 fails.
+				prefix := []byte("BT /F1 12 Tf 72 720 Td (exactcap) Tj ET\n")
+				exactRaw := append(append([]byte(nil), prefix...), bytes.Repeat([]byte(" "), budget-len(prefix))...)
+				overOneRaw := append(append([]byte(nil), exactRaw...), ' ')
+				exactEnc := encodeStreamByFilter(t, exactRaw, filter, 1)
+				overOneEnc := encodeStreamByFilter(t, overOneRaw, filter, 1)
+				exactPDF := buildSingleStreamPDF(
+					"<< /Type /Catalog /Pages 2 0 R >>",
+					"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+					"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+					fmt.Sprintf("<< /Filter /%s /Length %d >>\nstream\n%s\nendstream", filter, len(exactEnc), exactEnc),
+					"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Widths ["+strings.Repeat("500 ", 256)+"] /FirstChar 0 /LastChar 255 >>",
+				)
+				if got, err := (&PDFExtractor{}).ExtractReaderAt(bytes.NewReader(exactPDF), int64(len(exactPDF)), budget); err != nil || got != "exactcap" {
+					t.Fatalf("exact cap (%d B) got (%q, %v), want (\"exactcap\", nil)", budget, got, err)
+				}
+				overOnePDF := buildSingleStreamPDF(
+					"<< /Type /Catalog /Pages 2 0 R >>",
+					"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+					"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+					fmt.Sprintf("<< /Filter /%s /Length %d >>\nstream\n%s\nendstream", filter, len(overOneEnc), overOneEnc),
+					"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Widths ["+strings.Repeat("500 ", 256)+"] /FirstChar 0 /LastChar 255 >>",
+				)
+				if got, err := (&PDFExtractor{}).ExtractReaderAt(bytes.NewReader(overOnePDF), int64(len(overOnePDF)), budget); got != "" || !errors.Is(err, ErrExtractionLimit) {
+					t.Errorf("cap+1 (%d B) got (%q, %v), want ErrExtractionLimit", budget+1, got, err)
+				}
+
+				// 1. Non-text whitespace operator bomb in positioned content stream (128 KiB).
+				spaceBomb := encodeStreamByFilter(t, bytes.Repeat([]byte(" "), budget*2), filter, 1)
+				spacePDF := buildSingleStreamPDF(
+					"<< /Type /Catalog /Pages 2 0 R >>",
+					"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+					"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+					fmt.Sprintf("<< /Filter /%s /Length %d >>\nstream\n%s\nendstream", filter, len(spaceBomb), spaceBomb),
+				)
+				// 2. Fallback GetPlainText bomb (leading unmatched Q forces fallback).
+				fbPayload := append([]byte("Q BT /F1 12 Tf ("), bytes.Repeat([]byte("A"), budget*2)...)
+				fbPayload = append(fbPayload, []byte(") Tj ET\n")...)
+				fbBomb := encodeStreamByFilter(t, fbPayload, filter, 1)
+				fbPDF := buildSingleStreamPDF(
+					"<< /Type /Catalog /Pages 2 0 R >>",
+					"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+					"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+					fmt.Sprintf("<< /Filter /%s /Length %d >>\nstream\n%s\nendstream", filter, len(fbBomb), fbBomb),
+					"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+				)
+				// 3. ToUnicode CMap decompression bomb.
+				cmapBomb := encodeStreamByFilter(t, append([]byte("begincmap\n"), bytes.Repeat([]byte(" "), budget*2)...), filter, 1)
+				shortOp := encodeStreamByFilter(t, []byte("BT /F1 12 Tf (ok) Tj ET\n"), filter, 1)
+				tuPDF := buildSingleStreamPDF(
+					"<< /Type /Catalog /Pages 2 0 R >>",
+					"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+					"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+					fmt.Sprintf("<< /Filter /%s /Length %d >>\nstream\n%s\nendstream", filter, len(shortOp), shortOp),
+					"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>",
+					fmt.Sprintf("<< /Filter /%s /Length %d >>\nstream\n%s\nendstream", filter, len(cmapBomb), cmapBomb),
+				)
+				// 4. ObjStm decompression bomb (128 KiB padding before object 5 inside ObjStm).
+				objStmHdr := fmt.Sprintf("5 %d ", budget*2)
+				objStmBombRaw := append(append([]byte(objStmHdr), bytes.Repeat([]byte(" "), budget*2)...), []byte("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")...)
+				objStmBombEnc := encodeStreamByFilter(t, objStmBombRaw, filter, 1)
+				var objStmPDF bytes.Buffer
+				objStmPDF.WriteString("%PDF-1.5\n")
+				o1 := objStmPDF.Len()
+				objStmPDF.WriteString("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+				o2 := objStmPDF.Len()
+				objStmPDF.WriteString("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+				o3 := objStmPDF.Len()
+				objStmPDF.WriteString("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n")
+				o4 := objStmPDF.Len()
+				fmt.Fprintf(&objStmPDF, "4 0 obj\n<< /Filter /%s /Length %d >>\nstream\n%s\nendstream\nendobj\n", filter, len(shortOp), shortOp)
+				o6 := objStmPDF.Len()
+				fmt.Fprintf(&objStmPDF, "6 0 obj\n<< /Type /ObjStm /N 1 /First %d /Filter /%s /Length %d >>\nstream\n%s\nendstream\nendobj\n", len(objStmHdr), filter, len(objStmBombEnc), objStmBombEnc)
+				ox := objStmPDF.Len()
+				var oxRaw bytes.Buffer
+				writeXR := func(tbyte byte, f2 uint32, f3 uint16) {
+					oxRaw.WriteByte(tbyte)
+					var b4 [4]byte
+					var b2 [2]byte
+					binary.BigEndian.PutUint32(b4[:], f2)
+					binary.BigEndian.PutUint16(b2[:], f3)
+					oxRaw.Write(b4[:])
+					oxRaw.Write(b2[:])
+				}
+				writeXR(0, 0, 65535)
+				writeXR(1, uint32(o1), 0)
+				writeXR(1, uint32(o2), 0)
+				writeXR(1, uint32(o3), 0)
+				writeXR(1, uint32(o4), 0)
+				writeXR(2, 6, 0) // 5 0 R stored in ObjStm 6 (not present before 128 KiB padding -> reads whole stream)
+				writeXR(1, uint32(o6), 0)
+				writeXR(1, uint32(ox), 0)
+				oxEnc := encodeStreamByFilter(t, oxRaw.Bytes(), filter, 1)
+				fmt.Fprintf(&objStmPDF, "7 0 obj\n<< /Type /XRef /Size 8 /Root 1 0 R /W [1 4 2] /Filter /%s /Length %d >>\nstream\n%s\nendstream\nendobj\nstartxref\n%d\n%%%%EOF\n",
+					filter, len(oxEnc), oxEnc, ox)
+
+				// 5. XRef stream decompression bomb (128 KiB decoded XRef bytes).
+				xrefBombEntries := (budget*2)/8 + 16
+				xrefBombEnc := encodeStreamByFilter(t, make([]byte, xrefBombEntries*8), filter, 1)
+				var xrBombPDF bytes.Buffer
+				xrBombPDF.WriteString("%PDF-1.5\n")
+				xrOff := xrBombPDF.Len()
+				fmt.Fprintf(&xrBombPDF, "1 0 obj\n<< /Type /XRef /Size %d /Root 1 0 R /W [1 4 3] /Filter /%s /Length %d >>\nstream\n%s\nendstream\nendobj\nstartxref\n%d\n%%%%EOF\n",
+					xrefBombEntries, filter, len(xrefBombEnc), xrefBombEnc, xrOff)
+
+				// 6. Multi-page cumulative stream bomb (6 pages * 48 KiB = 288 KiB > 4 * 64 KiB = 256 KiB, each page < 64 KiB).
+				page48K := encodeStreamByFilter(t, bytes.Repeat([]byte(" "), 48*1024), filter, 1)
+				multiPDF := buildSingleStreamPDF(
+					"<< /Type /Catalog /Pages 2 0 R >>",
+					"<< /Type /Pages /Kids [3 0 R 3 0 R 3 0 R 3 0 R 3 0 R 3 0 R] /Count 6 >>",
+					"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+					fmt.Sprintf("<< /Filter /%s /Length %d >>\nstream\n%s\nendstream", filter, len(page48K), page48K),
+				)
+
+				// 7. Chained intermediate-stage cumulative bomb ([/Filter /Filter] x 6 streams:
+				// ~45..50 KiB intermediate bytes per stream -> >256 KiB total intermediate work, <300 B final output).
+				chainedRaw := buildIntermediateStagePayload(filter, []byte("BT /F1 12 Tf 72 720 Td (budget control) Tj ET\n"))
+				chainedStreamObj := fmt.Sprintf("<< /Filter [/%s /%s] /Length %d >>\nstream\n%s\nendstream", filter, filter, len(chainedRaw), chainedRaw)
+				chainedPDF := buildSingleStreamPDF(
+					"<< /Type /Catalog /Pages 2 0 R >>",
+					"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+					"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] /Resources << /Font << /F1 10 0 R >> >> >>",
+					chainedStreamObj,
+					chainedStreamObj,
+					chainedStreamObj,
+					chainedStreamObj,
+					chainedStreamObj,
+					chainedStreamObj,
+					"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+				)
+
+				for _, bc := range []struct {
+					name          string
+					data          []byte
+					wantTruncated bool
+				}{
+					{"content whitespace bomb", spacePDF, true},
+					{"fallback GetPlainText bomb", fbPDF, true},
+					{"ToUnicode CMap bomb", tuPDF, true},
+					{"ObjStm bomb", objStmPDF.Bytes(), true},
+					{"XRef stream bomb", xrBombPDF.Bytes(), false},
+					{"cumulative multi-page stream bomb", multiPDF, true},
+					{"chained intermediate-stage cumulative bomb", chainedPDF, true},
+				} {
+					t.Run(bc.name, func(t *testing.T) {
+						se := &SearchEngine{}
+						_, before := se.GetPDFStatsDetailed()
+						r := &pdfEOFProbeReader{ReaderAt: bytes.NewReader(bc.data)}
+						got, err := (&PDFExtractor{}).ExtractReaderAt(r, int64(len(bc.data)), budget)
+						_, after := se.GetPDFStatsDetailed()
+						if got != "" || !errors.Is(err, ErrExtractionLimit) {
+							t.Fatalf("got (%q, %v), want empty text and ErrExtractionLimit", got, err)
+						}
+						if bc.wantTruncated && after <= before {
+							t.Fatalf("pdfPagesTruncated delta = %d, want > 0", after-before)
+						}
+						if bc.name == "fallback GetPlainText bomb" && r.probes != 2 {
+							t.Fatalf("page-boundary probes = %d, want positioned and fallback", r.probes)
+						}
+					})
+				}
+			})
+		}
+	})
 }

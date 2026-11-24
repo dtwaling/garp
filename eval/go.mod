@@ -46,6 +46,8 @@ require (
 replace garp => ../
 
 // Temporary immutable pin: must mirror the root go.mod replacement of
-// ledongthuc/pdf to the single-patch fork dtwaling/pdf. Remove together with
-// the root directive when upstream releases the fix; see dtwaling/garp#102.
-replace github.com/ledongthuc/pdf => github.com/dtwaling/pdf v0.0.0-20261123044633-dc44d404eb72
+// ledongthuc/pdf to the two-commit fork dtwaling/pdf (lazy content readers and
+// bounded LZW/predictor streams with XRef bounds, above 5e46805f718e). Remove
+// both directives when upstream releases both fixes; see dtwaling/garp#102
+// and ledongthuc/pdf#106 and #107.
+replace github.com/ledongthuc/pdf => github.com/dtwaling/pdf v0.0.0-20261123191230-3f7b1b63bd1c
