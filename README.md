@@ -552,9 +552,9 @@ content.
   `.html .htm .xhtml .shtml .xml .eml .mbox .msg .pdf .doc .docx .odt .rtf`.
   Tags, comments, CDATA, declarations, processing instructions, entities,
   `script`/`style` bodies, `>`-quoted lines, and `-----` dividers are removed.
-  Uppercase/digit run-ons are split (`PDF32` -> `PDF 32`) and a space is added
-  after commas. Positive terms and `--not` exclusions match this cleaned text
-  in every stage.
+  Letter/digit identifiers stay intact (`SHA256`, `B89595`, `RHC03-2516`); the only
+  spacing change is a space added after a comma when one is missing. Positive
+  terms and `--not` exclusions match this cleaned text in every stage.
 
 ## How it works
 
@@ -698,16 +698,14 @@ separate from the root module.
   `--not` tokens parses as OR. Quote pipes in shells; search a literal pipe
   with `\|` (`garp 'a\|b'`). OR-expanded queries have the limits documented
   above and fail rather than truncate. `--startdir` and `--pathscope` reject `|`.
-- **Deferred v0.11.1 extraction/cleaning limits:** uppercase-digit splitting of
-  markup/extracted mixed tokens such as `Olk10SideProps_0001` (#94) remains a known limit. Evaluation
-  retains the affected misses rather than attributing them to ranking.
 - Markdown and other literal formats are not rendered: text inside inline HTML
   and HTML comments in `.md` (for example `<!-- note -->`) is part of the
   searchable text. A search term can match there, and a word you exclude on the
   command line with `--not <word>` excludes the file if it appears there.
-- In markup/extracted formats, quoted `>` lines are dropped and `SHA256`-style
-  tokens are indexed as `SHA 256`. Search the split form, or a literal format,
-  to find them.
+- In markup/extracted formats, quoted `>` lines are dropped. Identifiers are
+  matched as whole words with `_` as a word character: `PDF` does not match inside
+  `PDF32`, and `Olk10SideProps` does not match `Olk10SideProps_0001`.
+  Use the full token, a wildcard (`PDF*`), or `--partial`.
 - Classification is by extension only. A markup file with a literal extension
   (for example, HTML saved as `.txt`) is searched with its tags.
 - `.msg` files are searched only as Outlook OLE/CFB messages. Other files that

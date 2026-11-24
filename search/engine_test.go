@@ -3078,8 +3078,10 @@ func TestFilterCandidatesWordExclusionsUseSearchableText(t *testing.T) {
 		{"attribute", page, "draft", true, false},
 		{"visible word", page, "summary", false, false},
 		{"quoted line", "visible summary\n> forbidden reply", "forbidden", true, false},
-		{"split", "visible summary PDF32", "PDF", false, true},
-		{"unsplit", "visible summary PDF32", "PDF32", true, false},
+		{"identifier subword", "visible summary PDF32", "PDF", true, true},
+		{"identifier whole", "visible summary PDF32", "PDF32", false, false},
+		{"comma padded", "visible summary alpha,beta", "alpha, beta", false, true},
+		{"comma literal", "visible summary alpha,beta", "alpha,beta", true, false},
 		{"phrase", "visible summary <b>red</b>\n\tflag", "red flag", false, true},
 		{"whitespace", "visible summary red\n\tflag", "red flag", false, false},
 	} {

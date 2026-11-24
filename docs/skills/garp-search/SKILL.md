@@ -38,7 +38,7 @@ Default rule: unindexed PDF/Office/email/mixed-document trees or multi-term lexi
 - **How to react when `matches == 0` (check in order instead of repeating the query):**
   1. **`timed_out > 0`:** heavy binary extraction hit `--file-timeout-binary` (default `1000` ms) -- rerun with `--file-timeout-binary 10000` (max `60000`).
   2. **File-type or ignore scope:** source files require `--code` (or `-t <ext>`); `.xls`/`.xlsx`/`.ppt`/`.pptx`/`.ods`/`.odp` are not extracted; `.gitignore`/`.ignore` rules skip ignored trees unless targeted via direct-child `--pathscope child/` or `--no-ignore`.
-  3. **Document/markup cleaning splits:** in `.pdf`, `.doc`, `.docx`, `.odt`, `.rtf`, `.eml`, `.mbox`, `.msg`, `.html`, and `.xml`, uppercase/digit run-ons split (`RHC03-2516` -> `RHC 03-2516`, `SHA256` -> `SHA 256`) and `>`-quoted lines are removed -- retry with split tokens or `--partial`.
+  3. **Document/markup cleaning:** in `.pdf`, `.doc`, `.docx`, `.odt`, `.rtf`, `.eml`, `.mbox`, `.msg`, `.html`, and `.xml`, letter/digit identifiers stay intact; the only spacing change is a space added after a comma when one is missing. `>`-quoted lines are removed. Identifiers match as whole words with `_` as a word character, so bare `Olk10SideProps` does not match `Olk10SideProps_0001` -- search the full identifier, or use `Olk10SideProps*` or `--partial` for a prefix.
   4. **Strictness, rarity boundary, or window size:** `--strict` requires every slot in `--distance` bytes and disables fallback. Without `--strict`, primary matches require both slots on `2`-slot queries (any `2+` slots on `3+` slots), while single-slot fallback applies to `2+`-slot queries only when `N >= 2` readable files exist, fewer than `5` primary files match, and the matched slot has `1 <= df <= max(1, floor(0.05*N))` (so single-file scopes `N < 2` or common words above `max(1, floor(0.05*N))` return `0` matches when no `2`-slot window hits). Inspect `term_count`/`matched_terms` on non-strict hits to spot `1`-slot fallbacks; to recover missed co-occurrence, widen uncertain slots with `a|b|c` synonyms, drop `--strict`, shorten stems with `--partial` or `*`, add `--smart-forms`, or raise `--distance`.
   5. **Wrong tool for the query:** if searching plain text or code for a literal substring, punctuation-heavy token, or regex, switch to `rg`.
 
@@ -112,7 +112,7 @@ Example (mixed-format document & email tree):
 garp 'amendment|addendum|rider' lease termination --startdir <docs-dir> --distance 1500 --json
 ```
 
-Locate Markdown/PDF deployment notes (`garp AMI parent base --startdir <repo> -t md --distance 200 --json`; extracted PDF text splits uppercase/digit run-ons such as `RHC03-2516` -> `RHC 03-2516`, so retry with split terms if an expected PDF hit misses).
+Locate Markdown/PDF deployment notes (`garp AMI parent base --startdir <repo> -t md --distance 200 --json`).
 
 Secondary `--code` single-call expansion in the `garp` repository:
 

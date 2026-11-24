@@ -144,16 +144,16 @@ func TestExcerptLineWindowHonorsCallerDistance(t *testing.T) {
 }
 
 func TestExcerptLinesBalancedRemovedAndCreatedMatches(t *testing.T) {
-	raw := "<script>alpha</script>\n" + strings.Repeat("padding.\n", 100) +
-		"alpha beta\n" + strings.Repeat("padding.\n", 100) + "ALPHA2\n"
-	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+	raw := "<script>alpha, </script>\n" + strings.Repeat("padding.\n", 100) +
+		"alpha, beta\n" + strings.Repeat("padding.\n", 100) + "alpha,gamma\n"
+	query := compileQuery([]string{"alpha,", "beta"}, PartialModeOff)
 	cleaned := CleanContent(raw)
 	if len(query.matchers[0].findAll(raw)) != 2 || len(query.matchers[0].findAll(cleaned)) != 2 {
 		t.Fatal("fixture must balance removed and created alpha occurrences")
 	}
 	spans := extractRankedExcerptSpansQuery(raw, query, 1, 2, 2, false, 200)
-	if len(spans) != 1 || !strings.Contains(spans[0].text, "alpha beta") {
-		t.Fatalf("expected alpha beta cluster: %#v", spans)
+	if len(spans) != 1 || !strings.Contains(spans[0].text, "alpha, beta") {
+		t.Fatalf("expected alpha, beta cluster: %#v", spans)
 	}
 	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{102}) {
 		t.Fatalf("balanced-transform anchors = %v, want [102]", got)
@@ -402,7 +402,7 @@ func BenchmarkExcerptLinesManyLateMatches(b *testing.B) {
 	}
 }
 
-// Removed occurrences and OCR-created tokens must not redirect a
+// Removed occurrences and cleaner-created tokens must not redirect a
 // visible cluster to an unrelated raw occurrence or a stripped opening block.
 func TestStage3TransformedLineAnchors(t *testing.T) {
 	for _, tc := range []struct {
@@ -412,7 +412,7 @@ func TestStage3TransformedLineAnchors(t *testing.T) {
 	}{
 		{"blockquote", "# Header\n\n> alpha beta hidden\n\nalpha beta visible\n", []string{"alpha", "beta"}, 5},
 		{"style and script", "<style>\nalpha beta\n</style>\n<script>\nalpha beta\n</script>\nalpha beta visible\n", []string{"alpha", "beta"}, 7},
-		{"OCR split", "ITEM header\n" + strings.Repeat("padding.\n", 100) + "ITEM01 beta visible\n", []string{"ITEM", "beta"}, 102},
+		{"comma split", "ITEM, header\n" + strings.Repeat("padding.\n", 100) + "ITEM,01 beta visible\n", []string{"ITEM,", "beta"}, 102},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			query := compileQuery(tc.terms, PartialModeOff)
@@ -756,7 +756,7 @@ func TestStage3MappedCleaning(t *testing.T) {
 		"<style>hidden</style>\n<script>hidden</script>\n> hidden\n-----\n<b>é</b> A1,2B\x09end\xff\n"
 	for _, isCode := range []bool{false, true} {
 		mapped := cleanStage3Content(raw, isCode)
-		want := "é A 1, 2 B end\xff"
+		want := "é A1, 2B end\xff"
 		if isCode {
 			want = CleanContentCode(raw)
 		}
@@ -801,15 +801,15 @@ func TestStage3RawAnchorSurvivesDisplayChanges(t *testing.T) {
 	}
 }
 
-func TestStage3RawAnchorForCreatedOCRMatch(t *testing.T) {
-	raw := "<script>ALPHA</script>\n> ALPHA\n-----\nALPHA2 beta\n"
-	query := compileQuery([]string{"alpha", "beta"}, PartialModeOff)
+func TestStage3RawAnchorForCleanerCreatedMatch(t *testing.T) {
+	raw := "<script>ALPHA, </script>\n> ALPHA, \n-----\nALPHA,2 beta\n"
+	query := compileQuery([]string{"alpha,", "beta"}, PartialModeOff)
 	spans := extractRankedExcerptSpansQuery(raw, query, 1, 2, 2, false, 200)
 	if len(spans) != 1 || !spans[0].rawStartValid {
-		t.Fatalf("expected OCR-created cluster: %#v", spans)
+		t.Fatalf("expected cleaner-created cluster: %#v", spans)
 	}
 	if got := computeExcerptSpanLinesQuery(raw, spans, query, 200); !slices.Equal(got, []int{4}) {
-		t.Fatalf("OCR anchor=%v, want [4]", got)
+		t.Fatalf("cleaner anchor=%v, want [4]", got)
 	}
 }
 

@@ -15,7 +15,10 @@ import (
 
 func TestCleanTerm(t *testing.T) {
 	for _, tc := range []struct{ path, term, want string }{
-		{"m.html", "Olk10SideProps", "Olk10 SideProps"},
+		{"m.html", "Olk10SideProps", "Olk10SideProps"},
+		{"m.html", "SHA256", "SHA256"},
+		{"m.html", "alpha,beta", "alpha, beta"},
+		{"m.go", "alpha,beta", "alpha,beta"},
 		{"m.go", "Olk10SideProps", "Olk10SideProps"},
 		{"m.html", "cashier*", "cashier*"},
 	} {
