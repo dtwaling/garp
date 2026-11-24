@@ -1579,19 +1579,20 @@ func TestEngineLiteralTextFormatsPreserveTokens(t *testing.T) {
 			name, term string
 			line       int
 			excludes   []string
+			bothModes  bool
 		}{
-			{"quoted", "quoted", 2, nil},
-			{"<user@example.com>", "<user@example.com>", 3, nil},
-			{"<kind>-<topic>.md", "<kind>-<topic>.md", 4, nil},
-			{"SHA256", "SHA256", 5, nil},
-			{"UTF8", "UTF8", 5, nil},
-			{"name,email", "name,email", 6, nil},
-			{"-----", "-----", 7, nil},
-			{"=====", "=====", 8, nil},
-			{"#####", "#####", 9, nil},
-			{"_____", "_____", 10, nil},
-			{"comma-space", "name, email", 0, nil},
-			{"not", "intro", 0, []string{"SHA256"}},
+			{"quoted", "quoted", 2, nil, false},
+			{"<user@example.com>", "<user@example.com>", 3, nil, false},
+			{"<kind>-<topic>.md", "<kind>-<topic>.md", 4, nil, false},
+			{"SHA256", "SHA256", 5, nil, true},
+			{"UTF8", "UTF8", 5, nil, true},
+			{"name,email", "name,email", 6, nil, false},
+			{"-----", "-----", 7, nil, false},
+			{"=====", "=====", 8, nil, false},
+			{"#####", "#####", 9, nil, false},
+			{"_____", "_____", 10, nil, false},
+			{"comma-space", "name, email", 0, nil, false},
+			{"not", "intro", 0, []string{"SHA256"}, true},
 		} {
 			t.Run(ext+"/"+tc.name, func(t *testing.T) {
 				engine := NewSearchEngine([]string{tc.term}, tc.excludes, []string{"-g", "*." + ext}, false, 1, 1000)
@@ -1599,13 +1600,13 @@ func TestEngineLiteralTextFormatsPreserveTokens(t *testing.T) {
 				engine.Silent = true
 				results, err := engine.Execute()
 				want := 0
-				if literal == (tc.line > 0) {
+				if (literal || tc.bothModes) == (tc.line > 0) {
 					want = 1
 				}
 				if err != nil || len(results) != want {
 					t.Fatalf("results=%+v err=%v, want %d results", results, err, want)
 				}
-				if literal && want == 1 && (len(results[0].RawExcerpts) == 0 || !strings.Contains(results[0].RawExcerpts[0], tc.term) || !slices.Equal(results[0].StartLines, []int{tc.line})) {
+				if (literal || tc.bothModes) && want == 1 && (len(results[0].RawExcerpts) == 0 || !strings.Contains(results[0].RawExcerpts[0], tc.term) || !slices.Equal(results[0].StartLines, []int{tc.line})) {
 					t.Fatalf("result=%+v, want verbatim %q at line %d", results[0], tc.term, tc.line)
 				}
 			})

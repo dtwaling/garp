@@ -1,6 +1,7 @@
 package search
 
 import (
+	"bytes"
 	"io"
 	"regexp"
 	"slices"
@@ -332,12 +333,9 @@ var (
 	quoteLineStartRegex = regexp.MustCompile(`(?m)^\s*>+\s*`)
 	quoteMidRegex       = regexp.MustCompile(`\s*>+\s*`)
 
-	// Split uppercase/digit transitions: PDF32 -> PDF 32, 2026Report -> 2026 Report.
-	// Lowercase/digit pairs (Account10, float32, int64) deliberately stay intact.
-	// cleanerSpacingReader mirrors these transitions and comma spacing below;
-	// the regexes and streaming state machine must change together.
-	letterDigitRegex  = regexp.MustCompile(`([A-Z])([0-9])`)
-	digitLetterRegex  = regexp.MustCompile(`([0-9])([A-Z])`)
+	// Ensure a space after commas when missing (e.g., "21,5:43" -> "21, 5:43").
+	// cleanerSpacingReader mirrors comma spacing below;
+	// the regex and streaming state machine must change together.
 	commaMissingSpace = regexp.MustCompile(`,([^\s])`)
 
 	// Precompiled regexes for ExtractMeaningfulExcerpts - also leaked on every call
@@ -370,8 +368,7 @@ func CleanContent(content string) string {
 // PHP "<?php ... ?>" and "$obj->prop", Delphi generics "TList<T>", and comparisons like
 // "if a < b then" all contain angle brackets the document cleaner would treat as tags and delete.
 // It only normalizes control characters and collapses whitespace, so matching and excerpts stay
-// faithful to the source. The OCR-oriented digit/space fixups in CleanContent are also skipped
-// because they mangle identifiers (e.g. "SHA256" -> "SHA 256").
+// faithful to the source. The comma spacing in CleanContent is also skipped.
 func CleanContentCode(content string) string {
 	return cleanSearchContent(mappedContent{text: content}, true).text
 }
@@ -399,7 +396,6 @@ func cleanSearchContent(m mappedContent, literal bool) mappedContent {
 	}
 	m = normalizeMappedWhitespace(m)
 	if !literal {
-		m = m.replace(letterDigitRegex, "$1 $2").replace(digitLetterRegex, "$1 $2")
 		m = m.replace(commaMissingSpace, ", $1")
 	}
 	left := len(m.text) - len(strings.TrimLeftFunc(m.text, unicode.IsSpace))
@@ -448,39 +444,21 @@ func normalizeMappedWhitespace(m mappedContent) mappedContent {
 	return mappedContent{text.String(), offsets}
 }
 
-const (
-	spacingUpper = 1
-	spacingDigit = 2
-	spacingComma = 4
-)
-
-var spacingKinds = func() (k [256]uint8) {
-	for b := 'A'; b <= 'Z'; b++ {
-		k[b] = spacingUpper
-	}
-	for b := '0'; b <= '9'; b++ {
-		k[b] = spacingDigit
-	}
-	k[','] = spacingComma
-	return
-}()
-
 // spacingFree permits pass-through without allocating a transformed buffer.
-func spacingFree(src []byte, prev uint8, armed bool) bool {
-	if armed {
-		prev = spacingComma
+func spacingFree(src []byte, armed bool) bool {
+	if !armed && bytes.IndexByte(src, ',') < 0 {
+		return true
 	}
 	for _, b := range src {
-		k := spacingKinds[b]
-		if prev|k == spacingUpper|spacingDigit || (prev == spacingComma && b > 0x20 && b != 0x7f) {
+		if armed && b > 0x20 && b != 0x7f {
 			return false
 		}
-		prev = k
+		armed = b == ','
 	}
 	return true
 }
 
-// cleanerSpacingReader inserts the cleaner's uppercase/digit and comma spaces
+// cleanerSpacingReader inserts the cleaner's comma spaces
 // without stripping markup or collapsing whitespace. raw counts input bytes,
 // not the expanded output. State survives both input and output read boundaries.
 type cleanerSpacingReader struct {
@@ -489,7 +467,6 @@ type cleanerSpacingReader struct {
 	output    []byte
 	ready     []byte
 	err       error
-	prev      uint8
 	armed     bool
 	pendingC2 bool
 }
@@ -508,10 +485,9 @@ func (s *cleanerSpacingReader) Read(p []byte) (int, error) {
 		s.raw += int64(n)
 		s.err = err
 		src := p[:n]
-		if !s.pendingC2 && spacingFree(src, s.prev, s.armed) {
+		if !s.pendingC2 && spacingFree(src, s.armed) {
 			if n > 0 {
-				k := spacingKinds[src[n-1]]
-				s.prev, s.armed = k&^spacingComma, k == spacingComma
+				s.armed = src[n-1] == ','
 				return n, nil
 			}
 		} else {
@@ -519,10 +495,7 @@ func (s *cleanerSpacingReader) Read(p []byte) (int, error) {
 				s.output = make([]byte, 0, 2*n+2)
 			}
 			out := s.output[:0]
-			prev, pending := s.prev, s.pendingC2
-			if s.armed {
-				prev = spacingComma
-			}
+			armed, pending := s.armed, s.pendingC2
 			if pending && n > 0 {
 				if src[0] < 0x80 || src[0] > 0x9f {
 					out = append(out, ' ')
@@ -532,35 +505,35 @@ func (s *cleanerSpacingReader) Read(p []byte) (int, error) {
 			}
 			start := 0
 			for i, b := range src {
-				k := spacingKinds[b]
-				insert := prev|k == spacingUpper|spacingDigit
-				if prev == spacingComma && b > 0x20 && b != 0x7f {
+				nextArmed := b == ','
+				insert := false
+				if armed && b > 0x20 && b != 0x7f {
 					// The comma regexp consumes its following rune, so a
 					// consumed comma must not arm another insertion.
 					insert = true
 					if b == 0xc2 {
 						if i+1 == n {
 							out = append(out, src[start:i]...)
-							start, pending, prev = n, true, 0
+							start, pending, armed = n, true, false
 							break
 						}
 						insert = src[i+1] < 0x80 || src[i+1] > 0x9f
 					}
-					k &^= spacingComma
+					nextArmed = false
 				}
 				if insert {
 					out = append(out, src[start:i]...)
 					out = append(out, ' ')
 					start = i
 				}
-				prev = k
+				armed = nextArmed
 			}
 			out = append(out, src[start:]...)
 			if pending && err != nil {
 				out = append(out, ' ', 0xc2)
 				pending = false
 			}
-			s.prev, s.armed, s.pendingC2 = prev&^spacingComma, prev == spacingComma, pending
+			s.armed, s.pendingC2 = armed, pending
 			s.output, s.ready = out, out
 		}
 		if n == 0 && err == nil {

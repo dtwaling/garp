@@ -328,20 +328,24 @@ func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
 		{"raw-phrase.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nSubject: Alpha Beta\r\n\r\n", "alpha beta", true, true},
 		{"phrase.rtf", `{\rtf1\ansi available}`, "alpha beta", false, true},
 		{"plain.rtf", `{\rtf1\ansi available}`, "missing", false, true},
-		{"cleaned.rtf", `{\rtf1\ansi PDF32}`, "PDF", true, true},
+		{"cleaned.rtf", `{\rtf1\ansi alpha,beta}`, "alpha,", true, true},
+		{"identifier.rtf", `{\rtf1\ansi PDF32}`, "PDF32", true, true},
+		{"unsplit.rtf", `{\rtf1\ansi PDF32}`, "PDF", false, true},
+		{"identifier.eml", "Content-Type: text/plain\r\n\r\nPDF32", "PDF32", true, true},
+		{"unsplit.eml", "Content-Type: text/plain\r\n\r\nPDF32", "PDF", false, true},
 		// Cleaning removes the literal token, so only the raw streaming path
 		// can accept it before the escape marker beyond the first 64 KiB.
 		{"raw-hit.rtf", `{\rtf1\ansi <available> ` + strings.Repeat(" ", 64*1024) + `\'73}`, "available", true, true},
-		{"comparison.eml", "Subject: Estimate < 100\r\n\r\nPDF32 > 50", "PDF", false, false},
-		{"comparison.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nSubject: Estimate < 100\r\n\r\nPDF32 > 50", "PDF", false, false},
+		{"comparison.eml", "Subject: Estimate < 100\r\n\r\nalpha,beta > 50", "alpha,", false, false},
+		{"comparison.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nSubject: Estimate < 100\r\n\r\nalpha,beta > 50", "alpha,", false, false},
 		{"address.eml", "From: Alice <alice@example.com>\r\n\r\navailable", "missing", false, true},
 		{"address.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nFrom: Alice <alice@example.com>\r\n\r\navailable", "missing", false, true},
 		{"html.eml", "Content-Type: text/html\r\n\r\n<p>R&amp;D</p>", "R&D", false, false},
 		{"html.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/html\r\n\r\n<p>R&amp;D</p>", "R&D", false, false},
-		{"collapsed.eml", "Content-Type: text/plain\r\n\r\nintro\r\n>PDF32\r\n", "PDF", false, false},
-		{"collapsed.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/plain\r\n\r\nintro\r\n>PDF32\r\n", "PDF", false, false},
-		{"cleaned.eml", "Content-Type: text/plain\r\n\r\nPDF32", "PDF", false, false},
-		{"cleaned.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/plain\n\nPDF32", "PDF", false, false},
+		{"collapsed.eml", "Content-Type: text/plain\r\n\r\nintro\r\n>alpha,beta\r\n", "alpha,", false, false},
+		{"collapsed.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/plain\r\n\r\nintro\r\n>alpha,beta\r\n", "alpha,", false, false},
+		{"cleaned.eml", "Content-Type: text/plain\r\n\r\nalpha,beta", "alpha,", false, false},
+		{"cleaned.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/plain\n\nalpha,beta", "alpha,", false, false},
 		{"latin1.eml", "Content-Type: text/plain; charset=iso-8859-1\r\n\r\ncaf\xe9", "café", false, false},
 		{"latin1.mbox", "From sender@example.com Mon Jan 1 00:00:00 2024\nContent-Type: text/plain; charset=iso-8859-1\n\ncaf\xe9", "café", false, false},
 		{"controls.rtf", `{\rtf1\ansi su{\b}bject bo{\i}dy}`, "subject", true, true},
@@ -371,16 +375,20 @@ func TestBinaryPrefilterPlainAndRTFDecisions(t *testing.T) {
 					t.Fatalf("undecided admission=%v err=%v", paths, err)
 				}
 			}
-			if tc.word == "PDF" || tc.word == "café" || tc.word == "R&D" {
+			if tc.word == "alpha," || tc.word == "PDF32" || tc.word == "PDF" || tc.word == "café" || tc.word == "R&D" {
+				want := 1
+				if tc.word == "PDF" {
+					want = 0
+				}
 				for _, strict := range []bool{false, true} {
 					engine := NewSearchEngineWithWorkers([]string{tc.word}, nil, nil, false, 1, 5000, 1)
 					engine.StartDir, engine.Silent, engine.Strict = filepath.Dir(path), true, strict
 					matches, err := engine.FilterCandidates([]string{path}, 1, time.Now())
-					if err != nil || len(matches) != 1 {
+					if err != nil || len(matches) != want {
 						t.Fatalf("Stage 2 strict=%t: matches=%v err=%v", strict, matches, err)
 					}
 					results, err := engine.Execute()
-					if err != nil || len(results) != 1 || results[0].FilePath != path {
+					if err != nil || len(results) != want || (want == 1 && results[0].FilePath != path) {
 						t.Fatalf("Execute strict=%t: results=%v err=%v", strict, results, err)
 					}
 				}
